@@ -938,8 +938,19 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertEqual(payload["turnover_sector_share"]["items"][0]["leaders"][0]["name"], "中天科技")
         self.assertEqual(payload["turnover_sector_share"]["items"][0]["leaders"][0]["status"], "涨停")
         self.assertEqual(payload["turnover_top30"]["items"][0]["name"], "中天科技")
+        self.assertEqual(payload["turnover_top30"]["items"][0]["change_pct"], 9.99)
         self.assertEqual(payload["turnover_top30"]["items"][0]["status"], "涨停")
+        self.assertEqual(payload["turnover_top30"]["items"][1]["change_pct"], -9.57)
         self.assertEqual(payload["turnover_top30"]["items"][1]["status"], "")
+        turnover_chart_renderer = html.split("const renderTurnoverTop30Chart", 1)[1].split(
+            "const renderBoardTagRankChart", 1
+        )[0]
+        self.assertIn("const changeText = formatSignedPct(item.change_pct);", turnover_chart_renderer)
+        self.assertIn(
+            "return item.status ? `${changeText} · ${item.status}` : changeText;",
+            turnover_chart_renderer,
+        )
+        self.assertIn("柱尾直接显示涨跌幅", html)
 
     def test_render_adds_bear_echarts_for_top50_trend_and_lhb_flow(self):
         html = render_markdown_report_html(

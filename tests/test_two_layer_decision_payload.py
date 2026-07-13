@@ -349,6 +349,40 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertGreater(len(payload["candidate_pool_verdict"]["pool_source"]), 0)
         self.assertEqual(payload["front_decision"]["execution_object"], {})
 
+    def test_zero_position_selection_workflow_keeps_process_summary_visible(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+                "source_node": "N8",
+            },
+            "nodes": [{"node_id": "N5", "judgement": "归一候选1只"}],
+            "candidate_pool": [
+                {
+                    "stock": {"name": "华天科技", "code": "002185", "sector": "半导体"},
+                    "source_pools": ["热度观察池"],
+                    "status": "被淘汰",
+                    "eliminated_reason": "资金确认不足",
+                }
+            ],
+        }
+
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-13",
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "wait", "reason": "空仓等待"},
+            },
+            position_decision={"target_position_pct": 0},
+            execution_stage_context={"selection_workflow": workflow},
+        )
+
+        self.assertEqual(payload["final_object"]["identity"], "无")
+        self.assertEqual(payload["candidate_pool_verdict"]["pool_source"][0]["stock"]["code"], "002185")
+        self.assertIn("过程候选只保留在后文复盘表", payload["final_object"]["why_this_not_others"])
+        self.assertNotIn("也没有过程候选", payload["final_object"]["why_this_not_others"])
+
     def test_zero_position_selection_workflow_suppresses_explicit_resolution_target(self):
         workflow = {
             "schema_version": "selection_workflow.v1",

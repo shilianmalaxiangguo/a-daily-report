@@ -19,6 +19,17 @@ class _TimerStub:
         return 0.1, 0.2
 
 
+def _index_validation_success(data, target_date):
+    return {
+        "schema_version": "report_index_cross_validation.v1",
+        "target_date": target_date,
+        "status": "success",
+        "verification_provider": "tencent.fqkline.day",
+        "checks": [{"name": f"指数{index}", "status": "success"} for index in range(6)],
+        "failures": [],
+    }
+
+
 class MarketStateRequestTest(unittest.TestCase):
     def test_collect_market_state_request_bundle_collects_first_request_slice(self):
         timer = _TimerStub()
@@ -46,14 +57,16 @@ class MarketStateRequestTest(unittest.TestCase):
         }
 
         result = collect_market_state_request_bundle(
-            "2026-04-22",
+            "2026-07-13",
             request_registry=request_registry,
+            index_cross_validator=_index_validation_success,
+            require_index_cross_validation=True,
             timer=timer,
             emit=emitted.append,
         )
 
         self.assertEqual(result["results"]["total_turnover"], 12345.6)
-        self.assertEqual(result["results"]["turnover_data"]["date"], "2026-04-22")
+        self.assertEqual(result["results"]["turnover_data"]["date"], "2026-07-13")
         self.assertEqual(result["results"]["indices"][0]["code"], "000001")
         self.assertEqual(result["results"]["wind_a_alternative"]["price"], 5432.1)
         self.assertEqual(result["results"]["csi500_index"]["price"], 6262.0)
@@ -68,7 +81,9 @@ class MarketStateRequestTest(unittest.TestCase):
         self.assertTrue(result["step_status"]["中证全指获取"])
         self.assertTrue(result["step_status"]["中证500获取"])
         self.assertTrue(result["step_status"]["中证1000获取"])
-        self.assertEqual(len(result["module_logs"]), 5)
+        self.assertTrue(result["data_status"]["指数交叉核对"])
+        self.assertTrue(result["step_status"]["指数交叉核对"])
+        self.assertEqual(len(result["module_logs"]), 6)
         self.assertEqual(timer.records[0], ("两市成交额获取", 1))
         self.assertTrue(any("两市成交额" in line for line in emitted))
         self.assertIn("  1️⃣ 获取两市成交额（Tushare 优先）...", emitted)
@@ -76,12 +91,14 @@ class MarketStateRequestTest(unittest.TestCase):
         self.assertIn("  3️⃣ 获取中证全指（Tushare 优先）...", emitted)
         self.assertIn("  3.5️⃣ 获取中证500（Tushare 优先）...", emitted)
         self.assertIn("  3.6️⃣ 获取中证1000（Tushare 优先）...", emitted)
+        self.assertIn("  3.7️⃣ 交叉核对六个指数（Tushare + 腾讯日K）...", emitted)
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.total_turnover"], "tushare-first")
         self.assertEqual(provider_by_step["request.major_indices"], "tushare.index_daily")
         self.assertEqual(provider_by_step["request.wind_a"], "tushare.index_daily")
         self.assertEqual(provider_by_step["request.csi500"], "tushare.index_daily")
         self.assertEqual(provider_by_step["request.csi1000"], "tushare.index_daily")
+        self.assertEqual(provider_by_step["request.index_cross_validation"], "tencent.fqkline.day")
 
     def test_collect_market_state_request_bundle_backfills_csi1000_from_same_day_fact(self):
         timer = _TimerStub()
@@ -113,6 +130,8 @@ class MarketStateRequestTest(unittest.TestCase):
         result = collect_market_state_request_bundle(
             "2026-06-09",
             request_registry=request_registry,
+            index_cross_validator=_index_validation_success,
+            require_index_cross_validation=False,
             timer=timer,
             emit=emitted.append,
         )
@@ -124,6 +143,68 @@ class MarketStateRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.csi1000"], "postgresql.index_daily_bars")
         self.assertTrue(any("中证1000" in line and "8318.70" in line for line in emitted))
+
+    def test_collect_market_state_request_bundle_marks_failed_index_cross_validation(self):
+        timer = _TimerStub()
+        emitted = []
+        request_registry = {
+            "total_turnover": lambda *, target_date: 12345.6,
+            "major_indices": lambda *, target_date: {},
+            "wind_a": lambda *, target_date: {"price": 6001.65, "change_pct": -3.43},
+            "csi500": lambda *, target_date: {"price": 8138.14, "change_pct": -4.30},
+            "csi1000": lambda *, target_date: {"price": 7787.85, "change_pct": -5.01},
+        }
+
+        result = collect_market_state_request_bundle(
+            "2026-07-13",
+            request_registry=request_registry,
+            index_cross_validator=lambda data, target_date: {
+                "schema_version": "report_index_cross_validation.v1",
+                "target_date": target_date,
+                "status": "failed",
+                "verification_provider": "tencent.fqkline.day",
+                "checks": [],
+                "failures": ["上证指数：主来源日期为2026-07-10"],
+            },
+            require_index_cross_validation=True,
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertFalse(result["data_status"]["指数交叉核对"])
+        self.assertFalse(result["step_status"]["指数交叉核对"])
+        self.assertEqual(result["results"]["index_cross_validation"]["status"], "failed")
+        self.assertTrue(any("上证指数" in line for line in emitted))
+
+    def test_collect_market_state_request_bundle_skips_validation_before_contract_start(self):
+        timer = _TimerStub()
+        emitted = []
+        request_registry = {
+            "total_turnover": lambda *, target_date: 12345.6,
+            "major_indices": lambda *, target_date: [],
+            "wind_a": lambda *, target_date: {"price": 6001.65, "change_pct": -3.43},
+            "csi500": lambda *, target_date: {"price": 8138.14, "change_pct": -4.30},
+            "csi1000": lambda *, target_date: {"price": 7787.85, "change_pct": -5.01},
+        }
+
+        result = collect_market_state_request_bundle(
+            "2026-07-12",
+            request_registry=request_registry,
+            index_cross_validator=lambda data, target_date: self.fail(
+                "旧日期不应启动指数交叉核对"
+            ),
+            require_index_cross_validation=False,
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertNotIn("index_cross_validation", result["results"])
+        self.assertNotIn("指数交叉核对", result["data_status"])
+        self.assertNotIn("指数交叉核对", result["step_status"])
+        self.assertFalse(any("交叉核对六个指数" in line for line in emitted))
+        self.assertFalse(
+            any(log["step"] == "request.index_cross_validation" for log in result["module_logs"])
+        )
 
     def test_load_csi1000_from_same_day_run_log_requires_successful_target_date_log(self):
         with TemporaryDirectory() as tmpdir:

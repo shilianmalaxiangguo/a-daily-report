@@ -32,6 +32,65 @@ def _with_html_required_facts(data):
     return data
 
 
+def _with_successful_index_validation(data, target_date="2026-07-13"):
+    from input.index_cross_validation import REPORT_INDEX_SPECS, build_report_index_cross_validation
+
+    data = dict(data)
+    values = {
+        "上证指数": ("000001", 3913.7940, 3996.1616, -2.0612),
+        "深证成指": ("399001", 14522.8547, 15046.6695, -3.4813),
+        "创业板指": ("399006", 3723.5166, 3842.7314, -3.1023),
+        "中证全指": ("000985", 6001.6528, 6215.1138, -3.4345),
+        "中证500": ("000905", 8138.1443, 8503.9705, -4.3018),
+        "中证1000": ("000852", 7787.8529, 8198.3078, -5.0066),
+    }
+
+    def payload(name):
+        code, close, pre_close, change_pct = values[name]
+        return {
+            "name": name,
+            "code": code,
+            "trade_date": target_date,
+            "price": close,
+            "close": close,
+            "pre_close": pre_close,
+            "change_pct": change_pct,
+            "涨跌幅": change_pct,
+            "data_source": "tushare.index_daily",
+        }
+
+    data["indices"] = {
+        "上证指数": payload("上证指数"),
+        "深证成指": payload("深证成指"),
+        "创业板指": payload("创业板指"),
+    }
+    data["wind_a_alternative"] = payload("中证全指")
+    data["csi500_index"] = payload("中证500")
+    data["csi1000_index"] = payload("中证1000")
+    facts = {}
+    for spec in REPORT_INDEX_SPECS:
+        primary = data["indices"][spec["name"]] if spec["container_key"] == "indices" else data[spec["container_key"]]
+        facts[spec["tencent_symbol"]] = {
+            "provider": "tencent.fqkline.day",
+            "trade_date": target_date,
+            "close": round(primary["close"], 3),
+            "pre_close": round(primary["pre_close"], 3),
+            "change_pct": round(primary["change_pct"], 2),
+        }
+    data["index_cross_validation"] = build_report_index_cross_validation(
+        data,
+        target_date,
+        fetch_verification_fact_fn=lambda symbol, date: dict(facts[symbol]),
+    )
+    data_status = dict(data.get("data_status") or {})
+    data_status["指数交叉核对"] = True
+    data["data_status"] = data_status
+    step_status = dict(data.get("step_status") or {})
+    step_status["指数交叉核对"] = True
+    data["step_status"] = step_status
+    return data
+
+
 def _source_health_success():
     return {
         "overall_result": "ready",
@@ -127,6 +186,63 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertEqual(checks["成交额排名"]["status"], "failed")
         self.assertEqual(checks["大盘涨跌统计"]["status"], "failed")
         self.assertEqual(checks["热度前50个股"]["status"], "failed")
+
+    def test_report_preflight_requires_index_cross_validation_from_contract_start_date(self):
+        from daily_report_render import build_report_preflight, render_report_preflight_lines
+
+        data = _with_html_required_facts(
+            {
+                "data_status": {
+                    "两市成交额": True,
+                    "中证全指": True,
+                    "中证1000": True,
+                    "成交额排名": True,
+                    "大盘涨跌统计": True,
+                    "热度前50个股": True,
+                },
+                "total_turnover": 28347.13,
+                "wind_a_alternative": {"price": 6001.65, "data_source": "tushare.index_daily"},
+                "csi1000_index": {"price": 7787.85, "data_source": "tushare.index_daily"},
+                "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+                "market_stats": {"up_count": 801, "down_count": 4683},
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-13")
+        check = next(item for item in preflight["checks"] if item["label"] == "指数交叉核对")
+        lines = render_report_preflight_lines(preflight)
+
+        self.assertIn("指数交叉核对", preflight["failures"])
+        self.assertEqual(check["status"], "failed")
+        self.assertIn("核对证据缺失", check["note"])
+        self.assertTrue(any("指数交叉核对" in line and "核对证据缺失" in line for line in lines))
+
+    def test_report_preflight_accepts_complete_index_cross_validation(self):
+        from daily_report_render import build_report_preflight
+
+        data = _with_html_required_facts(
+            {
+                "data_status": {
+                    "两市成交额": True,
+                    "中证全指": True,
+                    "中证1000": True,
+                    "成交额排名": True,
+                    "大盘涨跌统计": True,
+                    "热度前50个股": True,
+                },
+                "total_turnover": 28347.13,
+                "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+                "market_stats": {"up_count": 801, "down_count": 4683},
+            }
+        )
+        data = _with_successful_index_validation(data)
+
+        preflight = build_report_preflight(data, "2026-07-13")
+        check = next(item for item in preflight["checks"] if item["label"] == "指数交叉核对")
+
+        self.assertNotIn("指数交叉核对", preflight["failures"])
+        self.assertEqual(check["status"], "success")
+        self.assertEqual(check["value"], "6/6")
 
     def test_report_preflight_rejects_empty_hot_rank_even_when_sample_size_claims_complete(self):
         from daily_report_render import build_report_preflight
@@ -658,6 +774,17 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
     def test_main_audits_full_report_with_chanlun_html_after_generation(self):
         import daily_report_entry_demo
 
+        turnover_row = {
+            "rank": 1,
+            "name": "兆易创新",
+            "code": "603986",
+            "turnover": 377.37,
+            "change_pct": -10.0,
+            "high": 600.0,
+            "low": 550.8,
+            "open": 580.0,
+            "close": 550.8,
+        }
         data = _with_html_required_facts({
             "data_status": {
                 "两市成交额": True,
@@ -667,6 +794,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             "total_turnover": 1000,
             "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "turnover_over_100b": [turnover_row],
             "market_stats": {"up_count": 2600, "down_count": 2100},
             "market_research_snapshot": {
                 "front_page_final_gate": {
@@ -712,6 +840,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             Path(daily_report_entry_demo._get_report_output_path("2026-05-21", mode=daily_report_entry_demo.LEDGER_MODE_REPLAY)),
         )
         self.assertTrue(audit_mock.call_args.kwargs["prefer_postgres_history"])
+        self.assertEqual(audit_mock.call_args.kwargs["expected_turnover_rows"], [turnover_row])
 
     def test_generated_report_audit_ignores_position_context_from_chanlun_companion(self):
         import daily_report_entry_demo

@@ -1045,6 +1045,14 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
             explicit_selected=explicit_selected,
         )
         observation_layer = "front_observation" if front_observation_qualified else "process_observation"
+        stale_final_reason = any(
+            marker in clean_visible_text(front_observation_reason)
+            for marker in ("已归入明日执行结论", "B1/B2执行计划")
+        )
+        if status != "最终执行对象" and stale_final_reason:
+            front_observation_qualified = False
+            front_observation_reason = eliminated_reason or brooks.get("participation_effect") or "仅作过程候选"
+            observation_layer = "process_observation"
         if price_block_reason:
             front_observation_qualified = False
             front_observation_reason = (

@@ -3140,6 +3140,30 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertAlmostEqual(result["上证指数"]["change_pct"], (3350 - 3310) / 3310 * 100)
         self.assertEqual(fallback_calls, [])
 
+    def test_major_indices_reject_previous_trade_day_when_target_date_is_missing(self):
+        result = get_major_indices_from_tushare_first(
+            "2026-05-13",
+            fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: [
+                {"date": "2026-05-11", "close": 3300.0},
+                {"date": "2026-05-12", "close": 3310.0},
+            ],
+            legacy_get_major_indices_fn=lambda target_date=None: {},
+        )
+
+        self.assertEqual(result, {})
+
+    def test_single_index_rejects_previous_trade_day_when_target_date_is_missing(self):
+        result = get_csi500_from_tushare_first(
+            "2026-05-13",
+            fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: [
+                {"date": "2026-05-11", "close": 6200.0},
+                {"date": "2026-05-12", "close": 6262.0},
+            ],
+            legacy_get_csi500_fn=lambda target_date=None: {"price": 0, "change_pct": 0},
+        )
+
+        self.assertEqual(result, {"price": 0, "change_pct": 0})
+
     def test_wind_a_uses_tushare_index_daily_before_legacy_fallback(self):
         fallback_calls = []
 
@@ -3187,7 +3211,11 @@ class TushareInputRuntimeTest(unittest.TestCase):
                         "high": 6280,
                         "low": 6190,
                         "close": 6262,
+                        "pre_close": 6200,
+                        "change": 62,
+                        "pct_chg": 1.0,
                         "vol": 100,
+                        "amount": 250000.0,
                     }
                 ]
 
@@ -3202,6 +3230,10 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         self.assertEqual(calls[0][0], "000985.CSI")
         self.assertEqual(rows[0]["data_source"], "tushare.index_daily")
+        self.assertEqual(rows[0]["pre_close"], 6200.0)
+        self.assertEqual(rows[0]["change"], 62.0)
+        self.assertEqual(rows[0]["pct_chg"], 1.0)
+        self.assertEqual(rows[0]["amount"], 250000.0)
 
     def test_tushare_index_daily_uses_sh_code_for_csi1000(self):
         calls = []

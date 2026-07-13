@@ -2627,7 +2627,7 @@
 	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
 	        chart.setOption({
 	          ...baseChartOption(),
-	          grid: { left: 126, right: 92, top: 14, bottom: 28, containLabel: false },
+	          grid: { left: 126, right: 108, top: 14, bottom: 28, containLabel: false },
 	          xAxis: {
 	            type: "value",
 	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}亿` },
@@ -2669,7 +2669,8 @@
 	              color: chartTone.muted,
 	              formatter: (params) => {
 	                const item = params.data.item || {};
-	                return item.status ? `${formatAmount(params.value)} · ${item.status}` : formatAmount(params.value);
+	                const changeText = formatSignedPct(item.change_pct);
+	                return item.status ? `${changeText} · ${item.status}` : changeText;
 	              },
 	            },
 	          }],

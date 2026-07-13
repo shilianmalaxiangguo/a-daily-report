@@ -29,6 +29,10 @@ from input.request_diagnostics_runtime import (
     render_request_diagnostics_lines,
 )
 from input.request_registry import build_input_request_registry, resolve_request_target_date
+from input.index_cross_validation import (
+    build_report_index_cross_validation,
+    index_cross_validation_required,
+)
 from storage.database_service import DatabaseService
 from market_data.xueqiu_hot_stock_service import (
     try_fetch_xueqiu_a_share_hot_24h,
@@ -312,6 +316,8 @@ def _run_input_runtime_legacy_body(target_date=None):
         market_state_request_result = collect_market_state_request_bundle(
             target_date,
             request_registry=request_registry,
+            index_cross_validator=build_report_index_cross_validation,
+            require_index_cross_validation=index_cross_validation_required(target_date),
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )

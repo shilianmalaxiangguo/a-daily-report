@@ -2653,7 +2653,7 @@ def render_markdown_report_html(
                         "turnover_top30",
                         eyebrow="成交核心",
                         title="成交额Top30",
-                        subtitle="按成交额排序，颜色跟随涨跌，涨停/跌停会在 tooltip 里标出来。",
+                        subtitle="按成交额排序，柱长看成交额，柱尾直接显示涨跌幅，颜色跟随涨跌。",
                         footnote="图表来自成交核心结果表；若正文只输出部分行，图表同步只展示表内样本",
                         item_count=len(items),
                         tall=True,

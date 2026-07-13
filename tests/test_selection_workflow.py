@@ -209,6 +209,37 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["final"]["execution_object"], {})
         self.assertEqual(workflow["final"]["position_pct"], 0)
 
+    def test_zero_position_candidate_cannot_keep_stale_final_conclusion_reason(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-13",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "撤退"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "front_observation_qualified": False,
+                        "front_observation_reason": "已归入明日执行结论，后续只按B1/B2执行计划展示",
+                        "pattern": "长上影",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(row["status"], "过程候选")
+        self.assertNotIn("已归入明日执行结论", row["front_observation_reason"])
+        self.assertNotIn("B1/B2执行计划", row["front_observation_reason"])
+        self.assertEqual(row["front_observation_reason"], row["eliminated_reason"])
+
     def test_price_rejected_candidate_cannot_be_final_execution_object(self):
         workflow = build_selection_workflow(
             target_date="2026-07-10",

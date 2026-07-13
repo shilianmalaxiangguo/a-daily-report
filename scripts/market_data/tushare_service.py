@@ -108,6 +108,10 @@ def _normalize_index_bar_row(row):
     if not bar:
         return None
     bar["data_source"] = "tushare.index_daily"
+    bar["pre_close"] = _safe_float(row.get("pre_close"))
+    bar["change"] = _safe_float(row.get("change"))
+    bar["pct_chg"] = _safe_float(row.get("pct_chg"))
+    bar["amount"] = _safe_float(row.get("amount"))
     return bar
 
 

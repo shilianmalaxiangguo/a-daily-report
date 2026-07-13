@@ -285,6 +285,117 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         )
         self.assertNotIn("| +0.00% | 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
 
+    def test_turnover_table_uses_quote_fields_from_turnover_rank_row(self):
+        turnover_row = {
+            "name": "兆易创新",
+            "code": "603986",
+            "turnover": 377.37,
+            "sector": "半导体",
+            "change_pct": -10.0,
+            "open": 580.0,
+            "high": 600.0,
+            "low": 550.8,
+            "close": 550.8,
+        }
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [turnover_row],
+                "turnover_rank": [turnover_row],
+                "lianban_data": [],
+            },
+            target_date="2026-07-13",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "跌停",
+            get_stock_sector=lambda *args, **kwargs: "半导体",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("下跌趋势", 0, "弱"),
+            enabled_node_keys=["turnover_header", "turnover_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 兆易创新 | 603986 | 377.37亿 | 半导体 | -10.00% | 600.00 | 550.80 | 580.00 | 550.80 |",
+            rendered,
+        )
+        self.assertNotIn("| +0.00% | 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
+
+    def test_turnover_table_prefers_its_ranked_row_over_auxiliary_quote(self):
+        turnover_row = {
+            "name": "报价优先级",
+            "code": "000001",
+            "turnover": 188.0,
+            "sector": "银行",
+            "change_pct": -3.21,
+            "open": 12.0,
+            "high": 12.3,
+            "low": 11.5,
+            "close": 11.61,
+        }
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [turnover_row],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-07-13",
+            stock_full_info={
+                "000001": {
+                    "name": "报价优先级",
+                    "change_pct": 8.88,
+                    "open": 12.0,
+                    "high": 13.2,
+                    "low": 11.9,
+                    "close": 13.07,
+                }
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "银行",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("下跌趋势", 0, "弱"),
+            enabled_node_keys=["turnover_header", "turnover_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 报价优先级 | 000001 | 188.00亿 | 银行 | -3.21% | 12.30 | 11.50 | 12.00 | 11.61 |",
+            rendered,
+        )
+        self.assertNotIn("+8.88%", rendered)
+
+    def test_turnover_table_marks_missing_quote_fields_without_fake_zero_prices(self):
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("missing quote fields should not run candlestick analysis")
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [
+                    {"name": "待补报价", "code": "000001", "turnover": 188.0, "sector": "银行"}
+                ],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-07-13",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "-",
+            get_stock_sector=lambda *args, **kwargs: "银行",
+            analyze_candlestick_pattern=fail_if_called,
+            enabled_node_keys=["turnover_header", "turnover_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 待补报价 | 000001 | 188.00亿 | 银行 | 待补 | - | - | - | - | 观望 | 报价待补(0分) |",
+            rendered,
+        )
+        self.assertNotIn("| +0.00% | 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
+
     def test_build_market_activity_report_sections_can_render_turnover_header_without_table(self):
         result = build_market_activity_report_sections(
             data={

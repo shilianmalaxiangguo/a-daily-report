@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import unittest
@@ -12,6 +13,8 @@ from storage.postgres_daily_fact_db import (
     PostgresDailyFactDb,
     _recent_replay_min_trade_date,
 )
+from daily_report_render import build_report_preflight
+from input.index_cross_validation import REPORT_INDEX_SPECS, build_report_index_cross_validation
 from domains.market_state.market_language_translation import (
     MARKET_LANGUAGE_SOURCE_POLICY,
     build_market_language_source_projection,
@@ -2279,6 +2282,34 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 },
                 "indices": {"000001.SH": {"name": "上证指数", "price": 4068.57}},
                 "csi1000_index": {"name": "中证1000", "code": "000852", "price": 6123.4, "change_pct": 1.1},
+                "index_cross_validation": {
+                    "schema_version": "report_index_cross_validation.v1",
+                    "target_date": "2026-05-29",
+                    "status": "success",
+                    "verification_provider": "tencent.fqkline.day",
+                    "checks": [
+                        {
+                            "name": "上证指数",
+                            "code": "000001",
+                            "status": "success",
+                            "primary": {
+                                "provider": "tushare.index_daily",
+                                "trade_date": "2026-05-29",
+                                "close": 4068.57,
+                                "pre_close": 4060.0,
+                                "change_pct": 0.21,
+                            },
+                            "verification": {
+                                "provider": "tencent.fqkline.day",
+                                "trade_date": "2026-05-29",
+                                "close": 4068.57,
+                                "pre_close": 4060.0,
+                                "change_pct": 0.21,
+                            },
+                        }
+                    ],
+                    "failures": [],
+                },
                 "exchange_monitor_today": [
                     {
                         "code": "000001",
@@ -2409,6 +2440,22 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         field_paths = {row[1] for row in inserted}
         self.assertTrue(any("000001.SH" in path for path in field_paths))
         self.assertTrue(any("csi1000_index" in path and "price" in path for path in field_paths))
+        self.assertTrue(
+            any(
+                "index_cross_validation" in path
+                and "checks" in path
+                and "primary" in path
+                and "trade_date" in path
+                for path in field_paths
+            )
+        )
+        self.assertTrue(
+            any(
+                "index_cross_validation" in path
+                and "verification_provider" in path
+                for path in field_paths
+            )
+        )
         self.assertTrue(any("tag_distribution" in path and "光纤概念" in path for path in field_paths))
         self.assertTrue(any("integrated_hot_list_sample_size" in path for path in field_paths))
         self.assertTrue(any("integrated_hot_list_sample_target" in path for path in field_paths))
@@ -2492,6 +2539,96 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
         self.assertEqual(loaded["field_count"], 18)
+
+    def test_index_validation_survives_fact_round_trip_and_preflight_rechecks_it(self):
+        values = {
+            "上证指数": ("000001", 3913.7940, 3996.1616, -2.0612),
+            "深证成指": ("399001", 14522.8547, 15046.6695, -3.4813),
+            "创业板指": ("399006", 3723.5166, 3842.7314, -3.1023),
+            "中证全指": ("000985", 6001.6528, 6215.1138, -3.4345),
+            "中证500": ("000905", 8138.1443, 8503.9705, -4.3018),
+            "中证1000": ("000852", 7787.8529, 8198.3078, -5.0066),
+        }
+
+        def payload(name):
+            code, close, pre_close, change_pct = values[name]
+            return {
+                "name": name,
+                "code": code,
+                "trade_date": "2026-07-13",
+                "price": close,
+                "close": close,
+                "pre_close": pre_close,
+                "change_pct": change_pct,
+                "data_source": "tushare.index_daily",
+            }
+
+        data = {
+            "indices": {
+                "上证指数": payload("上证指数"),
+                "深证成指": payload("深证成指"),
+                "创业板指": payload("创业板指"),
+            },
+            "wind_a_alternative": payload("中证全指"),
+            "csi500_index": payload("中证500"),
+            "csi1000_index": payload("中证1000"),
+            "data_status": {"指数交叉核对": True},
+            "step_status": {"指数交叉核对": True},
+        }
+        verification = {}
+        for spec in REPORT_INDEX_SPECS:
+            primary = (
+                data["indices"][spec["name"]]
+                if spec["container_key"] == "indices"
+                else data[spec["container_key"]]
+            )
+            verification[spec["tencent_symbol"]] = {
+                "provider": "tencent.fqkline.day",
+                "trade_date": "2026-07-13",
+                "close": primary["close"],
+                "pre_close": primary["pre_close"],
+                "change_pct": primary["change_pct"],
+            }
+        data["index_cross_validation"] = build_report_index_cross_validation(
+            data,
+            "2026-07-13",
+            fetch_verification_fact_fn=lambda symbol, target_date: dict(verification[symbol]),
+        )
+
+        def round_trip(source):
+            conn = _FakeConnection()
+            db = PostgresDailyFactDb(
+                "postgresql://unit-test",
+                connect=lambda: conn,
+                ensure_schema=False,
+            )
+            db.save_daily_report_snapshot("2026-07-13", source)
+            inserted = next(
+                call[2]
+                for call in conn.cursor_obj.calls
+                if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+            )
+            conn.cursor_obj.row_batches = [[tuple(row[1:6]) for row in inserted], [], []]
+            return db.load_daily_report_snapshot("2026-07-13")["data"]
+
+        restored = round_trip(data)
+        restored_check = next(
+            check
+            for check in build_report_preflight(restored, "2026-07-13")["checks"]
+            if check["label"] == "指数交叉核对"
+        )
+        self.assertEqual(restored_check["status"], "success")
+        self.assertEqual(restored_check["value"], "6/6")
+
+        contradictory = copy.deepcopy(data)
+        contradictory["index_cross_validation"]["checks"][0]["code"] = "999999"
+        restored_contradiction = round_trip(contradictory)
+        contradiction_check = next(
+            check
+            for check in build_report_preflight(restored_contradiction, "2026-07-13")["checks"]
+            if check["label"] == "指数交叉核对"
+        )
+        self.assertEqual(contradiction_check["status"], "failed")
 
     def test_save_daily_report_snapshot_derives_hot_tag_distribution_from_hot_rank_rows(self):
         conn = _FakeConnection()

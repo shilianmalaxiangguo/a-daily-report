@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/index.md","reason":"Review backend changes against project conventions"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify source facts survive collection, persistence, and generation checks"}
+{"file":".trellis/tasks/07-13-daily-report-index-cross-validation/research/2026-07-13-index-evidence.md","reason":"Audit implementation against verified market facts and root cause"}

@@ -530,6 +530,46 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("selection_workflow_mismatch", {finding["code"] for finding in result["findings"]})
 
+    def test_audit_flags_candidate_claiming_final_conclusion_when_final_object_is_empty(self):
+        markdown = (
+            self.zero_position_report_with_decision_attribution()
+            + "\n### 候选流水账（过程证据）\n"
+            + "| 候选 | 身份 | 处理 | 展示说明 |\n"
+            + "|------|------|------|----------|\n"
+            + "| 华天科技(002185) | 过程候选 | 不新增参与 | 已归入明日执行结论，后续只按B1/B2执行计划展示 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("empty_final_object_candidate_status_conflict", codes)
+
+    def test_audit_flags_no_process_candidate_summary_when_workflow_has_candidates(self):
+        markdown = (
+            self.zero_position_report_with_decision_attribution()
+            + "\n**为什么不是其他对象**：没有可用明日执行对象，也没有过程候选\n"
+            + "\n#### N5 候选池归一\n"
+            + "- 判断：归一候选45只\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("process_candidate_summary_conflict", codes)
+
+    def test_audit_flags_no_process_candidate_synonym_when_workflow_has_candidates(self):
+        markdown = (
+            self.zero_position_report_with_decision_attribution()
+            + "\n**为什么不是其他对象**：没有可用明日执行对象，无过程候选\n"
+            + "\n#### N5 候选池归一\n"
+            + "- 判断：归一候选45只\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("process_candidate_summary_conflict", codes)
+
     def test_audit_flags_selection_workflow_object_when_front_execution_object_is_empty(self):
         markdown = (
             "# 2026-06-04 a股市场分析\n\n"
@@ -2688,6 +2728,121 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("known_old_position_conflicts_with_unknown_holding", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_allows_ta_pending_plan_with_unknown_current_holding(self):
+        markdown = (
+            "## 账户日序表\n"
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Ta | 2026-07-08（周三） | 最远复盘日计划待成交确认：华天科技(002185) | 华天科技(002185) | 未确认成交，不视为B1 | 只作路径校对，不改变Te动作 |\n"
+            "| Tb | 2026-07-09（周四） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |\n"
+            "| Tc | 2026-07-10（周五） | 上一交易日计划待成交确认：长电科技(600584) | 长电科技(600584) | 未确认成交，不视为B1 | 进入Td先确认成交事实 |\n"
+            "| Td | 2026-07-13（周一） | 报告日：成交事实待确认 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-14（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |\n\n"
+            + GOOD_MARKDOWN
+            + "\n## 明日账户建议\n| 项目 | 结论 |\n|------|------|\n| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |\n"
+        )
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">华天科技</span><span class="timeline-asset-code">002185</span>'
+            "</tr>"
+            "</div>"
+        )
+
+        result = audit_report_markdown(markdown, companion_html=html)
+
+        self.assertEqual(
+            report_acceptance_audit._audit_position_timeline_parity(
+                markdown.splitlines(),
+                companion_html=html,
+            ),
+            [],
+        )
+
+    def test_audit_flags_known_ta_position_when_action_mentions_unconfirmed_plan(self):
+        markdown = (
+            "## 账户日序表\n"
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Ta | 2026-07-08（周三） | 最远复盘日：旧仓进入复核：太极实业(600667) | 太极实业(600667) | 已有1x视为B1 | 另一计划未确认成交，不影响旧仓处理 |\n"
+            "| Tb | 2026-07-09（周四） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |\n"
+            "| Tc | 2026-07-10（周五） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |\n"
+            "| Td | 2026-07-13（周一） | 报告日：成交事实待确认 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-14（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |\n\n"
+            + GOOD_MARKDOWN
+            + "\n## 明日账户建议\n| 项目 | 结论 |\n|------|------|\n| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |\n"
+        )
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">太极实业</span><span class="timeline-asset-code">600667</span>'
+            "</tr>"
+            "</div>"
+        )
+
+        result = audit_report_markdown(markdown, companion_html=html)
+
+        self.assertIn(
+            "known_old_position_conflicts_with_unknown_holding",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_flags_known_ta_position_when_another_asset_is_pending(self):
+        markdown = (
+            "## 账户日序表\n"
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Ta | 2026-07-08（周三） | 最远复盘日：旧仓太极实业(600667)；另一计划待成交确认：华天科技(002185) | 太极实业(600667) | 另一计划未确认成交，不视为B1 | 旧仓继续复核 |\n"
+            "| Tb | 2026-07-09（周四） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |\n"
+            "| Tc | 2026-07-10（周五） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |\n"
+            "| Td | 2026-07-13（周一） | 报告日：成交事实待确认 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-14（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |\n\n"
+            + GOOD_MARKDOWN
+            + "\n## 明日账户建议\n| 项目 | 结论 |\n|------|------|\n| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |\n"
+        )
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">太极实业</span><span class="timeline-asset-code">600667</span>'
+            "</tr>"
+            "</div>"
+        )
+
+        result = audit_report_markdown(markdown, companion_html=html)
+
+        self.assertIn(
+            "known_old_position_conflicts_with_unknown_holding",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_flags_negated_ta_pending_wording_as_unknown_holding_conflict(self):
+        markdown = (
+            "## 账户日序表\n"
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Ta | 2026-07-08（周三） | 最远复盘日：并非待成交确认：太极实业(600667) | 太极实业(600667) | 未确认成交，不视为B1 | 继续复核 |\n"
+            "| Tb | 2026-07-09（周四） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |\n"
+            "| Tc | 2026-07-10（周五） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |\n"
+            "| Td | 2026-07-13（周一） | 报告日：成交事实待确认 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-14（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |\n\n"
+            + GOOD_MARKDOWN
+            + "\n## 明日账户建议\n| 项目 | 结论 |\n|------|------|\n| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |\n"
+        )
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">太极实业</span><span class="timeline-asset-code">600667</span>'
+            "</tr>"
+            "</div>"
+        )
+
+        result = audit_report_markdown(markdown, companion_html=html)
+
+        self.assertIn(
+            "known_old_position_conflicts_with_unknown_holding",
+            {finding["code"] for finding in result["findings"]},
+        )
+
     def test_audit_flags_legacy_signal_grade_label_on_front_page(self):
         bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", "| 今日信号等级 | B |")
 
@@ -2811,6 +2966,221 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("degraded_fake_zero_percent", {finding["code"] for finding in result["findings"]})
+
+    def test_degraded_fake_zero_check_does_not_match_limit_down_percent(self):
+        findings = report_acceptance_audit._audit_degraded_fake_zero(
+            [
+                "| 兴业股份(603928) | 数据缺失时只作过程证据 | 同日跌幅-10.00%，按跌停处理 |",
+            ]
+        )
+
+        self.assertEqual(findings, [])
+
+    def test_audit_flags_turnover_core_table_without_change_pct_column(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 兆易创新 | 603986 | 377.37亿 | 半导体 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn(
+            "turnover_core_change_pct_missing",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_flags_turnover_core_section_without_table(self):
+        markdown = GOOD_MARKDOWN + "\n### 附录：五、成交核心结果\n**T-082**\n当前表格缺失\n"
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn(
+            "turnover_core_table_missing",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_flags_turnover_core_fake_zero_quote(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 兆易创新 | 603986 | 377.37亿 | 半导体 | +0.00% | 0.00 | 0.00 | 0.00 | 0.00 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn(
+            "turnover_core_fake_zero_quote",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_accepts_turnover_core_real_zero_change_with_prices(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 横盘样本 | 000001 | 188.00亿 | 银行 | +0.00% | 12.30 | 11.90 | 12.00 | 12.00 |\n"
+        )
+
+        result = audit_report_markdown(
+            markdown,
+            expected_turnover_rows=[
+                {
+                    "rank": 1,
+                    "name": "横盘样本",
+                    "code": "000001",
+                    "turnover": 188.0,
+                    "change_pct": 0.0,
+                    "high": 12.3,
+                    "low": 11.9,
+                    "open": 12.0,
+                    "close": 12.0,
+                }
+            ],
+        )
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("turnover_core_change_pct_missing", codes)
+        self.assertNotIn("turnover_core_fake_zero_quote", codes)
+        self.assertNotIn("turnover_core_source_mismatch", codes)
+
+    def test_audit_treats_zero_change_without_complete_prices_as_missing_source_quote(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 待补报价 | 000001 | 188.00亿 | 银行 | 待补 | - | - | - | - |\n"
+        )
+
+        result = audit_report_markdown(
+            markdown,
+            expected_turnover_rows=[
+                {
+                    "rank": 1,
+                    "name": "待补报价",
+                    "code": "000001",
+                    "turnover": 188.0,
+                    "change_pct": 0.0,
+                }
+            ],
+        )
+
+        self.assertNotIn(
+            "turnover_core_source_mismatch",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_compares_turnover_quote_aliases_used_by_renderer(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 别名报价 | 000001 | 188.00亿 | 银行 | -8.88% | 12.30 | 11.50 | 12.00 | 10.01 |\n"
+        )
+
+        result = audit_report_markdown(
+            markdown,
+            expected_turnover_rows=[
+                {
+                    "rank": 1,
+                    "name": "别名报价",
+                    "code": "000001",
+                    "turnover": 188.0,
+                    "zdf": -3.21,
+                    "high": 12.3,
+                    "low": 11.5,
+                    "open": 12.0,
+                    "当前价": 11.61,
+                }
+            ],
+        )
+        findings = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "turnover_core_source_mismatch"
+        ]
+
+        self.assertTrue(findings)
+        self.assertIn("涨跌幅", findings[0]["message"])
+        self.assertIn("收盘价", findings[0]["message"])
+
+    def test_audit_flags_turnover_core_values_that_differ_from_source_rows(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 兆易创新 | 603986 | 377.37亿 | 半导体 | -10.00% | 600.00 | 550.80 | 580.00 | 550.80 |\n"
+        )
+        source_row = {
+            "rank": 1,
+            "name": "兆易创新",
+            "code": "603986",
+            "turnover": 377.37,
+            "change_pct": -10.0,
+            "high": 600.0,
+            "low": 550.8,
+            "open": 580.0,
+            "close": 550.8,
+        }
+        mismatch_cases = {
+            "排名": {"rank": 2},
+            "代码": {"code": "000001"},
+            "成交额": {"turnover": 378.37},
+            "涨跌幅": {"change_pct": -8.88},
+            "最高价": {"high": 601.0},
+            "最低价": {"low": 549.8},
+            "开盘价": {"open": 581.0},
+            "收盘价": {"close": 551.8},
+        }
+
+        for field_name, override in mismatch_cases.items():
+            with self.subTest(field_name=field_name):
+                expected_rows = [{**source_row, **override}]
+                result = audit_report_markdown(markdown, expected_turnover_rows=expected_rows)
+                findings = [
+                    finding
+                    for finding in result["findings"]
+                    if finding["code"] == "turnover_core_source_mismatch"
+                ]
+                self.assertTrue(findings)
+                self.assertIn(field_name, findings[0]["message"])
+
+    def test_audit_accepts_turnover_core_values_that_match_source_rows(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n### 附录：五、成交核心结果\n"
+            + "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 |\n"
+            + "|------|------|------|--------|----------|--------|--------|--------|--------|--------|\n"
+            + "| 1 | 兆易创新 | 603986 | 377.37亿 | 半导体 | -10.00% | 600.00 | 550.80 | 580.00 | 550.80 |\n"
+        )
+        expected_rows = [
+            {
+                "rank": 1,
+                "name": "兆易创新",
+                "code": "603986",
+                "turnover": 377.37,
+                "change_pct": -10.0,
+                "high": 600.0,
+                "low": 550.8,
+                "open": 580.0,
+                "close": 550.8,
+            }
+        ]
+
+        result = audit_report_markdown(markdown, expected_turnover_rows=expected_rows)
+
+        self.assertNotIn(
+            "turnover_core_source_mismatch",
+            {finding["code"] for finding in result["findings"]},
+        )
 
     def test_audit_flags_top50_table_not_reaching_report_target_date(self):
         rows = "\n".join(

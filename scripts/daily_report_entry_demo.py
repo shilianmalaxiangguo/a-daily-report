@@ -4413,6 +4413,24 @@ def _existing_position_summary_for_audit(data):
     return existing_position_summary_from_context(data)
 
 
+def _expected_turnover_rows_for_audit(data):
+    data = data or {}
+    explicit_rows = [row for row in (data.get("turnover_over_100b") or []) if isinstance(row, dict)]
+    if explicit_rows:
+        return explicit_rows[:30]
+    rows = []
+    for row in data.get("turnover_rank", []) or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            turnover = float(row.get("turnover", 0) or 0)
+        except (TypeError, ValueError):
+            turnover = 0
+        if turnover > 100:
+            rows.append(row)
+    return rows[:30]
+
+
 def _audit_generated_report_with_chanlun_html(
     report_outputs,
     chanlun_html_path=None,
@@ -4421,6 +4439,7 @@ def _audit_generated_report_with_chanlun_html(
     position_companion_html=None,
     source_path=None,
     expected_position_summary=None,
+    expected_turnover_rows=None,
     prefer_postgres_history=False,
 ):
     full_report = (report_outputs or {}).get(REPORT_VARIANT_FULL, "")
@@ -4433,6 +4452,8 @@ def _audit_generated_report_with_chanlun_html(
         audit_kwargs["source_path"] = source_path
     if expected_position_summary:
         audit_kwargs["expected_position_summary"] = expected_position_summary
+    if expected_turnover_rows is not None:
+        audit_kwargs["expected_turnover_rows"] = expected_turnover_rows
     if prefer_postgres_history:
         audit_kwargs["prefer_postgres_history"] = True
     result = audit_report_markdown(full_report, **audit_kwargs)
@@ -4461,6 +4482,7 @@ def _audit_generated_report_with_companion_html_paths(
     *,
     source_path=None,
     expected_position_summary=None,
+    expected_turnover_rows=None,
     prefer_postgres_history=False,
 ):
     results = []
@@ -4473,6 +4495,7 @@ def _audit_generated_report_with_companion_html_paths(
                 chanlun_html_path=path,
                 source_path=source_path,
                 expected_position_summary=expected_position_summary,
+                expected_turnover_rows=expected_turnover_rows,
                 prefer_postgres_history=prefer_postgres_history,
             )
         )
@@ -5240,6 +5263,7 @@ def main():
                 position_companion_html=bear_html_text,
                 source_path=planned_report_path,
                 expected_position_summary=_existing_position_summary_for_audit(data),
+                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
                 prefer_postgres_history=True,
             )
             report_outputs[REPORT_VARIANT_RUN_LOG] = finalize_run_log_text(
@@ -5343,6 +5367,7 @@ def main():
                 companion_html_paths,
                 source_path=saved_report_paths.get(REPORT_VARIANT_FULL),
                 expected_position_summary=_existing_position_summary_for_audit(data),
+                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
                 prefer_postgres_history=True,
             )
             if run_mode == LEDGER_MODE_FROZEN:

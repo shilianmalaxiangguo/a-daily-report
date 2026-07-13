@@ -1262,7 +1262,7 @@ def _audit_degraded_fake_zero(lines):
     findings = []
     for index, line in enumerate(lines, 1):
         text = str(line)
-        if "0.00%" not in text:
+        if not re.search(r"(?<!\d)0\.00%", text):
             continue
         if any(marker in text for marker in DEGRADED_MARKERS):
             findings.append(
@@ -1270,6 +1270,215 @@ def _audit_degraded_fake_zero(lines):
                     "degraded_fake_zero_percent",
                     "数据缺失或降级时不能渲染成真实0.00%",
                     line=index,
+                )
+            )
+    return findings
+
+
+def _audit_turnover_core_quote_completeness(lines):
+    findings = []
+    in_section = False
+    section_line = None
+    table_found = False
+    headers = []
+    header_indexes = {}
+    for index, line in enumerate(lines or [], 1):
+        text = str(line or "").strip()
+        if text.startswith("#"):
+            if "成交核心结果" in text:
+                in_section = True
+                section_line = index
+                headers = []
+                header_indexes = {}
+                continue
+            if in_section:
+                break
+        if not in_section:
+            continue
+        cells = _split_md_row(text)
+        if not cells or _is_separator_cells(cells):
+            continue
+        if not headers:
+            if not {"排名", "股票", "成交额"}.issubset(set(cells)):
+                continue
+            table_found = True
+            headers = cells
+            header_indexes = {header: offset for offset, header in enumerate(headers)}
+            if "涨跌幅" not in header_indexes:
+                findings.append(
+                    _finding(
+                        "turnover_core_change_pct_missing",
+                        "成交核心结果必须展示涨跌幅",
+                        line=index,
+                    )
+                )
+            continue
+        if "涨跌幅" not in header_indexes:
+            continue
+        required_price_headers = ("最高价", "最低价", "开盘价", "收盘价")
+        if not all(header in header_indexes for header in required_price_headers):
+            continue
+        change_index = header_indexes["涨跌幅"]
+        price_indexes = [header_indexes[header] for header in required_price_headers]
+        if max([change_index, *price_indexes], default=-1) >= len(cells):
+            continue
+        change_pct = _parse_visible_number(cells[change_index])
+        prices = [_parse_visible_number(cells[offset]) for offset in price_indexes]
+        if change_pct == 0 and all(price == 0 for price in prices):
+            findings.append(
+                _finding(
+                    "turnover_core_fake_zero_quote",
+                    "成交核心结果缺少真实报价，不能把涨跌幅和价格写成0",
+                    line=index,
+                )
+            )
+    if section_line is not None and not table_found:
+        findings.append(
+            _finding(
+                "turnover_core_table_missing",
+                "成交核心结果缺少可识别的成交排行表，关键数据不完整，停止生成",
+                line=section_line,
+            )
+        )
+    return findings
+
+
+def _turnover_core_table_rows(lines):
+    in_section = False
+    headers = []
+    rows = []
+    for index, line in enumerate(lines or [], 1):
+        text = str(line or "").strip()
+        if text.startswith("#"):
+            if "成交核心结果" in text:
+                in_section = True
+                headers = []
+                rows = []
+                continue
+            if in_section:
+                break
+        if not in_section:
+            continue
+        cells = _split_md_row(text)
+        if not cells or _is_separator_cells(cells):
+            continue
+        if not headers:
+            if {"排名", "股票", "成交额"}.issubset(set(cells)):
+                headers = cells
+            continue
+        if cells and _parse_visible_number(cells[0]) is not None:
+            rows.append((index, cells))
+    return headers, rows
+
+
+def _first_expected_number(row, keys):
+    if not isinstance(row, dict):
+        return None
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _first_expected_text(row, keys):
+    if not isinstance(row, dict):
+        return ""
+    for key in keys:
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _six_digit_code(value):
+    match = re.search(r"(?<!\d)(\d{6})(?!\d)", str(value or ""))
+    return match.group(1) if match else str(value or "").strip()
+
+
+def _expected_turnover_row_has_complete_prices(row):
+    price_key_groups = (
+        ("open", "开盘价", "开盘"),
+        ("high", "最高价", "最高"),
+        ("low", "最低价", "最低"),
+        ("close", "收盘价", "收盘", "price", "最新价", "当前价"),
+    )
+    return all(
+        (value := _first_expected_number(row, keys)) is not None and value > 0
+        for keys in price_key_groups
+    )
+
+
+def _audit_turnover_core_source_consistency(lines, expected_rows):
+    expected = [row for row in (expected_rows or []) if isinstance(row, dict)][:30]
+    if not expected:
+        return []
+    headers, rendered_rows = _turnover_core_table_rows(lines)
+    if not headers:
+        return []
+
+    findings = []
+    if len(rendered_rows) != len(expected):
+        findings.append(
+            _finding(
+                "turnover_core_source_mismatch",
+                f"成交核心结果行数与源事实不一致：日报{len(rendered_rows)}行，源事实{len(expected)}行",
+                line=rendered_rows[0][0] if rendered_rows else None,
+            )
+        )
+
+    header_indexes = {header: offset for offset, header in enumerate(headers)}
+    numeric_fields = (
+        ("成交额", ("turnover", "amount_yi")),
+        ("涨跌幅", ("change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf", "change_rate", "change")),
+        ("最高价", ("high", "最高价", "最高")),
+        ("最低价", ("low", "最低价", "最低")),
+        ("开盘价", ("open", "开盘价", "开盘")),
+        ("收盘价", ("close", "收盘价", "收盘", "price", "最新价", "当前价")),
+    )
+    for position, ((line_number, cells), source_row) in enumerate(zip(rendered_rows, expected), 1):
+        mismatches = []
+        rank_index = header_indexes.get("排名", -1)
+        actual_rank = _parse_visible_number(cells[rank_index]) if 0 <= rank_index < len(cells) else None
+        expected_rank = _first_expected_number(source_row, ("rank", "rank_no"))
+        if expected_rank is None:
+            expected_rank = float(position)
+        if actual_rank != expected_rank:
+            mismatches.append("排名")
+
+        name_index = header_indexes.get("股票", -1)
+        actual_name = cells[name_index].strip() if 0 <= name_index < len(cells) else ""
+        expected_name = _first_expected_text(source_row, ("name", "stock_name", "名称"))
+        if expected_name and actual_name != expected_name:
+            mismatches.append("股票")
+
+        code_index = header_indexes.get("代码", -1)
+        actual_code = _six_digit_code(cells[code_index]) if 0 <= code_index < len(cells) else ""
+        expected_code = _six_digit_code(_first_expected_text(source_row, ("code", "stock_code", "ts_code", "代码")))
+        if expected_code and actual_code != expected_code:
+            mismatches.append("代码")
+
+        for header, source_keys in numeric_fields:
+            source_value = _first_expected_number(source_row, source_keys)
+            if source_value is None:
+                continue
+            if header == "涨跌幅" and source_value == 0 and not _expected_turnover_row_has_complete_prices(source_row):
+                continue
+            cell_index = header_indexes.get(header, -1)
+            actual_value = _parse_visible_number(cells[cell_index]) if 0 <= cell_index < len(cells) else None
+            if actual_value is None or f"{actual_value:.2f}" != f"{source_value:.2f}":
+                mismatches.append(header)
+
+        if mismatches:
+            findings.append(
+                _finding(
+                    "turnover_core_source_mismatch",
+                    f"成交核心结果第{position}行与源事实不一致：{'、'.join(mismatches)}",
+                    line=line_number,
                 )
             )
     return findings
@@ -1428,7 +1637,21 @@ def _audit_position_timeline_parity(lines, companion_html=None, *, require_html_
                     )
                 )
     old_asset = html_assets.get("ta", "")
-    if old_asset and old_asset not in {"无", "空仓", "持仓未输入", "-"}:
+    ta_pending_plan = False
+    for _offset, cells in _extract_day_order_rows(lines):
+        if cells[0].lower() != "ta":
+            continue
+        pending_match = re.fullmatch(r"最远复盘日计划待成交确认[：:]\s*(.+)", cells[2])
+        if (
+            pending_match
+            and not any(marker in cells[2] for marker in ("旧仓", "历史持仓", "已确认持仓"))
+            and any(marker in cells[4] for marker in ("未确认成交", "B1事实待确认", "确认已成交才视为B1"))
+            and _target_identity(pending_match.group(1)) == _target_identity(old_asset)
+            and _target_identity(cells[3]) == _target_identity(old_asset)
+        ):
+            ta_pending_plan = True
+            break
+    if old_asset and old_asset not in {"无", "空仓", "持仓未输入", "-"} and not ta_pending_plan:
         full_text = "\n".join(str(line or "") for line in lines)
         if "持仓未输入" in full_text and (old_asset in full_text or (companion_html and old_asset in str(companion_html))):
             findings.append(
@@ -4098,6 +4321,51 @@ def _audit_selection_workflow_consistency(lines):
     ]
 
 
+def _audit_empty_final_object_candidate_status(lines):
+    if not (_front_declares_no_current_object(lines) or _selection_workflow_declares_empty_final(lines)):
+        return []
+    findings = []
+    for index, line in enumerate(lines or [], 1):
+        text = str(line or "")
+        if "已归入明日执行结论" not in text and "B1/B2执行计划展示" not in text:
+            continue
+        findings.append(
+            _finding(
+                "empty_final_object_candidate_status_conflict",
+                "最终对象为空，但候选仍声称已进入明日执行结论",
+                line=index,
+            )
+        )
+    return findings
+
+
+def _audit_process_candidate_summary_consistency(lines):
+    candidate_counts = []
+    for line in lines or []:
+        candidate_counts.extend(
+            int(match.group("count"))
+            for match in re.finditer(r"归一候选\s*(?P<count>\d+)\s*只", str(line or ""))
+        )
+    if not candidate_counts or max(candidate_counts) <= 0:
+        return []
+    no_process_candidate_pattern = re.compile(
+        r"(?:也)?没有(?:任何|可用)?过程候选|无(?:可用)?过程候选|"
+        r"过程候选(?:数|数量)?\s*(?:为|[:：])\s*0(?:只|个)?"
+    )
+    findings = []
+    for index, line in enumerate(lines or [], 1):
+        if not no_process_candidate_pattern.search(str(line or "")):
+            continue
+        findings.append(
+            _finding(
+                "process_candidate_summary_conflict",
+                f"选股流程已有 {max(candidate_counts)} 个过程候选，但摘要写成没有过程候选",
+                line=index,
+            )
+        )
+    return findings
+
+
 def _audit_observation_anchor_consistency(lines):
     front = _front_page_lines(lines)
     final_target = _extract_final_unique_target(front)
@@ -4513,6 +4781,7 @@ def audit_report_markdown(
     *,
     position_companion_html=None,
     expected_position_summary=None,
+    expected_turnover_rows=None,
     prefer_postgres_history=False,
 ):
     stopped_report_findings = _audit_stopped_report_notice(markdown)
@@ -4544,6 +4813,8 @@ def audit_report_markdown(
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_front_page_duplicate_long_cells(lines))
     findings.extend(_audit_degraded_fake_zero(lines))
+    findings.extend(_audit_turnover_core_quote_completeness(lines))
+    findings.extend(_audit_turnover_core_source_consistency(lines, expected_turnover_rows))
     findings.extend(_audit_market_breadth_incomplete(lines))
     findings.extend(_audit_position_context_contradictions(lines))
     timeline_companion_html = position_companion_html if position_companion_html is not None else companion_html
@@ -4591,6 +4862,8 @@ def audit_report_markdown(
     findings.extend(_audit_bayesian_diagnosis_contract(lines))
     findings.extend(_audit_sniper_target_derivation_consistency(lines))
     findings.extend(_audit_selection_workflow_consistency(lines))
+    findings.extend(_audit_empty_final_object_candidate_status(lines))
+    findings.extend(_audit_process_candidate_summary_consistency(lines))
     findings.extend(_audit_positive_final_action_appendix_conflicts(lines))
     findings.extend(_audit_observation_anchor_consistency(lines))
     findings.extend(_audit_empty_final_object_appendix_current_object(lines))

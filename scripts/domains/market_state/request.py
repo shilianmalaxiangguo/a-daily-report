@@ -243,6 +243,8 @@ def collect_market_state_request_bundle(
     target_date,
     *,
     request_registry,
+    index_cross_validator=None,
+    require_index_cross_validation,
     timer,
     emit,
 ):
@@ -426,6 +428,71 @@ def collect_market_state_request_bundle(
         timer_order="3.6",
         fallback_loader=_resolve_csi1000_fallback,
     )
+
+    if not require_index_cross_validation:
+        return {
+            "results": results,
+            "data_status": data_status,
+            "step_status": step_status,
+            "module_logs": module_logs,
+        }
+
+    step_status["指数交叉核对"] = False
+    emit("  3.7️⃣ 交叉核对六个指数（Tushare + 腾讯日K）...")
+    try:
+        validation = index_cross_validator(results, target_date) if callable(index_cross_validator) else {}
+        results["index_cross_validation"] = validation
+        validation_ok = bool(
+            isinstance(validation, dict)
+            and validation.get("status") == "success"
+            and len(validation.get("checks") or []) == 6
+        )
+        data_status["指数交叉核对"] = validation_ok
+        step_status["指数交叉核对"] = validation_ok
+        elapsed, _ = timer.record(
+            "指数交叉核对" if validation_ok else "指数交叉核对(失败)",
+            "3.7",
+        )
+        if validation_ok:
+            emit(f"   ✅ 六个指数交叉核对通过 [⏱ {elapsed:.2f}s]")
+        else:
+            failures = validation.get("failures") if isinstance(validation, dict) else []
+            summary = "；".join(str(item) for item in (failures or [])[:3]) or "核对证据不完整"
+            emit(f"   ❌ 六个指数交叉核对失败: {summary} [⏱ {elapsed:.2f}s]")
+        _append_log(
+            module_logs,
+            "request.index_cross_validation",
+            "success" if validation_ok else "error",
+            "六个指数交叉核对通过" if validation_ok else "六个指数交叉核对失败",
+            provider=(validation or {}).get("verification_provider", "tencent.fqkline.day")
+            if isinstance(validation, dict)
+            else "tencent.fqkline.day",
+            target_keys=["index_cross_validation"],
+            target_date=target_date,
+            row_count=len((validation or {}).get("checks") or []) if isinstance(validation, dict) else 0,
+            failure_count=len((validation or {}).get("failures") or []) if isinstance(validation, dict) else 1,
+        )
+    except Exception as error:
+        results["index_cross_validation"] = {
+            "schema_version": "report_index_cross_validation.v1",
+            "target_date": target_date,
+            "status": "failed",
+            "checks": [],
+            "failures": [f"指数交叉核对异常：{error}"],
+        }
+        data_status["指数交叉核对"] = False
+        elapsed, _ = timer.record("指数交叉核对(失败)", "3.7")
+        emit(f"   ❌ 六个指数交叉核对异常: {error} [⏱ {elapsed:.2f}s]")
+        _append_log(
+            module_logs,
+            "request.index_cross_validation",
+            "error",
+            "六个指数交叉核对异常",
+            provider="tencent.fqkline.day",
+            target_keys=["index_cross_validation"],
+            target_date=target_date,
+            error=str(error),
+        )
 
     return {
         "results": results,

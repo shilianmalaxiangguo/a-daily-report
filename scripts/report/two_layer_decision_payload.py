@@ -394,10 +394,11 @@ def _candidate_text(value, *keys):
 
 
 def _candidate_payload(value, source):
-    stock = _stock_payload(value)
+    value = value if isinstance(value, dict) else {}
+    nested_stock = value.get("stock") if isinstance(value.get("stock"), dict) else value
+    stock = _stock_payload(nested_stock)
     if not stock:
         return {}
-    value = value if isinstance(value, dict) else {}
     pool_source = clean_text(source, "候选池")
     payload = {"stock": stock, "pool_source": pool_source, "pool_sources": [pool_source]}
     for key in (
@@ -416,6 +417,10 @@ def _candidate_payload(value, source):
     ):
         if key in value:
             payload[key] = value.get(key)
+    if not clean_text(payload.get("reason")):
+        reason = clean_text(value.get("eliminated_reason") or value.get("entered_reason"))
+        if reason:
+            payload["reason"] = reason
     missing_data = value.get("missing_data") or value.get("missing_fields")
     if isinstance(missing_data, list):
         payload["missing_data"] = [clean_text(item) for item in missing_data if clean_text(item)]
@@ -495,6 +500,13 @@ def _candidate_pool_entries(final_target_resolution, execution_stage_context):
         ("process_target", "过程候选"),
     ):
         _append_candidate(entries, seen, resolution.get(key), source)
+    workflow = _selection_workflow_from_context(context)
+    workflow_candidates = workflow.get("candidate_pool") if isinstance(workflow.get("candidate_pool"), list) else []
+    for item in workflow_candidates:
+        if not isinstance(item, dict):
+            continue
+        source_pools = [clean_text(source) for source in item.get("source_pools", []) if clean_text(source)]
+        _append_candidate(entries, seen, item, "、".join(source_pools) or "选股流程候选池")
     bundle = context.get("step2_bundle") if isinstance(context.get("step2_bundle"), dict) else {}
     for key, source in (
         ("core_stocks", "核心候选池"),

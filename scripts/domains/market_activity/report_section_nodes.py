@@ -419,6 +419,7 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
     analyze_candlestick_pattern = context.get("analyze_candlestick_pattern")
     zt_pool = _zt_pool(context)
     dt_pool = _dt_pool(context)
+    quote_lookup = _build_quote_lookup(context)
 
     lines = [
         "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 | 隔日判断 | 蜡烛图形态 |",
@@ -430,12 +431,22 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
             name = stock.get("name", "?")
             code = stock.get("code", "?").replace("sz", "").replace("sh", "")
             stock_turnover = stock.get("turnover", 0)
-            info = stock_full_info.get(code, {})
-            change_pct = info.get("change_pct", 0)
-            high = info.get("high", 0)
-            low = info.get("low", 0)
-            open_price = info.get("open", 0)
-            close = info.get("close", 0)
+            info = _resolve_stock_info(stock_full_info, name, code)
+            quote_info = resolve_market_quote(quote_lookup, stock_code=code, stock_name=name)
+            matched_turnover = _matching_rows(data.get("turnover_rank", []), name, code)
+            quote_rows = matched_turnover + [stock, quote_info, info]
+            change_pct = _first_row_float(
+                quote_rows,
+                ("change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf", "change_rate", "change"),
+            )
+            high = _first_row_float(quote_rows, ("high", "最高价", "最高"), positive_only=True)
+            low = _first_row_float(quote_rows, ("low", "最低价", "最低"), positive_only=True)
+            open_price = _first_row_float(quote_rows, ("open", "开盘价", "开盘"), positive_only=True)
+            close = _first_row_float(
+                quote_rows,
+                ("close", "最新价", "收盘价", "收盘", "price", "当前价"),
+                positive_only=True,
+            )
             if callable(get_stock_status):
                 get_stock_status(name, code, zt_pool, dt_pool, change_pct)
             sector = stock.get("sector", "") or stock.get("所属行业", "") or stock.get("industry", "")
@@ -456,10 +467,19 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
                 )
             if not _is_valid_sector_label(sector):
                 sector = "待补充板块"
-            pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
+            if None in (open_price, close, high, low, change_pct):
+                pattern_name, pattern_score = "报价待补", 0
+            else:
+                pattern_name, pattern_score, _ = analyze_candlestick_pattern(
+                    open_price,
+                    close,
+                    high,
+                    low,
+                    change_pct,
+                )
             judgment = "观望" if stock_turnover > 150 else "关注" if stock_turnover > 120 else "谨慎"
             lines.append(
-                f"| {idx} | {name} | {code} | {stock_turnover:.2f}亿 | {sector} | {change_pct:+.2f}% | {high:.2f} | {low:.2f} | {open_price:.2f} | {close:.2f} | {judgment} | {pattern_name}({pattern_score}分) |"
+                f"| {idx} | {name} | {code} | {stock_turnover:.2f}亿 | {sector} | {_format_optional_pct(change_pct)} | {_format_optional_price(high)} | {_format_optional_price(low)} | {_format_optional_price(open_price)} | {_format_optional_price(close)} | {judgment} | {pattern_name}({pattern_score}分) |"
             )
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}

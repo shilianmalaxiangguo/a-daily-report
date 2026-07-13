@@ -515,6 +515,10 @@ candidate whose `front_observation_qualified is True`; rows with
 - `_resolve_runtime_current_core_candidate(...)` must not let weak `best_stock`
   or `watch_anchor` fallback override a selected candidate unless that fallback
   has positive current core evidence.
+- When `final.execution_object` is empty, every non-final candidate must remove
+  inherited text claiming it has already entered the next-day execution
+  conclusion or B1/B2 plan. Report acceptance must reject that contradiction
+  before any official artifact is written.
 
 #### 4. Validation & Error Matrix
 
@@ -527,6 +531,7 @@ candidate whose `front_observation_qualified is True`; rows with
 | Explicit selected object is also in raw pools | selected row wins source order; raw duplicate is skipped |
 | Weak `best_stock` differs from selected object and has no positive core evidence | selected object is kept |
 | Old workflow row lacks qualification field | use conservative compatibility path only |
+| Final object is empty but a process candidate says it entered the next-day conclusion | normalize the candidate reason and fail report acceptance if the contradiction remains |
 
 #### 5. Good / Base / Bad Cases
 
@@ -547,6 +552,8 @@ candidate whose `front_observation_qualified is True`; rows with
 - `tests.test_report_runtime.ReportRuntimeTest.test_front_page_selected_candidate_keeps_explicit_observation_before_extreme_fallback`
 - `tests.test_report_runtime.ReportRuntimeTest.test_runtime_final_resolution_keeps_workflow_core_as_watch_target_when_position_is_zero`
 - `tests.test_report_runtime.ReportRuntimeTest.test_zero_participation_downgraded_anchor_sample_does_not_become_final_watch_target`
+- `tests.test_selection_workflow.SelectionWorkflowTest.test_zero_position_candidate_cannot_keep_stale_final_conclusion_reason`
+- `tests.test_report_acceptance_audit.ReportAcceptanceAuditTest.test_audit_flags_candidate_claiming_final_conclusion_when_final_object_is_empty`
 
 #### 7. Wrong vs Correct
 
@@ -1002,6 +1009,128 @@ if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
     return None
 return read_local_fresh_json(target_date)
 ```
+
+### Daily Report Index Cross-Validation Contract
+
+Reports dated `2026-07-13` or later must not render index facts until all six
+report indices pass exact-date, independent-source cross-validation:
+
+- 上证指数 `000001`
+- 深证成指 `399001`
+- 创业板指 `399006`
+- 中证全指 `000985`
+- 中证500 `000905`
+- 中证1000 `000852`
+
+Required behavior:
+
+- The primary index payload must carry `trade_date`, `close`, `pre_close`,
+  `change_pct`, the expected six-digit index code, and a non-empty provider
+  identity. Numeric evidence must be finite; `NaN` and positive or negative
+  infinity are missing facts. A prior trading day's last available row is not a
+  valid substitute for the target date.
+- Tushare `index_daily` is the normal primary source. Tencent `fqkline` day data
+  is the independent verification source. Both sides must identify the target
+  date and must not belong to the same provider family.
+- The maximum absolute difference is `0.05` index points for `close` and
+  `pre_close`, and `0.02` percentage points for `change_pct`.
+- Validation produces `report_index_cross_validation.v1` with six named checks,
+  both source facts, measured differences, tolerances, status, and failure
+  reasons. A conflicting result stops report generation; do not silently pick
+  one source.
+- Fresh collection before `2026-07-13` must not create or track this artifact.
+  Older reports are revalidated only when they already carry the artifact.
+- Report pre-generation checks must recompute source differences and compare the
+  current report payload with the saved primary evidence, including code and
+  provider identity. Every saved verification item must still identify Tencent
+  `fqkline` day data. A stale `status` value cannot validate changed facts.
+- A successful artifact must contain exactly one check for each expected
+  name/code pair. Duplicate checks, unknown codes, non-empty failure/reason
+  fields, or stored difference values that disagree with recomputation are
+  contradictory evidence and must stop generation.
+- `index_cross_validation` must be included in the PostgreSQL daily-report fact
+  projection. A PostgreSQL reload must restore all six checks and pass the same
+  validation before report generation.
+- Reports before the contract start date are not batch-migrated here. If an
+  older report already carries this artifact, it must still pass validation.
+
+Required tests:
+
+- `tests.test_tushare_input_runtime`: exact target-date selection and source
+  field retention.
+- `tests.test_index_cross_validation`: Tencent parsing, six-index success,
+  stale dates, non-finite values, missing or replaced source identity, value
+  conflicts, same-provider rejection, changed payloads, and stale-success
+  rejection.
+- `tests.test_market_state_request`: request result, status, and failure log
+  propagation, plus no fresh validation before the contract start date.
+- `tests.test_daily_report_entry_preflight`: required evidence from the contract
+  start date and successful `6/6` continuation.
+- `tests.test_postgres_daily_fact_db`: validation evidence survives a full fact
+  save/reload and report pre-generation checks revalidate the restored artifact.
+
+### Turnover Core Quote Completeness Contract
+
+- The turnover core table must resolve quote fields from the structured
+  `turnover_rank` / `turnover_over_100b` row before using auxiliary
+  `stock_full_info`. PostgreSQL-only rendering must not lose quote fields that
+  already belong to the ranked turnover fact.
+- When the displayed `turnover_over_100b` row already carries quote fields,
+  those fields take precedence over auxiliary quote lookup results. Auxiliary
+  data may fill missing fields but must not overwrite the displayed row's own
+  facts.
+- `change_pct`, open, high, low, and close must remain distinguishable from
+  missing data. Missing quote facts render as `待补` / `-` and skip candlestick
+  analysis; they must never be converted into a synthetic `0.00%` and four
+  `0.00` prices.
+- Report acceptance requires a visible `涨跌幅` column in the turnover core
+  table, rejects an all-zero quote row, and rejects a turnover core section with
+  no recognizable ranking table. A legitimate unchanged stock remains valid
+  when its prices are real and only `change_pct` is zero.
+- Before saving a generated report, acceptance receives the exact turnover rows
+  selected for display and compares rank, stock identity, turnover, change
+  percentage, and available OHLC fields at two-decimal display precision. Any
+  row-count or nonzero value mismatch stops the report from being accepted.
+- Source comparison uses the same quote aliases and zero-value interpretation as
+  the renderer. A zero change is factual only when that source row also carries
+  four complete positive prices; otherwise it remains missing and may render as
+  `待补` without a false mismatch.
+
+Required tests:
+
+- `tests.test_market_activity_domain_report_sections`: ranked turnover rows
+  retain their quote fields, while genuinely missing quotes remain explicit.
+- `tests.test_report_acceptance_audit`: missing change columns and synthetic
+  all-zero quotes are rejected without rejecting a real zero-change row; every
+  source-comparison field and renderer quote alias has a nonzero mismatch
+  counterexample, while an incomplete placeholder zero remains missing.
+- `tests.test_daily_report_entry_preflight`: report generation passes the exact
+  displayed turnover rows into acceptance before writing the official report.
+
+### Candidate Summary Consistency Contract
+
+- The front-page candidate summary must use
+  `selection_workflow.candidate_pool` as a candidate source. It must not infer
+  that there are no process candidates merely because legacy execution-stage
+  candidate lists are empty.
+- A workflow candidate row may carry the stock under its nested `stock` field.
+  Candidate summaries must preserve that identity and may use
+  `eliminated_reason` as the non-winning reason.
+- If the workflow reports `归一候选N只` with `N > 0`, the report must not say
+  `也没有过程候选`, `无过程候选`, or equivalent zero-candidate wording. This
+  contradiction must stop the official report from being accepted.
+- Process candidates remain evidence only. Adding them to the summary source
+  must not create an execution object, change position sizing, or promote a
+  candidate into the final action.
+
+Required tests:
+
+- `tests.test_two_layer_decision_payload`: a zero-position workflow with nested
+  candidate rows preserves a visible process-candidate summary while keeping
+  the final object empty.
+- `tests.test_report_acceptance_audit`: a positive normalized candidate count
+  conflicts with direct and synonymous claims that there are no process
+  candidates.
 
 (To be filled by the team)
 

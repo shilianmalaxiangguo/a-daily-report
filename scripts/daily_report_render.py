@@ -32,6 +32,10 @@ from report.position_context import (
 )
 from report.surface_wording import sanitize_user_visible_text
 from domains.market_state.market_language_translation import canonical_market_language_hash
+from input.index_cross_validation import (
+    index_cross_validation_failures,
+    index_cross_validation_required,
+)
 try:
     import daily_report_analysis_utils as analysis_utils
 except ImportError:  # pragma: no cover - local compatibility shim for this repo snapshot
@@ -949,6 +953,30 @@ def build_report_preflight(data, target_date):
                 "data_status": data_status.get(label),
             }
         )
+    index_validation_tracked = bool(
+        "index_cross_validation" in data
+        or "指数交叉核对" in data_status
+        or "指数交叉核对" in (data.get("step_status") or {})
+    )
+    if index_cross_validation_required(target_date) or index_validation_tracked:
+        index_failures = index_cross_validation_failures(data, target_date)
+        validation = data.get("index_cross_validation") if isinstance(data.get("index_cross_validation"), dict) else {}
+        validation_checks = validation.get("checks") if isinstance(validation.get("checks"), list) else []
+        success_count = sum(
+            1 for item in validation_checks if isinstance(item, dict) and item.get("status") == "success"
+        )
+        checks.append(
+            {
+                "label": "指数交叉核对",
+                "payload_key": "index_cross_validation",
+                "status": "failed" if index_failures or data_status.get("指数交叉核对") is False else "success",
+                "provider": validation.get("verification_provider") or "tencent.fqkline.day",
+                "value": f"{success_count}/6",
+                "row_count": len(validation_checks),
+                "data_status": data_status.get("指数交叉核对"),
+                "note": "；".join(index_failures[:3]),
+            }
+        )
     sector_first_checks = _build_sector_first_critical_checks(data)
     checks.extend(sector_first_checks)
     decision_checks = _build_decision_critical_checks(data) + _build_quant_factor_checks(data)
@@ -978,15 +1006,16 @@ def render_report_preflight_lines(preflight):
         )
     ]
     for check in preflight.get("checks") or []:
-        lines.append(
-            "- {label}: {status} | 来源={provider} | 数值={value} | 记录数={row_count}".format(
+        line = "- {label}: {status} | 来源={provider} | 数值={value} | 记录数={row_count}".format(
                 label=check.get("label", ""),
                 status=_run_log_status(check.get("status", "")),
                 provider=check.get("provider", "unknown"),
                 value=check.get("value", ""),
                 row_count=check.get("row_count", ""),
             )
-        )
+        if check.get("note"):
+            line = f"{line} | 备注={check.get('note')}"
+        lines.append(line)
     if preflight.get("decision_checks"):
         lines.append("决策数据检查:")
         for check in preflight.get("decision_checks") or []:

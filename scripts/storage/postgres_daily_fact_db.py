@@ -1389,6 +1389,7 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "wind_a_alternative",
     "csi500_index",
     "csi1000_index",
+    "index_cross_validation",
     "turnover_rank",
     "market_stats",
     "hot_rank_top50",

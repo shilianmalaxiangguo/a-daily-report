@@ -4447,7 +4447,9 @@ def get_limit_pool_snapshot_from_tushare_first(
 
 def _change_pct(latest_bar, prev_bar):
     close_price = _safe_float((latest_bar or {}).get("close"))
-    prev_close = _safe_float((prev_bar or {}).get("close"))
+    prev_close = _safe_float((latest_bar or {}).get("pre_close"))
+    if prev_close <= 0:
+        prev_close = _safe_float((prev_bar or {}).get("close"))
     open_price = _safe_float((latest_bar or {}).get("open"))
     if prev_close > 0:
         return (close_price - prev_close) / prev_close * 100
@@ -4456,17 +4458,22 @@ def _change_pct(latest_bar, prev_bar):
     return 0.0
 
 
-def _latest_index_payload(name, code, bars):
+def _latest_index_payload(name, code, bars, target_date=None):
     normalized_bars = [
         {**(bar or {}), "date": normalize_kline_date_str((bar or {}).get("date"))}
         for bar in (bars or [])
     ]
     normalized_bars = [bar for bar in normalized_bars if bar.get("date")]
+    target_text = normalize_kline_date_str(target_date)
+    if target_text:
+        normalized_bars = [bar for bar in normalized_bars if bar.get("date") <= target_text]
     normalized_bars.sort(key=lambda item: item.get("date", ""))
     if not normalized_bars:
         return None
 
     latest_bar = normalized_bars[-1]
+    if target_text and latest_bar.get("date") != target_text:
+        return None
     prev_bar = normalized_bars[-2] if len(normalized_bars) >= 2 else {}
     close_price = _safe_float(latest_bar.get("close"))
     if close_price <= 0:
@@ -4481,8 +4488,11 @@ def _latest_index_payload(name, code, bars):
         "close": close_price,
         "high": _safe_float(latest_bar.get("high")),
         "low": _safe_float(latest_bar.get("low")),
+        "pre_close": _safe_float(latest_bar.get("pre_close")) or _safe_float(prev_bar.get("close")),
+        "source_change": _safe_float(latest_bar.get("change")),
+        "source_change_pct": _safe_float(latest_bar.get("pct_chg")),
         "change_pct": change_pct,
-        "turnover": _safe_float(latest_bar.get("amount_yi")),
+        "turnover": _safe_float(latest_bar.get("amount_yi")) or _safe_float(latest_bar.get("amount")),
         "涨跌幅": change_pct,
         "data_source": "tushare.index_daily",
         "trade_date": latest_bar.get("date"),
@@ -4517,6 +4527,7 @@ def get_major_indices_from_tushare_first(
                 name,
                 code,
                 fetcher(code, start_date, end_date, is_index=True),
+                target_date=target_date,
             )
             if payload:
                 indices[name] = payload
@@ -4547,6 +4558,7 @@ def _get_single_index_from_tushare_first(
                 name,
                 code,
                 fetcher(code, start_date, end_date, is_index=True),
+                target_date=target_date,
             )
             if payload and _safe_float(payload.get("price")) > 0:
                 return payload
