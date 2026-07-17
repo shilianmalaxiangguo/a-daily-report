@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "检查知识引用不得改变正式决定和目标日期证据"}
-{"file": ".trellis/spec/backend/llm-wiki-provenance.md", "reason": "检查来源指纹、事实来源、fresh/replay 轨迹和兼容行为"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查 context、trace、snapshot、replay 和渲染的一致性"}
-{"file": ".trellis/tasks/07-17-llm-wiki-provenance-decision-quality/research/wiki-framework-audit.md", "reason": "检查实现是否覆盖审计发现且没有扩展到向量检索"}
