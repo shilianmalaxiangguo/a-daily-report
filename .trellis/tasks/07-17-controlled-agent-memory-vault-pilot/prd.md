@@ -36,6 +36,7 @@
 - [ ] R9: 私有 Markdown、SQLite、查询日志、模型文件和其他派生数据不得提交到当前日报 Git 仓库；敏感内容和凭证必须在写入前被拒绝。
 - [ ] R10: 建立最小检索验收集，至少覆盖正确召回、过期内容排除、项目范围隔离、冲突内容说明、Top 3 上限和日报决定字段不受影响。
 - [ ] R11: 试点提供明确的停用与清理说明；停用后不影响 Trellis、项目 Wiki、日报生成或历史 replay。
+- [ ] R12: 日报任务文档、受控源码和私有 Markdown 分别使用独立 Git 归属；私有 Vault 仓库只跟踪 Markdown 与仓库规则，不纳入 runtime、SQLite、日志或模型文件。
 
 ## Non-functional Requirements
 
@@ -100,6 +101,7 @@
 - [ ] AC-R10-1: 固定验收查询覆盖正确召回、过期排除、范围隔离和冲突说明，并输出可重复结果。
 - [ ] AC-R10-2: 启用和停用试点前后，日报正式决定字段及 replay 行为保持一致。
 - [ ] AC-R11-1: 按停用说明移除入口后，Trellis、Wiki lint、日报相关测试仍能独立运行。
+- [ ] AC-R12-1: 三个仓库均与各自私有远端同步；受控源码保留公开上游用于同步，私有 Vault 的已跟踪文件仅为 Markdown 与 `.gitignore`。
 
 ## Definition Of Done
 
@@ -111,6 +113,7 @@
 - [ ] 修改文件与现有大工作区改动已明确区分
 - [ ] 用户完成人工试用后再决定是否启用向量检索或自动化
 - [x] 落地 commit 已回填；提交前已按用户确认执行
+- [x] 日报任务、受控源码和私有 Markdown 已分别提交并同步到对应私有远端
 
 ## Out Of Scope
 
@@ -119,7 +122,7 @@
 - 不引入向量数据库、embedding 模型、外部搜索服务或 MCP 服务。
 - 不自动迁移现有 Trellis、AGENTS、Wiki、日报或聊天历史。
 - 不扫描 `reports/`、`snapshots/`、账户原始数据或其他敏感历史产物。
-- 不启用自动 Git 提交、推送、周期任务或系统级 Hook。
+- 不启用由 closeout、Hook 或周期任务触发的自动 Git 提交或自动推送。
 - 不在本任务中解决外部仓库全部跨平台、许可证归属或向量依赖问题。
 
 ## Resolved Decisions
@@ -127,6 +130,8 @@
 - RD1: 可维护源码使用 `/Users/chaixixi/Projects/agent-memory-vault` 独立本地 clone，并在独立分支上修改。
 - RD2: 私人 Markdown 使用 `/Users/chaixixi/.local/share/agent-memory-vault`；runtime、SQLite、配置和日志使用 `/Users/chaixixi/.config/agent-memory`。
 - RD3: 日报仓库只保留本 Trellis 任务文档，不添加 Memory Vault 运行依赖，不修改现有项目 `vault/`。
+- RD4: 日报任务文档推送到 `shilianmalaxiangguo/a-daily-report`；受控源码推送到私有 `shilianmalaxiangguo/agent-memory-vault`，并保留 `mcncarl/agent-memory-vault` 为 `upstream`。
+- RD5: 私有 Markdown 使用独立 private 仓库 `shilianmalaxiangguo/agent-memory-private`；只人工提交 Markdown，不提交或自动推送派生数据。
 
 ## Verification
 
@@ -134,6 +139,7 @@
 - 对默认配置执行检索、写入对账、过期排除、冲突说明和敏感内容拒绝测试。
 - 检查私有目录、派生索引和搜索日志没有进入日报 Git。
 - 运行当前项目 Wiki lint 和正式决定相关最窄测试，证明试点没有改变日报行为。
+- 检查三个仓库的上游跟踪状态，并运行 Doctor 验证私有 Markdown 的 Git 基线与远端备份。
 - 执行 `git diff --check`，并按本任务文件清单检查范围。
 
 ## Notes
@@ -144,6 +150,8 @@
 
 ## 落地 commit
 
-- 外部源码：`a397da16e1112a059a1c90a014c783eb7c3d6688`（`Add controlled Agent Memory safeguards`）。
-- runtime 已从该提交重新安装；安装清单记录 `source_dirty=false`，18/18 个文件匹配。
-- 日报仓库只提交本 Trellis 任务目录；该文档提交的 hash 在提交完成后的交付说明中记录，避免文档自引用同一提交。
+- 外部源码：`a397da16e1112a059a1c90a014c783eb7c3d6688`（`Add controlled Agent Memory safeguards`），已推送到私有 `origin/codex/controlled-memory-pilot`。
+- 私有 Markdown：`1457d35`（`Initialize controlled Agent Memory vault`），已推送到 `origin/main`；仅跟踪 25 份 Markdown 与 `.gitignore`。
+- 日报任务文档首个落地提交：`675bae7c`（`docs(task): record controlled agent memory pilot`），已推送到 `origin/develop`。
+- runtime 已从外部源码提交 `a397da16e1112a059a1c90a014c783eb7c3d6688` 重新安装；安装清单记录 `source_dirty=false`，18/18 个文件匹配。
+- 日报仓库后续仍只提交本 Trellis 任务目录；本次远端补充记录的提交 hash 在完成后的交付说明中记录。

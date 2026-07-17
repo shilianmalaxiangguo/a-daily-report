@@ -4,8 +4,8 @@
 
 本设计建立三套物理隔离、职责单一的目录：
 
-1. `/Users/chaixixi/Projects/agent-memory-vault`：可维护源码 clone，只保存程序、模板、测试和公开文档。
-2. `/Users/chaixixi/.local/share/agent-memory-vault`：私人 Markdown 正式记忆，不保存派生数据库和模型。
+1. `/Users/chaixixi/Projects/agent-memory-vault`：可维护源码 clone，只保存程序、模板、测试和公开文档；私有 `origin` 保存受控分支，公开 `upstream` 用于同步原仓库。
+2. `/Users/chaixixi/.local/share/agent-memory-vault`：私人 Markdown 正式记忆，不保存派生数据库和模型；独立 private 仓库只跟踪 Markdown 与 `.gitignore`。
 3. `/Users/chaixixi/.config/agent-memory`：本机 runtime、TOML、策略 JSON、SQLite、日志和报告，不提交到项目 Git。
 
 当前日报仓库只修改 `.trellis/tasks/07-17-controlled-agent-memory-vault-pilot/`。现有 `vault/`、Wiki、Trellis、日报代码、报告和快照均不接入私有 runtime。
@@ -92,6 +92,13 @@ bootstrap 只创建空白模板。首批额外内容只包括：
 
 不迁移历史聊天、日报、账户、Wiki 正文或 Trellis 任务正文。
 
+### 8. Git 归属
+
+- 日报任务文档沿用 `shilianmalaxiangguo/a-daily-report`，不纳入私有 Markdown 或 Memory runtime。
+- 受控源码使用 private `shilianmalaxiangguo/agent-memory-vault` 作为 `origin`，使用 `mcncarl/agent-memory-vault` 作为 `upstream`。
+- 私有 Markdown 使用 private `shilianmalaxiangguo/agent-memory-private`，只允许人工确认后的提交与推送。
+- `.config/agent-memory` 不建立 Git，不提交 TOML、策略、SQLite、日志、报告或模型文件。
+
 ## Compatibility / Migration
 
 - 无策略配置时，公开仓库原有基础行为保持兼容；受控策略由本机配置显式启用。
@@ -125,10 +132,12 @@ bootstrap 只创建空白模板。首批额外内容只包括：
 4. 写入两条受控初始记忆并重建索引。
 5. 运行固定检索验收、策略检查、Doctor 与安装指纹验证。
 6. 运行日报 Wiki 与 replay 的最窄验证，证明没有接入运行链。
+7. 经用户确认后分别提交并推送日报任务文档、受控源码和私有 Markdown，再复核 Doctor 的 Git 基线与远端备份。
 
 ## Rollback / Roll-forward
 
 - 停用只需要停止调用独立 runtime；日报项目不依赖它。
 - 私有 Markdown 是唯一需要保留的数据，SQLite、日志和 runtime 均可重建。
+- 私有 Markdown 的独立远端用于版本恢复，不改变 Markdown 作为唯一正式事实的地位。
 - 不自动删除任何目录。若用户未来决定清理，应先备份 Markdown，再分别处理源码、私有数据和 runtime。
 - 后续向量检索、Hook 或自动化必须作为独立任务重新评估，不能在本试点中顺带启用。

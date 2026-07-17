@@ -21,12 +21,14 @@
 - [x] I10: 验证 runtime 安装指纹、私有路径隔离、默认 dry-run、默认无日志和停用独立性。
 - [x] I11: 运行当前日报项目 Wiki、正式决定与 replay 的最窄测试，确认日报仓库运行行为不变。
 - [x] I12: 执行 Trellis 检查和一轮只读提交前审计，记录修改文件、验证结果和剩余问题；提交前向用户确认。
+- [x] I13: 按用户补充确认建立两个独立 private 远端，分别推送受控源码和私有 Markdown，并将日报任务文档推送到既有私有远端。
 
 ## Validation Commands
 
 - `/Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.generated/venv-py314/bin/python3.14 -m unittest discover -s tests -v`
 - `/Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.generated/venv-py314/bin/python3.14 scripts/agent_memory_check.py --skip-state-db`
 - `/Users/chaixixi/.config/agent-memory/scripts/install_runtime.py --config-root /Users/chaixixi/.config/agent-memory --verify --json`，由固定 Python 3.14 调用。
+- 使用固定 Python 3.14 运行 `memoryctl doctor --json`，验证私有 Markdown 的 Git 基线与远端备份。
 - 使用 runtime TOML 初始化和扫描私有索引，再执行默认 Top 3、过期排除、范围隔离与冲突样本查询。
 - `.generated/venv-py314/bin/python3.14 scripts/knowledge/llm_wiki_lint.py`
 - `.generated/venv-py314/bin/python3.14 -m unittest tests.test_llm_wiki_manifest tests.test_llm_wiki_router`
@@ -38,7 +40,8 @@
 - I2 前确认目标源码目录不存在；存在时停止，不能覆盖。
 - I8 前再次确认私有数据和 runtime 目录不存在；存在时停止，不能覆盖。
 - runtime 安装器后续会覆盖 hash 不同的脚本，因此本任务只在空目录首次安装一次。
-- 不运行 `memoryctl closeout --commit`，不创建 Git 提交，不推送远程。
+- 不运行 `memoryctl closeout --commit`，不启用自动提交或自动推送；仅在用户明确确认后执行人工提交和推送。
+- 私有 Vault 只跟踪 Markdown 与 `.gitignore`；runtime、SQLite、日志、报告和模型继续保存在 Git 之外。
 - 不修改日报仓库现有 `vault/`、Wiki、scripts、tests、reports 或 snapshots。
 
 ## Review Checkpoints
@@ -48,3 +51,4 @@
 - I9 后：私有内容是否只有短指针和架构决定，没有历史正文迁移。
 - I11 后：日报 manifest/trace、正式决定与 replay 是否保持原行为。
 - I12：按仓库要求使用只读子代理做提交前审计，主代理点验关键出处。
+- I13：三个仓库是否分别跟踪自己的远端，私有 Vault 是否没有派生文件进入 Git。
