@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import os
 import json
@@ -22,8 +23,13 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     candidate_can_be_current_observation_target as _candidate_can_be_current_observation_target,
 )
 from domains.execution_chain.pk_decision_stage import build_pk_decision_runtime as _build_pk_decision_runtime
-from knowledge.llm_wiki_context import build_llm_wiki_context
-from knowledge.llm_wiki_router import build_llm_wiki_fact_tags, route_llm_wiki_knowledge
+from knowledge.llm_wiki_context import (
+    build_llm_wiki_context,
+    build_replay_llm_wiki_context,
+    llm_wiki_confidence_for_availability,
+)
+from knowledge.llm_wiki_manifest import stable_json_hash
+from knowledge.llm_wiki_router import build_llm_wiki_fact_bundle, route_llm_wiki_knowledge_trace
 from knowledge.topic_lifecycle import (
     build_topic_lifecycle_knowledge_update,
     build_topic_lifecycle_snapshot,
@@ -9852,20 +9858,122 @@ def _attach_topic_lifecycle_snapshot(data):
     return snapshot
 
 
+def _llm_wiki_formal_decision_projection(data):
+    if not isinstance(data, dict):
+        return {}
+    position_decision = data.get("position_decision") if isinstance(data.get("position_decision"), dict) else {}
+    final_resolution = (
+        data.get("final_target_resolution")
+        if isinstance(data.get("final_target_resolution"), dict)
+        else {}
+    )
+    two_layer = (
+        data.get("two_layer_decision_payload")
+        if isinstance(data.get("two_layer_decision_payload"), dict)
+        else {}
+    )
+    return {
+        "selection_workflow": deepcopy(data.get("selection_workflow")),
+        "final_target_resolution": deepcopy(final_resolution),
+        "selected_position_candidate": deepcopy(data.get("selected_position_candidate")),
+        "current_core_candidate": deepcopy(data.get("current_core_candidate")),
+        "position_decision": {
+            key: deepcopy(position_decision.get(key))
+            for key in (
+                "signal_grade",
+                "target_position_pct",
+                "participation_mode",
+                "participation_script",
+                "final_action",
+            )
+        },
+        "planned_participation": deepcopy(data.get("planned_participation")),
+        "old_position_plan": deepcopy(final_resolution.get("old_position_plan")),
+        "account_exposure_plan": deepcopy(final_resolution.get("account_exposure_plan")),
+        "two_layer_front_decision": deepcopy(two_layer.get("front_decision")),
+        "two_layer_final_object": deepcopy(two_layer.get("final_object")),
+        "two_layer_next_day_action": deepcopy(two_layer.get("next_day_action")),
+        "two_layer_b_level_conditions": deepcopy(two_layer.get("b_level_conditions")),
+        "old_position_action_rows": deepcopy(two_layer.get("old_position_action_rows")),
+    }
+
+
 def _attach_llm_wiki_knowledge_hits(data, llm_wiki_context):
     if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
         return []
-    facts = build_llm_wiki_fact_tags(data)
-    hits = route_llm_wiki_knowledge(facts, scenario="daily_report", limit=3)
+    before_projection = _llm_wiki_formal_decision_projection(data)
+    before_hash = stable_json_hash(before_projection)
+    fact_bundle = build_llm_wiki_fact_bundle(data)
+    trace = route_llm_wiki_knowledge_trace(
+        fact_bundle.get("facts") or {},
+        manifest=llm_wiki_context.get("manifest") or {},
+        scenario="daily_report",
+        limit=3,
+        target_date=llm_wiki_context.get("target_date") or data.get("target_date") or "",
+        query_date=llm_wiki_context.get("query_date") or data.get("query_date") or "",
+        facts_source=fact_bundle.get("facts_source") or "derived",
+        fact_sources=fact_bundle.get("fact_sources") or {},
+        warnings=fact_bundle.get("warnings") or [],
+    )
+    hits = list(trace.get("hits") or [])
     llm_wiki_context["knowledge_hits"] = hits
+    llm_wiki_context["knowledge_trace"] = trace
+    llm_wiki_context["availability"] = str(trace.get("availability") or "invalid")
+    llm_wiki_context["warnings"] = list(trace.get("warnings") or [])
+    llm_wiki_context["confidence"] = llm_wiki_confidence_for_availability(
+        llm_wiki_context["availability"]
+    )
     data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
+    after_projection = _llm_wiki_formal_decision_projection(data)
+    after_hash = stable_json_hash(after_projection)
+    unchanged = before_projection == after_projection
+    isolation = {
+        "schema_version": "knowledge_decision_isolation.v1",
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+        "unchanged": unchanged,
+    }
+    llm_wiki_context["decision_isolation"] = isolation
+    if not unchanged:
+        warning = "知识引用与既定决定不一致，停止生成知识解释"
+        trace["hits"] = []
+        trace["warnings"] = list(dict.fromkeys([*(trace.get("warnings") or []), warning]))
+        trace["availability"] = "decision_mismatch"
+        trace["trace_hash"] = stable_json_hash(trace, excluded_keys={"trace_hash"})
+        llm_wiki_context["knowledge_hits"] = []
+        llm_wiki_context["knowledge_trace"] = trace
+        llm_wiki_context["availability"] = trace["availability"]
+        llm_wiki_context["confidence"] = llm_wiki_confidence_for_availability(
+            trace["availability"]
+        )
+        llm_wiki_context["warnings"] = list(
+            dict.fromkeys([*(llm_wiki_context.get("warnings") or []), warning])
+        )
+        hits = []
     return hits
 
 
-def _refresh_llm_wiki_knowledge_hits(data, llm_wiki_context):
-    if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
-        return []
-    return _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
+def _detach_llm_wiki_context(data):
+    if not isinstance(data, dict):
+        return {}
+    knowledge = data.get("knowledge")
+    if not isinstance(knowledge, dict):
+        return {}
+    frozen_context = knowledge.pop("llm_wiki", None)
+    return deepcopy(frozen_context) if isinstance(frozen_context, dict) else {}
+
+
+def _get_or_build_llm_wiki_context(target_date, query_date, *, shared_cache=None):
+    cache_key = ("llm_wiki_context", str(target_date or ""), str(query_date or ""))
+    if isinstance(shared_cache, dict) and cache_key in shared_cache:
+        return deepcopy(shared_cache[cache_key])
+    context = build_llm_wiki_context(
+        target_date=str(target_date or "").strip(),
+        query_date=str(query_date or "").strip(),
+    )
+    if isinstance(shared_cache, dict):
+        shared_cache[cache_key] = deepcopy(context)
+    return deepcopy(context)
 
 
 def _append_report_note_once(report, lines, marker):
@@ -9889,12 +9997,25 @@ def render_markdown_report_runtime(
     helpers=None,
     config=None,
 ):
-    llm_wiki_context = build_llm_wiki_context()
-    if isinstance(data, dict):
-        data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
+    query_date = (
+        str((data or {}).get("query_date") or "").strip()
+        if isinstance(data, dict)
+        else ""
+    ) or datetime.now(_SHANGHAI_TZ).date().isoformat()
+    frozen_context = _detach_llm_wiki_context(data)
+    if run_mode == LEDGER_MODE_REPLAY:
+        llm_wiki_context = build_replay_llm_wiki_context(
+            frozen_context,
+            target_date=str(target_date or "").strip(),
+            query_date=query_date,
+        )
+    else:
+        llm_wiki_context = _get_or_build_llm_wiki_context(
+            target_date,
+            query_date,
+            shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+        )
     _attach_market_structure_judgement(data)
-    if isinstance(data, dict):
-        _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
     bindings = {}
     bindings.update(helpers or {})
     bindings.update(config or {})
@@ -9915,6 +10036,11 @@ def render_markdown_report_runtime(
             report = "\n".join(report_lines)
     finally:
         _restore_runtime_bindings(previous)
+    if isinstance(data, dict):
+        if run_mode == LEDGER_MODE_REPLAY:
+            data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
+        else:
+            _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
     _attach_topic_lifecycle_snapshot(data)
     knowledge_note_lines = build_knowledge_update_note(data if isinstance(data, dict) else {})
     report = _append_report_note_once(report, knowledge_note_lines, "## 知识复利提示")
@@ -10667,7 +10793,6 @@ def _render_markdown_report_legacy_body(
         if isinstance(market_research_snapshot, dict):
             market_research_snapshot["selected_position_candidate"] = selected_position_candidate
             data["market_research_snapshot"] = market_research_snapshot
-        _refresh_llm_wiki_knowledge_hits(data, (data.get("knowledge") or {}).get("llm_wiki") or {})
     abnormal_probe_group = execution_stage_context.get('abnormal_probe_group', {}) or {}
     special_probe_verdict = execution_stage_context.get('special_probe_verdict', {}) or {}
     position_decision = execution_stage_context.get('position_decision', {}) or {}
@@ -11118,7 +11243,6 @@ def _render_markdown_report_legacy_body(
         if isinstance(market_research_snapshot, dict):
             market_research_snapshot["selected_position_candidate"] = selected_position_candidate
             data["market_research_snapshot"] = market_research_snapshot
-        _refresh_llm_wiki_knowledge_hits(data, (data.get("knowledge") or {}).get("llm_wiki") or {})
     sector_capital_carrier_strategy = _build_runtime_sector_capital_carrier_strategy(
         target_date=target_date,
         data=data,

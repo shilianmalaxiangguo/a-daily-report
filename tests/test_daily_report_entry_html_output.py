@@ -1,8 +1,10 @@
+import copy
 import html as html_lib
 import json
 import re
 import sys
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -11,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import daily_report_entry_demo
+from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_router import route_llm_wiki_knowledge_trace
 
 
 def _embedded_json_payload(rendered_html, script_id):
@@ -22,6 +26,22 @@ def _embedded_json_payload(rendered_html, script_id):
     if not match:
         return {}
     return json.loads(html_lib.unescape(match.group(1)))
+
+
+def _complete_wiki_context(target_date):
+    context = build_llm_wiki_context(
+        target_date=target_date,
+        query_date="2026-07-17",
+    )
+    trace = route_llm_wiki_knowledge_trace(
+        {"market": {"breadth": "上涨家数偏弱"}},
+        manifest=context["manifest"],
+        target_date=target_date,
+        query_date="2026-07-17",
+    )
+    context["knowledge_hits"] = list(trace["hits"])
+    context["knowledge_trace"] = trace
+    return context
 
 
 class DailyReportEntryHtmlOutputTest(unittest.TestCase):
@@ -243,6 +263,26 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                     [
                         "# 2026-06-05 A股日报",
                         "",
+                        "## 明日执行结论",
+                        "",
+                        "### 账户动作",
+                        "",
+                        "明日新仓 0%不参与。",
+                        "",
+                        "### 执行条件",
+                        "",
+                        "条件满足才可做。",
+                        "",
+                        "### 不执行条件",
+                        "",
+                        "条件未满足，明日不做。",
+                        "",
+                        "## 经验库命中",
+                        "",
+                        "| 命中经验 | 知识ID |",
+                        "|----------|--------|",
+                        "| 指数强但赚钱效应弱 | `market.low-frequency-focus` |",
+                        "",
                         "## 市场脊梁",
                         "",
                         "| 指数 | 收盘 | 涨跌幅 | 解读 |",
@@ -268,6 +308,18 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertNotIn("OLD_POSTGRES_SHORT_HTML", html)
         self.assertIn("bear-shell", html)
         self.assertIn("Markdown日报", html)
+        self.assertIn(
+            '<h2 class="bear-section-action" id="明日执行结论">明日执行结论</h2>',
+            html,
+        )
+        self.assertIn(
+            '<h2 class="bear-section-evidence" id="经验库命中">经验库命中</h2>',
+            html,
+        )
+        self.assertLess(html.index('id="明日执行结论"'), html.index('id="经验库命中"'))
+        self.assertLess(html.index('id="账户动作"'), html.index('id="经验库命中"'))
+        self.assertLess(html.index('id="执行条件"'), html.index('id="经验库命中"'))
+        self.assertLess(html.index('id="不执行条件"'), html.index('id="经验库命中"'))
         self.assertIn("市场脊梁", html)
         self.assertIn("中证500", html)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.82%</span></td>', html)
@@ -861,11 +913,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(strategy_calls[0][0][2], [])
         self.assertIsNotNone(strategy_calls[0][1]["output_root"])
 
-    def test_normal_path_skips_snapshot_when_postgres_fact_sync_succeeds(self):
+    def test_normal_path_freezes_rendered_wiki_trace_after_report_outputs_succeed(self):
         order = []
+        data = self._valid_data()
+        wiki_context = _complete_wiki_context("2026-06-05")
+        wiki_trace = wiki_context["knowledge_trace"]
 
         def build_outputs(*args, **kwargs):
             order.append("build")
+            data.setdefault("knowledge", {})["llm_wiki"] = copy.deepcopy(wiki_context)
             return self._report_outputs()
 
         def audit_report(*args, **kwargs):
@@ -892,8 +948,19 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             order.append("html")
             return Path("/tmp/2026-06-05_A股日报_完整版.html")
 
+        def save_snapshot(payload, target_date, mode):
+            order.append("snapshot")
+            self.assertIs(payload, data)
+            self.assertEqual(target_date, "2026-06-05")
+            self.assertEqual(mode, daily_report_entry_demo.LEDGER_MODE_FROZEN)
+            self.assertEqual(
+                payload["knowledge"]["llm_wiki"]["knowledge_trace"]["trace_hash"],
+                wiki_trace["trace_hash"],
+            )
+            return "/tmp/2026-06-05.json"
+
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05"]), \
-             patch.object(daily_report_entry_demo, "get_daily_data", return_value=self._valid_data()), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
@@ -906,18 +973,179 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "save_report_outputs", side_effect=save_outputs), \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", side_effect=save_chanlun), \
              patch.object(daily_report_entry_demo, "audit_report_markdown", side_effect=audit_report), \
-             patch.object(daily_report_entry_demo, "_save_data_snapshot") as snapshot_mock, \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot", side_effect=save_snapshot) as snapshot_mock, \
              patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", side_effect=sync_postgres), \
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html):
             daily_report_entry_demo.main()
 
         self.assertEqual(
             order,
-            ["build", "audit", "sync", "runtime_artifacts", "markdown", "chanlun", "html"],
+            ["build", "audit", "sync", "runtime_artifacts", "markdown", "chanlun", "html", "snapshot"],
         )
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
         self.assertFalse(build_mock.call_args.kwargs["persist_decision_ledger"])
+        snapshot_mock.assert_called_once_with(
+            data,
+            "2026-06-05",
+            mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
+        )
+
+    def test_fresh_snapshot_rejects_incomplete_wiki_trace(self):
+        data = {
+            "knowledge": {
+                "llm_wiki": {
+                    "knowledge_trace": {
+                        "schema_version": "knowledge_trace.v1",
+                        "trace_hash": "1" * 64,
+                    }
+                }
+            }
+        }
+
+        with self.assertRaisesRegex(
+            daily_report_entry_demo.ReportCriticalDataMissingError,
+            "知识引用资料不完整",
+        ):
+            daily_report_entry_demo._assert_fresh_llm_wiki_trace_complete(
+                data,
+                "2026-06-05",
+                run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
+            )
+
+        daily_report_entry_demo._assert_fresh_llm_wiki_trace_complete(
+            data,
+            "2026-06-05",
+            run_mode=daily_report_entry_demo.LEDGER_MODE_REPLAY,
+        )
+
+        complete = _complete_wiki_context("2026-06-05")
+        with patch.object(
+            daily_report_entry_demo,
+            "is_complete_fresh_llm_wiki_context",
+            return_value=False,
+        ) as complete_check:
+            with self.assertRaisesRegex(
+                daily_report_entry_demo.ReportCriticalDataMissingError,
+                "知识引用资料不完整",
+            ):
+                daily_report_entry_demo._assert_fresh_llm_wiki_trace_complete(
+                    {"knowledge": {"llm_wiki": complete}},
+                    "2026-06-05",
+                    run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
+                )
+        complete_check.assert_called_once_with(
+            complete,
+            target_date="2026-06-05",
+        )
+
+    def test_incomplete_fresh_wiki_trace_stops_before_any_persistence(self):
+        data = self._valid_data()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "-p", "空仓"]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "get_daily_data", return_value=data))
+            stack.enter_context(patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo.os.path, "exists", return_value=False))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_position_strategy_report", return_value=""))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_render_daily_report_html_for_acceptance", return_value="<html></html>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_resolve_chanlun_tomorrow_decision", return_value={}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}))
+            sync_mock = stack.enter_context(patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres"))
+            persist_mock = stack.enter_context(patch.object(daily_report_entry_demo, "_try_persist_report_runtime_artifacts"))
+            save_markdown_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_report_outputs"))
+            save_chanlun_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"))
+            save_html_mock = stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown"))
+            snapshot_mock = stack.enter_context(patch.object(daily_report_entry_demo, "_save_data_snapshot"))
+            quality_mock = stack.enter_context(patch.object(daily_report_entry_demo, "persist_report_quality_score"))
+            with self.assertRaisesRegex(
+                daily_report_entry_demo.ReportCriticalDataMissingError,
+                "知识引用资料不完整",
+            ):
+                daily_report_entry_demo.main()
+
+        sync_mock.assert_not_called()
+        persist_mock.assert_not_called()
+        save_markdown_mock.assert_not_called()
+        save_chanlun_mock.assert_not_called()
+        save_html_mock.assert_not_called()
         snapshot_mock.assert_not_called()
+        quality_mock.assert_not_called()
+
+    def test_fresh_wiki_check_error_stops_before_quality_persistence(self):
+        data = self._valid_data()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "-p", "空仓"]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "get_daily_data", return_value=data))
+            stack.enter_context(patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo.os.path, "exists", return_value=False))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_position_strategy_report", return_value=""))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_render_daily_report_html_for_acceptance", return_value="<html></html>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_resolve_chanlun_tomorrow_decision", return_value={}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}))
+            stack.enter_context(
+                patch.object(
+                    daily_report_entry_demo,
+                    "is_complete_fresh_llm_wiki_context",
+                    side_effect=OSError("wiki source read failed"),
+                )
+            )
+            sync_mock = stack.enter_context(patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres"))
+            quality_mock = stack.enter_context(patch.object(daily_report_entry_demo, "persist_report_quality_score"))
+            with self.assertRaisesRegex(
+                daily_report_entry_demo.ReportCriticalDataMissingError,
+                "知识引用资料无法读取",
+            ):
+                daily_report_entry_demo.main()
+
+        sync_mock.assert_not_called()
+        quality_mock.assert_not_called()
+
+    def test_no_report_skips_fresh_wiki_check_and_preserves_data_persistence(self):
+        data = self._valid_data()
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--no-report"]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "get_daily_data", return_value=data))
+            stack.enter_context(patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo.os.path, "exists", return_value=False))
+            wiki_check_mock = stack.enter_context(patch.object(daily_report_entry_demo, "_assert_fresh_llm_wiki_trace_complete"))
+            sync_mock = stack.enter_context(
+                patch.object(
+                    daily_report_entry_demo,
+                    "import_daily_report_data_to_postgres",
+                    return_value={"source": "unit", "field_count": 3},
+                )
+            )
+            quality_mock = stack.enter_context(
+                patch.object(
+                    daily_report_entry_demo,
+                    "persist_report_quality_score",
+                    return_value={"status": "written"},
+                )
+            )
+            result = daily_report_entry_demo.main()
+
+        self.assertEqual(result, 0)
+        wiki_check_mock.assert_not_called()
+        sync_mock.assert_called_once_with("2026-06-05", data)
+        quality_mock.assert_called_once()
 
     def test_bear_html_render_failure_stops_before_postgres_and_artifact_writes(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
@@ -1107,6 +1335,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         data = self._valid_data()
         data.pop("mainline_context", None)
         data["market_research_snapshot"] = {}
+        wiki_context = _complete_wiki_context("2026-06-08")
         order = []
 
         def build_outputs(runtime_data, *args, **kwargs):
@@ -1134,6 +1363,9 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                     },
                 },
             }
+            runtime_data.setdefault("knowledge", {})["llm_wiki"] = copy.deepcopy(
+                wiki_context
+            )
             return self._report_outputs()
 
         def sync_postgres(*args, **kwargs):
@@ -1147,6 +1379,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         def persist_runtime_artifacts(*args, **kwargs):
             order.append("runtime_artifacts")
             return {"decision_ledger_artifacts": {}, "candidate_trace_artifact": None}
+
+        def save_snapshot(*args, **kwargs):
+            order.append("snapshot")
+            return "/tmp/2026-06-08.json"
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-08", "--overwrite-official"]), \
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
@@ -1163,10 +1399,14 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
              patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
              patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", side_effect=sync_postgres), \
-             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=lambda *args, **kwargs: order.append("html") or Path("/tmp/full.html")):
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=lambda *args, **kwargs: order.append("html") or Path("/tmp/full.html")), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot", side_effect=save_snapshot):
             daily_report_entry_demo.main()
 
-        self.assertEqual(order, ["build", "sync", "runtime_artifacts", "markdown", "html"])
+        self.assertEqual(
+            order,
+            ["build", "sync", "runtime_artifacts", "markdown", "html", "snapshot"],
+        )
         persist_mock.assert_called_once_with(
             data,
             "2026-06-08",
@@ -1433,6 +1673,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
     def test_live_path_postgres_sync_failure_stops_without_snapshot_fallback(self):
         order = []
+        data = self._valid_data()
+        data.setdefault("knowledge", {})["llm_wiki"] = _complete_wiki_context("2026-06-05")
 
         def save_outputs(*args, **kwargs):
             order.append("markdown")
@@ -1449,7 +1691,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05"]), \
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
-             patch.object(daily_report_entry_demo, "get_daily_data", return_value=self._valid_data()), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \

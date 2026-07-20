@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from daily_report_snapshot_io import _save_data_snapshot
 from hooks.persist.snapshot_analysis_node_registry import build_snapshot_analysis_node_specs
 from hooks.persist.snapshot_analysis_node_runtime import run_snapshot_analysis_nodes
@@ -5,6 +7,7 @@ from hooks.persist.snapshot_analysis_nodes import (
     build_snapshot_mainline_history_node,
     build_snapshot_sector_turnover_node,
 )
+from knowledge.llm_wiki_context import is_complete_fresh_llm_wiki_context
 
 HOOK_NAME = "persist.snapshot"
 
@@ -55,6 +58,19 @@ def run(ctx):
             "trace_events": ((ctx.get("runtime") or {}).get("trace_events") or []),
         },
     }
+    knowledge = ctx.get("knowledge") or {}
+    has_llm_wiki = isinstance(knowledge, Mapping) and "llm_wiki" in knowledge
+    if has_llm_wiki:
+        normalized_target_date = str(target_date or "").strip()
+        if not normalized_target_date:
+            raise ValueError("目标交易日缺失，停止保存快照")
+        if not is_complete_fresh_llm_wiki_context(
+            knowledge.get("llm_wiki"),
+            target_date=normalized_target_date,
+        ):
+            raise ValueError("知识引用资料不完整，停止保存快照")
+        payload["knowledge"] = knowledge
+        target_date = normalized_target_date
     analysis_payload = _build_snapshot_analysis_payload(ctx)
     appendix_continuity = _build_appendix_continuity_payload(ctx)
     if appendix_continuity:

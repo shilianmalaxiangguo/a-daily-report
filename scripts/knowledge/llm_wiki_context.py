@@ -2,14 +2,46 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Mapping
+from zoneinfo import ZoneInfo
+
+from knowledge.llm_wiki_manifest import (
+    VALID_MANIFEST_AVAILABILITIES,
+    build_knowledge_manifest,
+    is_sha256,
+    stable_json_hash,
+    validate_knowledge_manifest,
+    validate_knowledge_manifest_sources,
+)
+from knowledge.llm_wiki_router import (
+    DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE,
+    EXPLICIT_FACT_PATHS,
+    KNOWLEDGE_INDEX,
+    is_iso_calendar_date,
+)
 
 
-WIKI_VERSION = "2026-07-09"
+WIKI_VERSION = "2026-07-17"
 WIKI_SOURCE = "llm_wiki"
 WIKI_LANGUAGE = "zh-CN"
 ROOT = Path(__file__).resolve().parents[2]
+_SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+_AVAILABILITY_CONFIDENCE = {
+    "ready": 1.0,
+    "partial": 0.8,
+    "missing_sources": 0.4,
+    "source_changed": 0.4,
+    "invalid": 0.0,
+    "historical_trace_missing": 0.0,
+    "decision_mismatch": 0.0,
+}
+
+
+def llm_wiki_confidence_for_availability(availability: object) -> float:
+    return _AVAILABILITY_CONFIDENCE.get(str(availability or "").strip(), 0.0)
 
 SOURCE_PATHS = [
     "wiki/README.md",
@@ -533,16 +565,80 @@ REPORT_DIGEST_TEXT = (
 )
 
 
-def _existing_source_paths() -> List[str]:
-    return [path for path in SOURCE_PATHS if (ROOT / path).exists()]
+def _existing_source_paths(root: Path = ROOT) -> List[str]:
+    return [path for path in SOURCE_PATHS if (root / path).exists()]
 
 
-def build_llm_wiki_context() -> Dict[str, object]:
+def _manifest_list(value: object) -> list[object]:
+    return list(value) if isinstance(value, list) else []
+
+
+def _manifest_string_list(value: object) -> list[str]:
+    return [str(item) for item in _manifest_list(value)]
+
+
+def build_llm_wiki_context(
+    *,
+    target_date: str = "",
+    query_date: str = "",
+    manifest: Mapping[str, object] | None = None,
+    source_root: Path | str | None = None,
+) -> Dict[str, object]:
+    root = Path(source_root) if source_root is not None else ROOT
+    compiled_manifest = dict(manifest) if isinstance(manifest, Mapping) else build_knowledge_manifest(
+        KNOWLEDGE_INDEX,
+        root=root,
+        wiki_version=WIKI_VERSION,
+        language=WIKI_LANGUAGE,
+        expected_source_paths=SOURCE_PATHS,
+    )
+    validation_errors = list(
+        dict.fromkeys(
+            [
+                *validate_knowledge_manifest(compiled_manifest),
+                *validate_knowledge_manifest_sources(compiled_manifest, root=root),
+            ]
+        )
+    )
+    if validation_errors:
+        compiled_manifest["availability"] = "invalid"
+        compiled_manifest["errors"] = list(
+            dict.fromkeys(
+                [*_manifest_string_list(compiled_manifest.get("errors")), *validation_errors]
+            )
+        )
+        compiled_manifest["warnings"] = list(
+            dict.fromkeys(
+                [*_manifest_string_list(compiled_manifest.get("warnings")), *validation_errors]
+            )
+        )
+        compiled_manifest["manifest_hash"] = stable_json_hash(
+            compiled_manifest,
+            excluded_keys={"manifest_hash"},
+        )
+    availability = str(compiled_manifest.get("availability") or "invalid")
     return {
         "version": WIKI_VERSION,
         "source": WIKI_SOURCE,
         "language": WIKI_LANGUAGE,
-        "source_paths": _existing_source_paths(),
+        "target_date": str(target_date or "").strip(),
+        "query_date": str(query_date or "").strip(),
+        "manifest": compiled_manifest,
+        "manifest_hash": str(compiled_manifest.get("manifest_hash") or ""),
+        "expected_source_paths": (
+            _manifest_string_list(compiled_manifest.get("expected_source_paths"))
+            or list(SOURCE_PATHS)
+        ),
+        "available_source_paths": _manifest_string_list(
+            compiled_manifest.get("available_source_paths")
+        ),
+        "missing_source_paths": _manifest_string_list(
+            compiled_manifest.get("missing_source_paths")
+        ),
+        "availability": availability,
+        "confidence": llm_wiki_confidence_for_availability(availability),
+        "warnings": _manifest_string_list(compiled_manifest.get("warnings")),
+        "source_paths": _existing_source_paths(root),
         "field_mappings": list(FIELD_MAPPINGS),
         "report_boundaries": list(REPORT_BOUNDARIES),
         "daily_discipline_lines": list(DAILY_DISCIPLINE_LINES),
@@ -555,4 +651,349 @@ def build_llm_wiki_context() -> Dict[str, object]:
     }
 
 
-__all__ = ["build_llm_wiki_context"]
+def _is_complete_trace_hit(hit: object) -> bool:
+    if not isinstance(hit, Mapping):
+        return False
+    required_text = (
+        "hit_id",
+        "knowledge_id",
+        "prior",
+        "source_path",
+        "title",
+        "impact",
+        "report_slot",
+        "confidence",
+        "decision_effect",
+        "decision_scope",
+    )
+    required_lists = (
+        "triggered_by",
+        "matched_conditions",
+        "matched_topics",
+        "matched_fact_paths",
+        "matched_fact_sources",
+        "used_for",
+        "not_used_for",
+    )
+    if any(not str(hit.get(field) or "").strip() for field in required_text):
+        return False
+    if any(not isinstance(hit.get(field), list) for field in required_lists):
+        return False
+    if not isinstance(hit.get("rank"), int) or isinstance(hit.get("rank"), bool):
+        return False
+    if not isinstance(hit.get("score"), (int, float)) or isinstance(hit.get("score"), bool):
+        return False
+    source_ref = hit.get("source_ref")
+    return bool(
+        isinstance(source_ref, Mapping)
+        and is_sha256(source_ref.get("content_hash"))
+        and hit.get("decision_scope") == "explanation_only"
+    )
+
+
+def _trace_hit_matches_manifest(hit: Mapping[str, object], entry: Mapping[str, object]) -> bool:
+    hit_source_ref = hit.get("source_ref")
+    entry_source_ref = entry.get("source_ref")
+    report_slots = [str(item) for item in entry.get("report_slots") or []]
+    if not isinstance(hit_source_ref, Mapping) or not isinstance(entry_source_ref, Mapping):
+        return False
+    return bool(
+        entry.get("available") is True
+        and str(hit.get("knowledge_id") or "") == str(entry.get("knowledge_id") or "")
+        and str(hit.get("prior") or "") == str(entry.get("prior") or "")
+        and str(hit.get("title") or "") == str(entry.get("title") or "")
+        and str(hit.get("source_path") or "") == str(entry_source_ref.get("path") or "")
+        and str(hit.get("impact") or "") == str(entry.get("decision_effect") or "")
+        and str(hit.get("decision_effect") or "") == str(entry.get("decision_effect") or "")
+        and str(hit.get("decision_scope") or "") == str(entry.get("decision_scope") or "")
+        and str(hit.get("confidence") or "") == str(entry.get("confidence") or "")
+        and str(hit.get("report_slot") or "") == (report_slots[0] if report_slots else "")
+        and dict(hit_source_ref) == dict(entry_source_ref)
+    )
+
+
+def _trace_fact_sources_are_complete(trace: Mapping[str, object]) -> bool:
+    facts_source = str(trace.get("facts_source") or "").strip()
+    fact_sources = trace.get("fact_sources")
+    hits = trace.get("hits")
+    if facts_source not in {"derived", "explicit"} or not isinstance(fact_sources, Mapping):
+        return False
+    if not isinstance(hits, list):
+        return False
+
+    normalized_sources: Dict[str, Dict[str, str]] = {}
+    for raw_path, raw_source_ref in fact_sources.items():
+        path = str(raw_path or "").strip()
+        if path not in EXPLICIT_FACT_PATHS or not isinstance(raw_source_ref, Mapping):
+            return False
+        expected_input_path = (
+            f"knowledge_hit_facts.{path}"
+            if facts_source == "explicit"
+            else path
+        )
+        source = str(raw_source_ref.get("source") or "").strip()
+        input_path = str(raw_source_ref.get("input_path") or "").strip()
+        if source != facts_source or input_path != expected_input_path:
+            return False
+        normalized_sources[path] = {
+            "source": source,
+            "input_path": input_path,
+        }
+
+    for hit in hits:
+        if not isinstance(hit, Mapping):
+            return False
+        matched_paths = hit.get("matched_fact_paths")
+        matched_sources = hit.get("matched_fact_sources")
+        if not isinstance(matched_paths, list) or not isinstance(matched_sources, list):
+            return False
+        if any(not isinstance(path, str) or path not in normalized_sources for path in matched_paths):
+            return False
+        expected_sources = [
+            {"path": path, **normalized_sources[path]}
+            for path in matched_paths
+        ]
+        if matched_sources != expected_sources:
+            return False
+    return True
+
+
+def _is_complete_frozen_trace(
+    existing: Mapping[str, object],
+    trace: Mapping[str, object],
+    *,
+    target_date: str,
+) -> bool:
+    manifest = existing.get("manifest")
+    hits = trace.get("hits")
+    warnings = trace.get("warnings")
+    if not isinstance(manifest, Mapping) or validate_knowledge_manifest(manifest):
+        return False
+    manifest_entries = {
+        str(entry.get("knowledge_id") or "").strip(): entry
+        for entry in manifest.get("entries") or []
+        if isinstance(entry, Mapping)
+    }
+    if (
+        not isinstance(hits, list)
+        or any(not isinstance(hit, Mapping) for hit in hits)
+        or not _trace_fact_sources_are_complete(trace)
+    ):
+        return False
+    if not all(
+        _is_complete_trace_hit(hit)
+        and _trace_hit_matches_manifest(
+            hit,
+            manifest_entries.get(str(hit.get("knowledge_id") or "").strip(), {}),
+        )
+        for hit in hits
+    ):
+        return False
+    ranks = [int(hit.get("rank")) for hit in hits]
+    hit_ids = [str(hit.get("hit_id") or "").strip() for hit in hits]
+    knowledge_ids = [str(hit.get("knowledge_id") or "").strip() for hit in hits]
+    if (
+        ranks != list(range(1, len(hits) + 1))
+        or hit_ids != [f"kh-{rank:03d}" for rank in ranks]
+        or len(hit_ids) != len(set(hit_ids))
+        or len(knowledge_ids) != len(set(knowledge_ids))
+    ):
+        return False
+    if not isinstance(warnings, list):
+        return False
+    trace_hash = str(trace.get("trace_hash") or "").strip()
+    trace_availability = str(trace.get("availability") or "").strip()
+    manifest_availability = str(manifest.get("availability") or "").strip()
+    outer_availability = str(existing.get("availability") or manifest_availability).strip()
+    existing_availability = outer_availability
+    if (
+        outer_availability == "source_changed"
+        and str(existing.get("artifact_origin") or "").strip() == "frozen_trace"
+    ):
+        existing_availability = str(existing.get("frozen_availability") or "").strip()
+    expected_target_date = str(target_date or "")
+    existing_target_date = str(existing.get("target_date") or "")
+    trace_target_date = str(trace.get("target_date") or "")
+    existing_query_date = str(existing.get("query_date") or "")
+    trace_query_date = str(trace.get("query_date") or "")
+    return bool(
+        trace.get("schema_version") == "knowledge_trace.v1"
+        and is_iso_calendar_date(expected_target_date)
+        and trace_target_date == expected_target_date
+        and existing_target_date == expected_target_date
+        and is_iso_calendar_date(trace_target_date)
+        and is_iso_calendar_date(existing_target_date)
+        and trace_query_date == existing_query_date
+        and is_iso_calendar_date(trace_query_date)
+        and is_iso_calendar_date(existing_query_date)
+        and str(trace.get("scenario") or "").strip()
+        and str(trace.get("facts_source") or "").strip()
+        and trace.get("decision_scope") == "explanation_only"
+        and trace.get("not_used_for")
+        == list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE)
+        and trace_availability in VALID_MANIFEST_AVAILABILITIES
+        and trace_availability == manifest_availability
+        and trace_availability == existing_availability
+        and is_sha256(trace.get("manifest_hash"))
+        and is_sha256(trace.get("facts_hash"))
+        and is_sha256(trace_hash)
+        and trace.get("manifest_hash") == existing.get("manifest_hash")
+        and trace.get("manifest_hash") == manifest.get("manifest_hash")
+        and trace_hash == stable_json_hash(trace, excluded_keys={"trace_hash"})
+    )
+
+
+def is_complete_frozen_llm_wiki_context(
+    frozen_context: Mapping[str, object] | None,
+    *,
+    target_date: str,
+) -> bool:
+    """Return whether a fresh context contains a complete replay-safe trace."""
+    if not isinstance(frozen_context, Mapping):
+        return False
+    trace = frozen_context.get("knowledge_trace")
+    if not isinstance(trace, Mapping):
+        return False
+    return _is_complete_frozen_trace(
+        frozen_context,
+        trace,
+        target_date=str(target_date or ""),
+    )
+
+
+def is_complete_fresh_llm_wiki_context(
+    fresh_context: Mapping[str, object] | None,
+    *,
+    target_date: str,
+    source_root: Path | str | None = None,
+) -> bool:
+    """Require a replay-safe trace whose declared source hashes match current bytes."""
+    if not is_complete_frozen_llm_wiki_context(
+        fresh_context,
+        target_date=target_date,
+    ):
+        return False
+    manifest = fresh_context.get("manifest") if isinstance(fresh_context, Mapping) else None
+    if not isinstance(manifest, Mapping):
+        return False
+    root = Path(source_root) if source_root is not None else ROOT
+    return not validate_knowledge_manifest_sources(manifest, root=root)
+
+
+def build_replay_llm_wiki_context(
+    frozen_context: Mapping[str, object] | None,
+    *,
+    target_date: str,
+    query_date: str = "",
+    source_root: Path | str | None = None,
+) -> Dict[str, object]:
+    """Reuse an intact target-date trace or return an explicit historical gap."""
+    requested_target_date = str(target_date or "")
+    target_date = requested_target_date.strip()
+    query_date = (
+        str(query_date or "").strip()
+        or datetime.now(_SHANGHAI_TZ).date().isoformat()
+    )
+    existing = deepcopy(dict(frozen_context)) if isinstance(frozen_context, Mapping) else {}
+    trace = existing.get("knowledge_trace") if isinstance(existing.get("knowledge_trace"), Mapping) else {}
+    trace = deepcopy(dict(trace)) if isinstance(trace, Mapping) else {}
+    trace_target_date = str(trace.get("target_date") or "").strip()
+    trace_is_frozen = is_complete_frozen_llm_wiki_context(
+        existing,
+        target_date=requested_target_date,
+    )
+    if trace_is_frozen:
+        existing["analysis_mode"] = "replay"
+        existing["artifact_origin"] = "frozen_trace"
+        existing["replay_knowledge_status"] = "frozen"
+        existing["target_date"] = target_date
+        existing["knowledge_hits"] = deepcopy(list(trace.get("hits") or []))
+        frozen_availability = str(trace.get("availability") or "invalid").strip()
+        frozen_confidence = llm_wiki_confidence_for_availability(frozen_availability)
+        source_change_warning = "当前经验库来源与冻结版本不同，需要按来源复核"
+        existing["availability"] = frozen_availability
+        existing["confidence"] = frozen_confidence
+        existing["review_confidence"] = frozen_confidence
+        existing.pop("frozen_availability", None)
+        existing.pop("frozen_confidence", None)
+        existing["warnings"] = [
+            item
+            for item in existing.get("warnings") or []
+            if str(item) != source_change_warning
+        ]
+        source_issues = validate_knowledge_manifest_sources(
+            existing.get("manifest") or {},
+            root=Path(source_root) if source_root is not None else ROOT,
+        )
+        source_diagnostics = {
+            "status": "changed" if source_issues else "matched",
+            "issues": source_issues,
+        }
+        existing["replay_source_diagnostics"] = source_diagnostics
+        if source_issues:
+            existing["frozen_availability"] = frozen_availability
+            existing["frozen_confidence"] = frozen_confidence
+            existing["availability"] = "source_changed"
+            current_confidence = llm_wiki_confidence_for_availability("source_changed")
+            existing["confidence"] = current_confidence
+            existing["review_confidence"] = current_confidence
+            source_diagnostics["review_availability"] = "source_changed"
+            source_diagnostics["review_confidence"] = current_confidence
+            existing["warnings"] = list(
+                dict.fromkeys([*(existing.get("warnings") or []), source_change_warning])
+            )
+        return existing
+
+    if trace and trace_target_date and trace_target_date != target_date:
+        warning = "冻结知识引用日期与目标交易日不一致；未使用当前经验库补写"
+    elif trace:
+        warning = "冻结知识引用不完整；未使用当前经验库补写"
+    else:
+        warning = "当时知识引用缺失；未使用当前经验库补写"
+    missing_trace = {
+        "schema_version": "knowledge_trace.v1",
+        "target_date": target_date,
+        "query_date": query_date,
+        "scenario": "daily_report",
+        "manifest_hash": "",
+        "facts_hash": "",
+        "facts_source": "historical_snapshot",
+        "fact_sources": {},
+        "decision_scope": "explanation_only",
+        "not_used_for": list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE),
+        "availability": "historical_trace_missing",
+        "warnings": [warning],
+        "hits": [],
+    }
+    missing_trace["trace_hash"] = stable_json_hash(missing_trace)
+    return {
+        "version": "",
+        "source": "llm_wiki",
+        "language": WIKI_LANGUAGE,
+        "target_date": target_date,
+        "query_date": query_date,
+        "analysis_mode": "replay",
+        "artifact_origin": "missing",
+        "replay_knowledge_status": "missing",
+        "availability": "historical_trace_missing",
+        "confidence": llm_wiki_confidence_for_availability("historical_trace_missing"),
+        "review_confidence": llm_wiki_confidence_for_availability(
+            "historical_trace_missing"
+        ),
+        "warnings": [warning],
+        "knowledge_hits": [],
+        "knowledge_trace": missing_trace,
+        "field_mappings": [],
+        "daily_discipline_lines": [],
+        "knowledge_compounding_candidates": [],
+        "process_flows": [],
+    }
+
+
+__all__ = [
+    "build_llm_wiki_context",
+    "build_replay_llm_wiki_context",
+    "is_complete_fresh_llm_wiki_context",
+    "is_complete_frozen_llm_wiki_context",
+    "llm_wiki_confidence_for_availability",
+]

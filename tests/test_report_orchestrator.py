@@ -148,6 +148,14 @@ class ReportOrchestratorTest(unittest.TestCase):
         self.assertIn("固定交易窗口条件", ctx["knowledge"]["llm_wiki"]["report_digest_text"])
         self.assertIn("09:50-10:10窗口", ctx["knowledge"]["llm_wiki"]["report_digest_text"])
         self.assertIn("process_flows", ctx["knowledge"]["llm_wiki"])
+        self.assertEqual(
+            ctx["knowledge"]["llm_wiki"]["knowledge_trace"]["schema_version"],
+            "knowledge_trace.v1",
+        )
+        self.assertEqual(
+            ctx["knowledge"]["llm_wiki"]["knowledge_hits"],
+            ctx["knowledge"]["llm_wiki"]["knowledge_trace"]["hits"],
+        )
         self.assertIn("选股形态审美 ASCII 流程图", "\n".join(ctx["knowledge"]["llm_wiki"]["process_flows"]))
         self.assertIn("环境条件满足", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
         self.assertIn("#", ctx["rendered"]["markdown_document"])
@@ -163,6 +171,10 @@ class ReportOrchestratorTest(unittest.TestCase):
         self.assertNotIn("能量学", ctx["rendered"]["markdown_document"])
         hook_names = [item["hook_name"] for item in ctx["runtime"]["module_logs"]]
         self.assertIn("persist.snapshot", hook_names)
+        self.assertLess(
+            hook_names.index("decision.action_plan"),
+            hook_names.index("knowledge.llm_wiki"),
+        )
 
     def test_postgres_only_request_skips_json_snapshot_hook(self):
         with patch("orchestrator.report_orchestrator.run_hot_rank", stub_hot_rank), patch(

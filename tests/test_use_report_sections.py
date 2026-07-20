@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 def _m(*parts):
     return "".join(parts)
 
-from hooks.report.use_report_sections import run
+from hooks.report.use_report_sections import build_knowledge_hits_note, run
 from orchestrator.context_store import build_empty_context, merge_hook_patches
 
 
@@ -214,8 +214,45 @@ class UseReportSectionsTest(unittest.TestCase):
 
         review = result["patches"]["sections"]["review"]
         self.assertIn("经验库命中", review)
-        self.assertIn("| 命中经验 | 触发事实 | 本次影响 | 来源 |", review)
-        self.assertIn("| 指数强但赚钱效应弱 | 指数上涨；上涨家数偏弱 | 只保留主线核心，不从旧方向强行扩散候选。 | 板块中枢与主线延续 |", review)
+        self.assertIn("| 命中经验 | 知识ID | 触发事实 | 本次影响 | 来源 |", review)
+        self.assertIn("| 指数强但赚钱效应弱 | `market.low-frequency-focus` | 指数上涨；上涨家数偏弱 | 只保留主线核心，不从旧方向强行扩散候选。 | 板块中枢与主线延续 |", review)
+
+        rendered = "\n\n".join(
+            result["patches"]["sections"][key]
+            for key in ("execution", "review")
+        )
+        self.assertLess(rendered.index("## 执行"), rendered.index("### 经验库命中"))
+
+    def test_knowledge_short_table_prefers_trace_hits_over_stale_compatibility_hits(self):
+        stale_hit = {
+            "knowledge_id": "stale.rule",
+            "title": "旧命中",
+            "source_path": "wiki/交易思想/旧节点.md",
+            "triggered_by": ["旧事实"],
+            "impact": "旧解释。",
+        }
+        traced_hit = {
+            "knowledge_id": "current.rule",
+            "title": "当前命中",
+            "source_path": "wiki/交易思想/当前节点.md",
+            "triggered_by": ["当前事实"],
+            "impact": "当前解释。",
+        }
+
+        rendered = "\n".join(
+            build_knowledge_hits_note(
+                {
+                    "knowledge_hits": [stale_hit],
+                    "knowledge_trace": {
+                        "schema_version": "knowledge_trace.v1",
+                        "hits": [traced_hit],
+                    },
+                }
+            )
+        )
+
+        self.assertIn("`current.rule`", rendered)
+        self.assertNotIn("`stale.rule`", rendered)
 
     def test_report_sections_surface_daily_discipline_lines(self):
         ctx = build_empty_context({"target_date": "2026-06-16"})

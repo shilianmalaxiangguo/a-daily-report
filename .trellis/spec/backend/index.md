@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Daily Report Decision Loop](./daily-report-decision-loop.md) | Report judgment, rehearsal, review, and decision-ledger contracts | Filled |
+| [LLM Wiki Provenance And Decision Isolation](./llm-wiki-provenance.md) | Source hashes, fact provenance, fresh/replay trace, and decision-isolation contracts | Filled |
 
 ---
 

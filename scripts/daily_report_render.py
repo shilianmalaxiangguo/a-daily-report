@@ -18,7 +18,6 @@ from typing import Any, Dict
 import types
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
-from knowledge.llm_wiki_context import build_llm_wiki_context
 from knowledge.topic_lifecycle import (
     build_topic_lifecycle_snapshot,
     write_topic_lifecycle_artifact,
@@ -1565,14 +1564,14 @@ def _sanitize_report_section_text(text):
     return "\n".join(_sanitize_report_section_lines(str(text or "").splitlines())).strip()
 
 
-def _append_daily_discipline_to_sections(sections):
+def _append_daily_discipline_to_sections(sections, *, llm_wiki_context=None):
     sections = dict(sections or {})
     if not sections:
         return sections
     rendered = "\n".join(str(value or "") for value in sections.values())
     if "去弱留强是短线执行表达" in rendered:
         return sections
-    discipline_lines = build_daily_discipline_note(build_llm_wiki_context())
+    discipline_lines = build_daily_discipline_note(llm_wiki_context or {})
     if not discipline_lines:
         return sections
     review_note = "\n".join(
@@ -1583,8 +1582,11 @@ def _append_daily_discipline_to_sections(sections):
     return sections
 
 
-def generate_markdown_report_from_sections(sections):
-    sections = _append_daily_discipline_to_sections(sections or {})
+def generate_markdown_report_from_sections(sections, *, llm_wiki_context=None):
+    sections = _append_daily_discipline_to_sections(
+        sections or {},
+        llm_wiki_context=llm_wiki_context,
+    )
     ordered_keys = ["preamble", "environment", "observation", "execution", "review", "summary"]
     rendered_sections = []
     seen_no_trade_conclusion = False
@@ -1637,7 +1639,21 @@ def generate_markdown_report(
 
     sections = _extract_sections(data)
     if sections:
-        return generate_markdown_report_from_sections(sections)
+        knowledge = data.get("knowledge") if isinstance(data, dict) else {}
+        llm_wiki_context = (
+            knowledge.get("llm_wiki") if isinstance(knowledge, dict) else {}
+        )
+        if not isinstance(llm_wiki_context, dict):
+            llm_wiki_context = {}
+        if (
+            run_mode == LEDGER_MODE_REPLAY
+            and llm_wiki_context.get("artifact_origin") != "frozen_trace"
+        ):
+            llm_wiki_context = {}
+        return generate_markdown_report_from_sections(
+            sections,
+            llm_wiki_context=llm_wiki_context,
+        )
 
     try:
         import daily_report_entry_demo as _demo

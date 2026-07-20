@@ -1,8 +1,10 @@
+import datetime
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +25,27 @@ from replay.report_replay import (
     build_replay_snapshot_contract,
 )
 from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
+from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_router import route_llm_wiki_knowledge_trace
+
+
+def _frozen_llm_wiki_context(target_date):
+    context = build_llm_wiki_context(target_date=target_date, query_date=target_date)
+    trace = route_llm_wiki_knowledge_trace(
+        {
+            "market": {
+                "index_trend": "上涨",
+                "breadth": "上涨家数偏弱",
+                "turnover_distribution": "成交集中",
+            }
+        },
+        manifest=context["manifest"],
+        target_date=target_date,
+        query_date=target_date,
+    )
+    context["knowledge_hits"] = list(trace["hits"])
+    context["knowledge_trace"] = trace
+    return context
 
 
 def _run_legacy_entry_probe(script_body):
@@ -368,6 +391,173 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertIn("主要指数获取", [row[0] for row in result["data"]["timer_summary"]["steps"]])
         self.assertTrue(any(log["step"] == "refresh.calendar_events" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "refresh.major_indices" for log in result["module_logs"]))
+
+    def test_build_replay_snapshot_contract_reuses_target_date_frozen_wiki_trace(self):
+        frozen_wiki = _frozen_llm_wiki_context("2026-07-16")
+        snapshot = {
+            "knowledge": {"llm_wiki": frozen_wiki},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-07-16",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "frozen_trace")
+        self.assertEqual(
+            replay_wiki["knowledge_trace"]["trace_hash"],
+            frozen_wiki["knowledge_trace"]["trace_hash"],
+        )
+        self.assertEqual(replay_wiki["knowledge_hits"], frozen_wiki["knowledge_trace"]["hits"])
+        self.assertIs(result["llm_wiki"], replay_wiki)
+        self.assertTrue(
+            any(
+                log["step"] == "load.llm_wiki_trace" and log["status"] == "success"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_build_replay_snapshot_contract_rejects_frozen_wiki_trace_from_another_date(self):
+        snapshot = {
+            "knowledge": {"llm_wiki": _frozen_llm_wiki_context("2026-07-15")},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-07-16",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "missing")
+        self.assertEqual(replay_wiki["knowledge_hits"], [])
+        self.assertIn("冻结知识引用日期与目标交易日不一致", replay_wiki["warnings"][0])
+        self.assertTrue(
+            any(
+                log["step"] == "load.llm_wiki_trace" and log["status"] == "warning"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_build_replay_snapshot_contract_marks_missing_historical_wiki_trace(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-07-16",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "missing")
+        self.assertEqual(replay_wiki["knowledge_hits"], [])
+        self.assertEqual(replay_wiki["knowledge_trace"]["availability"], "historical_trace_missing")
+        self.assertEqual(replay_wiki["knowledge_trace"]["fact_sources"], {})
+        self.assertIn("当时知识引用缺失", replay_wiki["warnings"][0])
+        self.assertTrue(
+            any(
+                log["step"] == "load.llm_wiki_trace" and log["status"] == "warning"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_missing_historical_wiki_trace_uses_shanghai_query_date(self):
+        class FixedDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                fixed = cls(2026, 7, 17, 16, 30, tzinfo=datetime.timezone.utc)
+                return fixed if tz is None else fixed.astimezone(tz)
+
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        fake_datetime_module = SimpleNamespace(
+            datetime=FixedDateTime,
+            timezone=datetime.timezone,
+            timedelta=datetime.timedelta,
+        )
+        with patch("replay.report_replay.datetime", fake_datetime_module):
+            result = build_replay_snapshot_contract(
+                "2026-07-16",
+                refresh_sources=["noop"],
+                load_data_snapshot=lambda target_date: (snapshot, ""),
+                tencent_factory=lambda: _FakeTencentFinanceData([]),
+                get_major_indices_from_iwencai=lambda target_date="": [],
+                safe_float=lambda value: float(value or 0),
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["knowledge_trace"]["query_date"], "2026-07-18")
+
+    def test_build_replay_snapshot_contract_rejects_non_mapping_snapshot(self):
+        result = build_replay_snapshot_contract(
+            "2026-07-16",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (["invalid snapshot"], ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertFalse(result["found"])
+        self.assertIsNone(result["data"])
+        self.assertTrue(
+            any(
+                log["step"] == "load.snapshot" and log["status"] == "error"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_build_replay_snapshot_contract_marks_non_mapping_nested_wiki_missing(self):
+        snapshot = {
+            "knowledge": {"llm_wiki": ["invalid wiki context"]},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-07-16",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "missing")
+        self.assertEqual(replay_wiki["knowledge_hits"], [])
+        self.assertIn("当时知识引用缺失", replay_wiki["warnings"][0])
 
     def test_build_replay_snapshot_contract_refreshes_calendar_when_provider_has_no_target_date_arg(self):
         snapshot = {

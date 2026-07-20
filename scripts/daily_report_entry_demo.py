@@ -111,6 +111,7 @@ from daily_report_snapshot_io import (
     add_supplementary_perspective,
     load_data_snapshot,
 )
+from knowledge.llm_wiki_context import is_complete_fresh_llm_wiki_context
 from daily_report_source_health import (
     OVERALL_STOP as SOURCE_HEALTH_STOP,
     render_source_health_terminal_lines,
@@ -4960,6 +4961,26 @@ def _try_persist_report_runtime_artifacts(data, target_date, *, run_mode=LEDGER_
         return None
 
 
+def _assert_fresh_llm_wiki_trace_complete(data, target_date, *, run_mode):
+    if run_mode != LEDGER_MODE_FROZEN:
+        return
+    knowledge = data.get("knowledge") if isinstance(data, dict) else {}
+    llm_wiki = knowledge.get("llm_wiki") if isinstance(knowledge, dict) else {}
+    try:
+        complete = is_complete_fresh_llm_wiki_context(
+            llm_wiki,
+            target_date=target_date,
+        )
+    except OSError as exc:
+        raise ReportCriticalDataMissingError(
+            "知识引用资料无法读取，停止保存日报。"
+        ) from exc
+    if not complete:
+        raise ReportCriticalDataMissingError(
+            "知识引用资料不完整，停止保存日报快照。"
+        )
+
+
 def _format_elapsed_seconds(elapsed_seconds):
     return f"{max(0.0, float(elapsed_seconds)) + 1e-9:.2f}"
 
@@ -5074,6 +5095,7 @@ def main():
     bear_html_text = ""
     market_language_translation = {}
     market_language_storage = {}
+    fresh_wiki_persistence_ready = True
     try:
         source_health = run_source_health_check(
             target_date,
@@ -5281,6 +5303,15 @@ def main():
                 },
             )
 
+        if not args.no_report and data and not args.postgres_only:
+            fresh_wiki_persistence_ready = False
+            _assert_fresh_llm_wiki_trace_complete(
+                data,
+                target_date,
+                run_mode=run_mode,
+            )
+            fresh_wiki_persistence_ready = True
+
         postgres_synced = False
         if data:
             if args.postgres_only:
@@ -5445,6 +5476,18 @@ def main():
                     prepend_markdown=position_timeline_markdown,
                     html_text=bear_html_text,
                 )
+                if not args.postgres_only:
+                    snapshot_path = _save_data_snapshot(
+                        data,
+                        target_date,
+                        mode=run_mode,
+                    )
+                    observer.record_step(
+                        "save_data_snapshot",
+                        status="success",
+                        input_payload={"target_date": target_date, "run_mode": run_mode},
+                        output_payload={"snapshot_path": snapshot_path},
+                    )
             elapsed_seconds = time.perf_counter() - report_started_at
             _append_daily_report_duration_log(
                 saved_report_paths,
@@ -5479,11 +5522,17 @@ def main():
             report_expected=not bool(args.no_report),
             decision_ledger_expected=not bool(args.no_report),
         )
-        report_quality_ledger = persist_report_quality_score(
-            report_quality_score,
-            root_dir=Path(__file__).resolve().parents[1],
-            run_id=f"daily-report.entry.{target_date}",
-        )
+        if fresh_wiki_persistence_ready:
+            report_quality_ledger = persist_report_quality_score(
+                report_quality_score,
+                root_dir=Path(__file__).resolve().parents[1],
+                run_id=f"daily-report.entry.{target_date}",
+            )
+        else:
+            report_quality_ledger = {
+                "status": "not_written",
+                "reason": "知识引用资料不完整，停止写入质量记录",
+            }
         report_quality_score["local_ledger"] = report_quality_ledger
         observer.finish(
             status=run_status,

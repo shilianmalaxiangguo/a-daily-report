@@ -848,6 +848,83 @@ Top50长趋势表不该进入轻量版
         self.assertFalse(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
 
+    def test_build_report_outputs_reuses_one_wiki_compile_and_keeps_evidence_after_actions(self):
+        from report import runtime as report_runtime
+        from report.markdown_report_html import render_markdown_report_html
+
+        data = _complete_report_facts(
+            {
+                "query_date": "2026-07-17",
+                "knowledge_hit_facts": {
+                    "market": {
+                        "index_trend": "上涨",
+                        "breadth": "上涨家数偏弱",
+                        "turnover_distribution": "成交集中",
+                    }
+                },
+            }
+        )
+        action_body = "\n".join(
+            [
+                "# 日报",
+                "",
+                "## 明日执行结论",
+                "",
+                "### 账户动作",
+                "",
+                "明日新仓 0%不参与。",
+                "",
+                "### 执行条件",
+                "",
+                "条件满足才可做。",
+                "",
+                "### 不执行条件",
+                "",
+                "条件未满足，明日不做。",
+            ]
+        )
+        original_builder = report_runtime.build_llm_wiki_context
+        with patch(
+            "report.runtime.build_llm_wiki_context",
+            wraps=original_builder,
+        ) as context_builder, patch(
+            "report.runtime._render_markdown_report_legacy_body",
+            return_value=action_body,
+        ):
+            outputs = build_report_outputs(
+                data,
+                "2026-07-12",
+                emit_preflight=False,
+                persist_runtime_artifacts=False,
+            )
+
+        context_builder.assert_called_once_with(
+            target_date="2026-07-12",
+            query_date="2026-07-17",
+        )
+        for variant in (REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY):
+            report = outputs[variant]
+            for heading in (
+                "## 明日执行结论",
+                "### 账户动作",
+                "### 执行条件",
+                "### 不执行条件",
+                "## 经验库命中",
+            ):
+                self.assertIn(heading, report)
+            self.assertLess(report.index("## 明日执行结论"), report.index("## 经验库命中"))
+            self.assertLess(report.index("### 账户动作"), report.index("## 经验库命中"))
+            self.assertLess(report.index("### 执行条件"), report.index("## 经验库命中"))
+            self.assertLess(report.index("### 不执行条件"), report.index("## 经验库命中"))
+
+        bear_html = render_markdown_report_html(
+            outputs[REPORT_VARIANT_FULL],
+            title="日报",
+            trade_date="2026-07-12",
+        )
+        self.assertLess(bear_html.index("明日执行结论"), bear_html.index("经验库命中"))
+        self.assertIn("bear-section-action", bear_html)
+        self.assertIn("bear-section-evidence", bear_html)
     def test_build_report_outputs_can_enable_decision_ledger_separately(self):
         data = _complete_report_facts({"foo": "bar"})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
@@ -2338,22 +2415,19 @@ Top50长趋势表不该进入轻量版
                 "execution": "## Execution",
                 "review": "## Review",
                 "summary": "## Summary",
-            }
+            },
+            llm_wiki_context={
+                "daily_discipline_lines": ["只展示调用方已提供的冻结交易原则。"]
+            },
         )
 
         self.assertEqual(
             rendered,
             "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n### 交易原则\n"
-            "- 去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。\n"
-            "- FOMO 是外部价格刺激被自己接住后的情绪，不是执行资格；卖出后第一天因反包、后悔或怕踏空想买回，默认不执行，只能收盘后重新进入 T0 评估。\n"
-            "- 反包先批改情绪反应，不直接批改前一日信息集；正确动作出现亏损结果，仍按可控小亏和纪律成本复盘。\n"
-            "- 必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；价格只决定卖得舒服还是狼狈，不重新决定卖不卖。\n"
-            "- Ta-Te账户日序表必须区分历史路径、今日报告和明日执行：Ta最远，Tb/Tc是前两段，Td是报告日，Te是明日执行日；明日标的为空时，Te写只处理旧仓风险或空仓等待B1资格。\n"
-            "- 节奏复位空仓和延后确认空仓只解释候选复核，不改变最终0%动作；T+1强弱只能进入批改和下一份日报。\n"
-            "- 日报不是每天预测一个股；先判断是否有可参与节拍，没有买入资格就0%不参与；B1只买参与权，B2等待确认。\n\n"
+            "- 只展示调用方已提供的冻结交易原则。\n\n"
             "## Summary",
         )
-        self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)
+        self.assertEqual(rendered.count("只展示调用方已提供的冻结交易原则"), 1)
 
     def test_generate_markdown_report_from_sections_handles_none(self):
         self.assertEqual(generate_markdown_report_from_sections(None), "")
@@ -2430,7 +2504,12 @@ Top50长趋势表不该进入轻量版
                     "sections": {
                         "preamble": "# Preamble",
                         "summary": "## Summary",
-                    }
+                    },
+                    "knowledge": {
+                        "llm_wiki": {
+                            "daily_discipline_lines": ["只展示已冻结的交易原则。"]
+                        }
+                    },
                 },
                 "2026-04-21",
             )
@@ -2438,4 +2517,18 @@ Top50长趋势表不该进入轻量版
         self.assertIn("# Preamble", rendered)
         self.assertIn("### 交易原则", rendered)
         self.assertIn("## Summary", rendered)
-        self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)
+        self.assertEqual(rendered.count("只展示已冻结的交易原则"), 1)
+
+    def test_generate_markdown_report_replay_sections_do_not_read_current_wiki(self):
+        rendered = generate_markdown_report(
+            {
+                "sections": {
+                    "preamble": "# Preamble",
+                    "summary": "## Summary",
+                }
+            },
+            "2026-04-21",
+            run_mode=LEDGER_MODE_REPLAY,
+        )
+
+        self.assertNotIn("### 交易原则", rendered)

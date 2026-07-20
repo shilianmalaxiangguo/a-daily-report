@@ -1,3 +1,4 @@
+import copy
 import sys
 import unittest
 from pathlib import Path
@@ -6,7 +7,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from knowledge.llm_wiki_router import build_llm_wiki_fact_tags, route_llm_wiki_knowledge
+from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_manifest import stable_json_hash
+from knowledge.llm_wiki_router import (
+    build_llm_wiki_fact_bundle,
+    build_llm_wiki_fact_tags,
+    route_llm_wiki_knowledge,
+    route_llm_wiki_knowledge_trace,
+)
+
+
+TRACE_DATES = {
+    "target_date": "2026-07-16",
+    "query_date": "2026-07-17",
+}
 
 
 class LlmWikiRouterTest(unittest.TestCase):
@@ -965,6 +979,580 @@ class LlmWikiRouterTest(unittest.TestCase):
             self.assertTrue(hit["impact"])
             self.assertTrue(hit["report_slot"])
             self.assertIn(hit["confidence"], {"draft", "reviewed", "verified", "disputed", "archived"})
+
+    def test_explicit_facts_only_accept_whitelisted_roots_and_report_rejections(self):
+        bundle = build_llm_wiki_fact_bundle(
+            {
+                "knowledge_hit_facts": {
+                    "market": {"index_trend": "上涨", "breadth": "上涨家数偏弱"},
+                    "account": {"status": "实际不可买"},
+                    "question": "指数上涨",
+                    "selection_workflow": {"final": {"position_pct": 100}},
+                }
+            }
+        )
+
+        self.assertEqual(bundle["facts_source"], "explicit")
+        self.assertEqual(set(bundle["facts"]), {"market", "account"})
+        self.assertIn("knowledge_fact_root_rejected:question", bundle["warnings"])
+        self.assertIn("knowledge_fact_root_rejected:selection_workflow", bundle["warnings"])
+        self.assertEqual(
+            bundle["fact_sources"]["market.index_trend"],
+            {
+                "source": "explicit",
+                "input_path": "knowledge_hit_facts.market.index_trend",
+            },
+        )
+
+    def test_explicit_facts_reject_unknown_nested_paths_before_routing(self):
+        bundle = build_llm_wiki_fact_bundle(
+            {
+                "knowledge_hit_facts": {
+                    "market": {
+                        "index_trend": "下跌",
+                        "forged": "结构性行情 全市场水池",
+                    },
+                    "candidate": {"unknown": "实际不可买"},
+                }
+            }
+        )
+
+        self.assertEqual(bundle["facts"], {"market": {"index_trend": "下跌"}})
+        self.assertIn("knowledge_fact_path_rejected:market.forged", bundle["warnings"])
+        self.assertIn("knowledge_fact_path_rejected:candidate.unknown", bundle["warnings"])
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            bundle["facts"],
+            manifest=context["manifest"],
+            facts_source=bundle["facts_source"],
+            fact_sources=bundle["fact_sources"],
+            warnings=bundle["warnings"],
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        ids = {item["knowledge_id"] for item in trace["hits"]}
+        self.assertNotIn("market.sector-grid-first-selection", ids)
+        self.assertNotIn("account.unbuyable-core-anchor", ids)
+
+    def test_trace_entry_rejects_unknown_nested_fact_paths(self):
+        context = build_llm_wiki_context()
+
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "market": {
+                    "index_trend": "下跌",
+                    "forged": "结构性行情 全市场水池",
+                },
+                "candidate": {"unknown": "实际不可买"},
+            },
+            manifest=context["manifest"],
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        ids = {item["knowledge_id"] for item in trace["hits"]}
+        self.assertNotIn("market.sector-grid-first-selection", ids)
+        self.assertNotIn("account.unbuyable-core-anchor", ids)
+        self.assertIn("knowledge_fact_path_rejected:market.forged", trace["warnings"])
+        self.assertIn("knowledge_fact_path_rejected:candidate.unknown", trace["warnings"])
+        self.assertEqual(set(trace["fact_sources"]), {"market.index_trend"})
+
+    def test_trace_replaces_unverified_fact_source_with_canonical_origin(self):
+        context = build_llm_wiki_context()
+
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"breadth": "上涨家数偏弱"}},
+            manifest=context["manifest"],
+            facts_source="explicit",
+            fact_sources={
+                "market.breadth": {
+                    "source": "official",
+                    "input_path": "forged://not-a-source",
+                },
+                "market.forged": {
+                    "source": "explicit",
+                    "input_path": "knowledge_hit_facts.market.forged",
+                },
+            },
+            **TRACE_DATES,
+        )
+
+        self.assertEqual(
+            trace["fact_sources"],
+            {
+                "market.breadth": {
+                    "source": "explicit",
+                    "input_path": "knowledge_hit_facts.market.breadth",
+                }
+            },
+        )
+        self.assertIn("knowledge_fact_source_rejected:market.breadth", trace["warnings"])
+        self.assertIn(
+            "knowledge_fact_source_path_rejected:market.forged",
+            trace["warnings"],
+        )
+
+    def test_trace_is_stable_and_links_rank_score_fact_paths_and_source_hash(self):
+        context = build_llm_wiki_context(target_date="2026-07-16", query_date="2026-07-17")
+        facts = {
+            "market": {
+                "index_trend": "上涨",
+                "breadth": "上涨家数偏弱",
+                "turnover_distribution": "成交集中",
+            }
+        }
+
+        first = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+        second = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(first["trace_hash"], second["trace_hash"])
+        self.assertEqual(first["facts_hash"], second["facts_hash"])
+        self.assertEqual(first["manifest_hash"], context["manifest_hash"])
+        hit = next(item for item in first["hits"] if item["knowledge_id"] == "market.low-frequency-focus")
+        manifest_entry = next(
+            item
+            for item in context["manifest"]["entries"]
+            if item["knowledge_id"] == hit["knowledge_id"]
+        )
+        self.assertGreaterEqual(hit["score"], 1)
+        self.assertGreaterEqual(hit["rank"], 1)
+        self.assertIn("market.breadth", hit["matched_fact_paths"])
+        self.assertEqual(hit["source_ref"]["content_hash"], manifest_entry["source_ref"]["content_hash"])
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        self.assertIn("selection_workflow", hit["not_used_for"])
+        self.assertEqual(
+            hit["matched_fact_sources"],
+            [
+                {
+                    "path": "market.breadth",
+                    "source": "derived",
+                    "input_path": "market.breadth",
+                },
+                {
+                    "path": "market.index_trend",
+                    "source": "derived",
+                    "input_path": "market.index_trend",
+                },
+                {
+                    "path": "market.turnover_distribution",
+                    "source": "derived",
+                    "input_path": "market.turnover_distribution",
+                },
+            ],
+        )
+
+    def test_trace_requires_target_and_query_dates_before_hits_are_usable(self):
+        context = build_llm_wiki_context()
+        facts = {"market": {"breadth": "上涨家数偏弱"}}
+
+        missing_both = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+        )
+        missing_query = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="2026-07-16",
+        )
+        invalid_target = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="not-a-date",
+            query_date="2026-07-17",
+        )
+        invalid_query = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="2026-07-16",
+            query_date="2026-02-30",
+        )
+        noncanonical_target = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date=" 2026-07-16",
+            query_date="2026-07-17",
+        )
+        noncanonical_query = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            target_date="2026-07-16",
+            query_date="2026-07-17 ",
+        )
+
+        self.assertEqual(missing_both["availability"], "invalid")
+        self.assertEqual(missing_both["hits"], [])
+        self.assertIn("目标交易日缺失，知识引用日期无法核对", missing_both["warnings"])
+        self.assertIn("查询日期缺失，知识引用时间无法核对", missing_both["warnings"])
+        self.assertEqual(missing_query["availability"], "invalid")
+        self.assertEqual(missing_query["hits"], [])
+        self.assertNotIn("目标交易日缺失，知识引用日期无法核对", missing_query["warnings"])
+        self.assertIn("查询日期缺失，知识引用时间无法核对", missing_query["warnings"])
+        self.assertEqual(invalid_target["availability"], "invalid")
+        self.assertEqual(invalid_target["hits"], [])
+        self.assertIn("目标交易日格式无效，知识引用日期无法核对", invalid_target["warnings"])
+        self.assertEqual(invalid_query["availability"], "invalid")
+        self.assertEqual(invalid_query["hits"], [])
+        self.assertIn("查询日期格式无效，知识引用时间无法核对", invalid_query["warnings"])
+        self.assertEqual(noncanonical_target["availability"], "invalid")
+        self.assertEqual(noncanonical_target["hits"], [])
+        self.assertIn("目标交易日格式无效，知识引用日期无法核对", noncanonical_target["warnings"])
+        self.assertEqual(noncanonical_query["availability"], "invalid")
+        self.assertEqual(noncanonical_query["hits"], [])
+        self.assertIn("查询日期格式无效，知识引用时间无法核对", noncanonical_query["warnings"])
+
+    def test_trace_uses_text_only_for_recall_and_structured_path_for_confirmation(self):
+        context = build_llm_wiki_context()
+        wrong_path = route_llm_wiki_knowledge_trace(
+            {"account": {"status": "上涨家数偏弱"}},
+            manifest=context["manifest"],
+            limit=10,
+            **TRACE_DATES,
+        )
+        confirmed = route_llm_wiki_knowledge_trace(
+            {"market": {"breadth": "上涨家数偏弱"}},
+            manifest=context["manifest"],
+            limit=10,
+            **TRACE_DATES,
+        )
+        legacy = route_llm_wiki_knowledge(
+            {"question": "上涨家数偏弱"},
+            scenario="daily_report",
+            limit=10,
+        )
+
+        self.assertNotIn(
+            "market.low-frequency-focus",
+            {item["knowledge_id"] for item in wrong_path["hits"]},
+        )
+        self.assertIn(
+            "market.low-frequency-focus",
+            {item["knowledge_id"] for item in confirmed["hits"]},
+        )
+        self.assertIn(
+            "market.low-frequency-focus",
+            {item["knowledge_id"] for item in legacy},
+        )
+
+    def test_legacy_list_router_ignores_unregistered_fact_roots(self):
+        unknown_only = route_llm_wiki_knowledge(
+            {"unrelated": "指数上涨，上涨家数偏弱，成交集中"},
+            scenario="daily_report",
+            limit=10,
+        )
+        mixed = route_llm_wiki_knowledge(
+            {
+                "market": {"breadth": "普涨"},
+                "unrelated": "指数上涨，上涨家数偏弱，成交集中",
+            },
+            scenario="daily_report",
+            limit=10,
+        )
+
+        self.assertEqual(unknown_only, [])
+        self.assertNotIn(
+            "market.low-frequency-focus",
+            {item["knowledge_id"] for item in mixed},
+        )
+
+    def test_trace_hash_tracks_facts_and_manifest_changes(self):
+        context = build_llm_wiki_context()
+        facts = {"market": {"index_trend": "上涨", "breadth": "上涨家数偏弱"}}
+        first = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=context["manifest"],
+            **TRACE_DATES,
+        )
+        changed_facts = route_llm_wiki_knowledge_trace(
+            {"market": {"index_trend": "上涨", "breadth": "普涨"}},
+            manifest=context["manifest"],
+            **TRACE_DATES,
+        )
+        changed_manifest = dict(context["manifest"])
+        changed_manifest["manifest_hash"] = "manifest-changed"
+        changed_version = route_llm_wiki_knowledge_trace(
+            facts,
+            manifest=changed_manifest,
+            **TRACE_DATES,
+        )
+
+        self.assertNotEqual(first["facts_hash"], changed_facts["facts_hash"])
+        self.assertNotEqual(first["trace_hash"], changed_facts["trace_hash"])
+        self.assertNotEqual(first["manifest_hash"], changed_version["manifest_hash"])
+        self.assertNotEqual(first["trace_hash"], changed_version["trace_hash"])
+
+    def test_trace_rejects_self_hashed_manifest_with_invalid_source_hash(self):
+        context = build_llm_wiki_context()
+        invalid_manifest = copy.deepcopy(context["manifest"])
+        source_path = invalid_manifest["entries"][0]["source_ref"]["path"]
+        invalid_manifest["entries"][0]["source_ref"]["content_hash"] = "not-a-sha256"
+        source_ref = next(
+            item for item in invalid_manifest["sources"] if item["path"] == source_path
+        )
+        source_ref["content_hash"] = "not-a-sha256"
+        invalid_manifest["manifest_hash"] = stable_json_hash(
+            invalid_manifest,
+            excluded_keys={"manifest_hash"},
+        )
+
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"index_trend": "上涨", "breadth": "上涨家数偏弱"}},
+            manifest=invalid_manifest,
+            **TRACE_DATES,
+        )
+
+        self.assertEqual(trace["availability"], "invalid")
+        self.assertEqual(trace["hits"], [])
+        self.assertTrue(any(item.startswith("source_hash_invalid:") for item in trace["warnings"]))
+
+    def test_trace_reports_malformed_or_declared_invalid_manifest(self):
+        for malformed in (None, [], 1, "invalid"):
+            with self.subTest(manifest=malformed):
+                trace = route_llm_wiki_knowledge_trace(
+                    {},
+                    manifest=malformed,
+                    **TRACE_DATES,
+                )
+                self.assertEqual(trace["availability"], "invalid")
+                self.assertEqual(trace["hits"], [])
+                self.assertIn("manifest_type_invalid", trace["warnings"])
+                self.assertIn(
+                    "知识清单缺失或格式无效，停止生成知识引用",
+                    trace["warnings"],
+                )
+
+        malformed_trace = route_llm_wiki_knowledge_trace(
+            {},
+            manifest={"errors": 1},
+            **TRACE_DATES,
+        )
+        self.assertEqual(malformed_trace["availability"], "invalid")
+        self.assertEqual(malformed_trace["hits"], [])
+        self.assertIn("manifest_field_type_invalid:errors", malformed_trace["warnings"])
+        self.assertIn(
+            "知识清单缺失或格式无效，停止生成知识引用",
+            malformed_trace["warnings"],
+        )
+
+        malformed_entry = copy.deepcopy(build_llm_wiki_context()["manifest"])
+        knowledge_id = malformed_entry["entries"][0]["knowledge_id"]
+        malformed_entry["entries"][0]["report_slots"] = 1
+        malformed_entry["manifest_hash"] = stable_json_hash(
+            malformed_entry,
+            excluded_keys={"manifest_hash"},
+        )
+        malformed_entry_trace = route_llm_wiki_knowledge_trace(
+            {},
+            manifest=malformed_entry,
+            **TRACE_DATES,
+        )
+        self.assertEqual(malformed_entry_trace["availability"], "invalid")
+        self.assertEqual(malformed_entry_trace["hits"], [])
+        self.assertIn(
+            f"entry_field_type_invalid:{knowledge_id}:report_slots",
+            malformed_entry_trace["warnings"],
+        )
+
+        declared_invalid = copy.deepcopy(build_llm_wiki_context()["manifest"])
+        declared_invalid["availability"] = "invalid"
+        declared_invalid["warnings"] = []
+        declared_invalid["errors"] = []
+        declared_invalid["manifest_hash"] = stable_json_hash(
+            declared_invalid,
+            excluded_keys={"manifest_hash"},
+        )
+        invalid_trace = route_llm_wiki_knowledge_trace(
+            {},
+            manifest=declared_invalid,
+            **TRACE_DATES,
+        )
+        self.assertEqual(invalid_trace["availability"], "invalid")
+        self.assertEqual(invalid_trace["hits"], [])
+        self.assertIn(
+            "知识清单缺失或格式无效，停止生成知识引用",
+            invalid_trace["warnings"],
+        )
+
+    def test_trace_reports_non_mapping_facts_without_raising(self):
+        manifest = build_llm_wiki_context()["manifest"]
+        for malformed in ([], 1, "invalid"):
+            with self.subTest(facts=malformed):
+                trace = route_llm_wiki_knowledge_trace(
+                    malformed,
+                    manifest=manifest,
+                    **TRACE_DATES,
+                )
+
+                self.assertEqual(trace["availability"], "invalid")
+                self.assertEqual(trace["hits"], [])
+                self.assertIn("knowledge_facts_type_invalid", trace["warnings"])
+
+    def test_trace_rejects_manifest_condition_outside_fact_path_allowlist(self):
+        manifest = copy.deepcopy(build_llm_wiki_context()["manifest"])
+        entry = next(
+            item
+            for item in manifest["entries"]
+            if item["knowledge_id"] == "market.low-frequency-focus"
+        )
+        entry["fact_conditions"] = {
+            "must_any": [
+                {"path": "market", "equals": "上涨", "label": "过宽父路径"},
+            ]
+        }
+        manifest["manifest_hash"] = stable_json_hash(
+            manifest,
+            excluded_keys={"manifest_hash"},
+        )
+
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"index_trend": "上涨"}},
+            manifest=manifest,
+            **TRACE_DATES,
+        )
+
+        self.assertEqual(trace["availability"], "invalid")
+        self.assertEqual(trace["hits"], [])
+        self.assertIn(
+            "fact_condition_path_invalid:market.low-frequency-focus:market",
+            trace["warnings"],
+        )
+
+    def test_trace_keeps_decision_boundary_when_no_entries_match(self):
+        trace = route_llm_wiki_knowledge_trace(
+            {},
+            manifest=build_llm_wiki_context()["manifest"],
+            **TRACE_DATES,
+        )
+
+        self.assertEqual(trace["hits"], [])
+        self.assertEqual(trace["decision_scope"], "explanation_only")
+        self.assertIn("selection_workflow", trace["not_used_for"])
+
+    def test_trace_rejects_self_hashed_manifest_with_forged_valid_source_hash(self):
+        context = build_llm_wiki_context()
+        forged_manifest = copy.deepcopy(context["manifest"])
+        source_path = forged_manifest["entries"][0]["source_ref"]["path"]
+        for entry in forged_manifest["entries"]:
+            if entry["source_ref"]["path"] == source_path:
+                entry["source_ref"]["content_hash"] = "0" * 64
+        source_ref = next(
+            item for item in forged_manifest["sources"] if item["path"] == source_path
+        )
+        source_ref["content_hash"] = "0" * 64
+        forged_manifest["manifest_hash"] = stable_json_hash(
+            forged_manifest,
+            excluded_keys={"manifest_hash"},
+        )
+
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"index_trend": "上涨", "breadth": "上涨家数偏弱"}},
+            manifest=forged_manifest,
+            **TRACE_DATES,
+        )
+
+        self.assertEqual(trace["availability"], "invalid")
+        self.assertEqual(trace["hits"], [])
+        self.assertIn(
+            f"source_content_hash_mismatch:{source_path}",
+            trace["warnings"],
+        )
+
+    def test_negative_text_and_field_names_do_not_create_knowledge_hits(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "market": {"index_trend": "下跌"},
+                "龙虎榜": "没有龙虎榜证据，不能代表主力方向",
+                "question": "并非指数上涨，也没有上涨家数偏弱或成交集中",
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        ids = {item["knowledge_id"] for item in trace["hits"]}
+        self.assertNotIn("market.low-frequency-focus", ids)
+        self.assertNotIn("evidence.dragon-tiger-list-sample-boundary", ids)
+
+    def test_negative_marker_in_one_fact_does_not_suppress_other_fact_leaves(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "account": {"status": "实际不可买"},
+                "candidate": {
+                    "identity": "市场核心",
+                    "quality": ["候选质量", "动作上限"],
+                },
+                "decision": {
+                    "position_plan": "0%不参与",
+                    "action_layer": "只观察",
+                    "b1_role": "参与权",
+                    "b2_role": "确认权",
+                    "response_script": ["B1", "B2"],
+                },
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=5,
+            **TRACE_DATES,
+        )
+
+        ids = {item["knowledge_id"] for item in trace["hits"]}
+        self.assertIn("candidate.quality-action-layer", ids)
+        response_hit = next(
+            item
+            for item in trace["hits"]
+            if item["knowledge_id"] == "decision.anti-prediction-response-script"
+        )
+        self.assertIn("B1", response_hit["triggered_by"])
+        self.assertIn("B2", response_hit["triggered_by"])
+
+    def test_negated_structured_condition_does_not_create_trace_hit(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {"decision": {"position_plan": "不是0%不参与"}},
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        ids = {item["knowledge_id"] for item in trace["hits"]}
+        self.assertNotIn("decision.anti-prediction-response-script", ids)
+
+    def test_newline_inside_one_fact_does_not_reset_negation_scope(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "decision": {
+                    "action_layer": "只观察",
+                    "response_script": "没有B1\nB2",
+                }
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        hit = next(
+            item
+            for item in trace["hits"]
+            if item["knowledge_id"] == "decision.anti-prediction-response-script"
+        )
+        self.assertNotIn("B1", hit["triggered_by"])
+        self.assertNotIn("B2", hit["triggered_by"])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,48 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+from datetime import date
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
+
+from knowledge.llm_wiki_manifest import (
+    EXPLICIT_FACT_PATHS,
+    stable_json_hash,
+    validate_knowledge_manifest,
+    validate_knowledge_manifest_sources,
+)
+
+
+TRACE_SCHEMA_VERSION = "knowledge_trace.v1"
+EXPLICIT_FACT_ROOTS = (
+    "market",
+    "account",
+    "candidate",
+    "position",
+    "decision",
+    "capital_priority",
+)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE = (
+    "selection_workflow",
+    "final_target_resolution",
+    "execution_object",
+    "position_plan",
+    "b1_b2",
+    "old_position_handling",
+    "exit_action",
+)
+
+
+def is_iso_calendar_date(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
 
 
 KNOWLEDGE_INDEX = [
@@ -13,6 +54,13 @@ KNOWLEDGE_INDEX = [
         "title": "指数强但赚钱效应弱",
         "topics": ["市场结构", "低频聚焦", "窄池子进攻"],
         "trigger_terms": ["指数上涨", "上涨家数偏弱", "成交集中", "指数强", "跌多涨少"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.index_trend", "equals": "上涨", "label": "指数上涨"},
+                {"path": "market.breadth", "contains_any": ["上涨家数偏弱", "跌多涨少"], "label": "赚钱效应偏弱"},
+                {"path": "market.turnover_distribution", "contains_any": ["成交集中"], "label": "成交集中"},
+            ]
+        },
         "scenarios": ["daily_report", "review"],
         "report_slot": "市场结构判断",
         "confidence": "verified",
@@ -58,6 +106,14 @@ KNOWLEDGE_INDEX = [
             "资金灌入",
             "板块格子",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.market_form", "contains_any": ["结构性行情", "全市场水池"], "label": "结构性行情"},
+                {"path": "market.sector_grid", "contains_any": ["九宫格", "网格化", "板块格子", "资金水位"], "label": "板块网格"},
+                {"path": "market.selection_order", "contains_any": ["先选板块", "板块先行"], "label": "板块先行"},
+                {"path": "market.corner_sample", "contains_any": ["边角标的", "轮动不到"], "label": "边角样本"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "市场结构判断",
         "confidence": "reviewed",
@@ -70,6 +126,12 @@ KNOWLEDGE_INDEX = [
         "title": "实际不可买不降低市场身份",
         "topics": ["账户", "实际不可买", "市场核心", "候选比较"],
         "trigger_terms": ["实际不可买", "一手金额过高", "账户本金不足", "市场核心", "买不了"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "account.status", "contains_any": ["实际不可买", "买不了", "本金不足"], "label": "账户不可买"},
+                {"path": "candidate.identity", "contains_any": ["市场核心"], "label": "市场核心身份"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality"],
         "report_slot": "账户约束",
         "confidence": "verified",
@@ -157,6 +219,14 @@ KNOWLEDGE_INDEX = [
             "fomo",
             "满仓",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "position.state", "contains_any": ["旧仓", "失败仓"], "label": "旧仓事实"},
+                {"path": "position.action", "contains_any": ["换仓", "去弱留强", "汰弱留强"], "label": "旧仓动作"},
+                {"path": "position.capital_priority_reason", "contains_any": ["旧仓", "新机会", "FOMO", "满仓"], "label": "资金优先级原因"},
+                {"path": "candidate.quality", "contains_any": ["新机会", "换仓", "满仓"], "label": "新机会比较"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "资金优先级",
         "confidence": "verified",
@@ -195,6 +265,14 @@ KNOWLEDGE_INDEX = [
             "主线真空",
             "不合理的超额收益",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.market_form", "contains_any": ["业绩线", "轮动线", "科技线", "风格切换"], "label": "市场风格事实"},
+                {"path": "market.sector_grid", "contains_any": ["业绩线", "轮动线", "科技线", "主攻点"], "label": "板块风格事实"},
+                {"path": "market.selection_order", "contains_any": ["主攻点", "牵制点", "同权比较"], "label": "主攻比较"},
+                {"path": "candidate.quality", "contains_any": ["风格切换载体", "超级巨星", "主线真空"], "label": "风格载体"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "市场结构判断",
         "confidence": "reviewed",
@@ -225,6 +303,14 @@ KNOWLEDGE_INDEX = [
             "可复制",
             "小亏",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.behavior_traps", "contains_any": ["踏空焦虑", "后悔", "FOMO"], "label": "情绪刺激"},
+                {"path": "decision.response_script", "contains_any": ["FOMO", "卖飞", "买回", "必卖", "纪律成本"], "label": "纪律复核"},
+                {"path": "position.capital_priority_reason", "contains_any": ["FOMO", "卖飞", "踏空", "后悔"], "label": "持仓情绪"},
+                {"path": "position.action", "contains_any": ["买回", "必卖", "空仓"], "label": "持仓动作"},
+            ]
+        },
         "scenarios": ["intraday_question", "review", "daily_report"],
         "report_slot": "交易纪律",
         "confidence": "verified",
@@ -271,6 +357,14 @@ KNOWLEDGE_INDEX = [
             "太极实业",
             "宜宾纸业",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.response_script", "contains_any": ["节奏复位不新增", "延后确认不新增", "错失待批改", "边际主线"], "label": "节奏复核"},
+                {"path": "decision.action_layer", "contains_any": ["合理空仓", "不新增", "只观察"], "label": "动作层"},
+                {"path": "market.market_form", "contains_any": ["外盘拉升", "美股大回调", "美股拉升", "存储大涨"], "label": "外部市场启发"},
+                {"path": "candidate.quality", "contains_any": ["旧目标强弩之末", "边际主线", "旧信号源批改"], "label": "候选边际"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "超短边际节奏复核",
         "confidence": "reviewed",
@@ -303,6 +397,13 @@ KNOWLEDGE_INDEX = [
             "五日",
             "全天空仓",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.response_script", "contains_any": ["Ta", "Tb", "Tc", "Td", "Te", "T+2必卖", "日序"], "label": "账户日序"},
+                {"path": "position.action", "contains_any": ["T+2必卖", "明日Te", "全天空仓"], "label": "跨日动作"},
+                {"path": "position.state", "contains_any": ["Ta", "Tb", "Tc", "Td", "Te"], "label": "跨日持仓事实"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "持仓日序",
         "confidence": "reviewed",
@@ -315,6 +416,13 @@ KNOWLEDGE_INDEX = [
         "title": "做T先降风险，确认后买回",
         "topics": ["做T", "风险控制", "买回确认", "点位依据"],
         "trigger_terms": ["做T", "亏损", "反弹", "买回", "更便宜"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "position.action", "contains_any": ["做T", "买回", "降风险"], "label": "做T动作"},
+                {"path": "position.capital_priority_reason", "contains_any": ["亏损", "反弹", "更便宜", "买回"], "label": "做T原因"},
+                {"path": "candidate.quality", "contains_any": ["做T", "买回确认", "风险控制"], "label": "买回确认"},
+            ]
+        },
         "scenarios": ["intraday_question", "daily_report", "review"],
         "report_slot": "盘中问股前提",
         "confidence": "verified",
@@ -347,6 +455,14 @@ KNOWLEDGE_INDEX = [
             "太极实业",
         ],
         "weak_trigger_terms": ["1x", "2x", "太极实业"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "position.action", "contains_any": ["同股T", "可卖旧仓", "尾盘卖出"], "label": "同股T动作"},
+                {"path": "candidate.quality", "contains_any": ["同股T", "临时2x", "强表态", "诱多"], "label": "强表态事实"},
+                {"path": "position.capital_priority", "contains_any": ["same_stock_t", "old_position_t"], "label": "同股资金优先级"},
+                {"path": "position.capital_priority_reason", "contains_any": ["跌破VWAP", "跌破昨收", "跌破MA7"], "label": "失效事实"},
+            ]
+        },
         "scenarios": ["intraday_question", "daily_report", "review"],
         "report_slot": "同股T处理",
         "confidence": "reviewed",
@@ -398,6 +514,15 @@ KNOWLEDGE_INDEX = [
             "确认后加速",
             "初始仓位",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.b1_role", "contains_any": ["参与权"], "label": "B1参与权"},
+                {"path": "decision.b2_role", "contains_any": ["确认权"], "label": "B2确认权"},
+                {"path": "decision.participation_rhythm", "contains_any": ["初始仓位", "确认后加速"], "label": "参与节奏"},
+                {"path": "decision.response_script", "contains_any": ["2B法", "B1", "B2", "任务仓", "奖励仓", "必须买够"], "label": "2B执行事实"},
+                {"path": "candidate.quality", "contains_any": ["B1", "B2", "追高", "赌性", "贪念"], "label": "仓位行为"},
+            ]
+        },
         "scenarios": ["intraday_question", "daily_report", "review"],
         "report_slot": "2B仓位处理",
         "confidence": "reviewed",
@@ -423,6 +548,14 @@ KNOWLEDGE_INDEX = [
             "活跃股梯队",
             "高位异动",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.behavior_traps", "contains_any": ["盈利后失控", "飘了", "失控"], "label": "盈利后偏差"},
+                {"path": "decision.response_script", "contains_any": ["连续盈利", "两笔出问题", "直接停手"], "label": "顺境纪律"},
+                {"path": "candidate.quality", "contains_any": ["股池", "连板高度", "热点宽度", "活跃股梯队"], "label": "活跃资金事实"},
+                {"path": "market.market_form", "contains_any": ["连板高度", "热点宽度", "高位异动"], "label": "市场活跃度"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "交易纪律",
         "confidence": "reviewed",
@@ -435,6 +568,11 @@ KNOWLEDGE_INDEX = [
         "title": "候选质量条件链与动作上限",
         "topics": ["候选质量", "动作层级", "恢复条件", "取关条件"],
         "trigger_terms": ["候选质量", "动作上限", "恢复条件", "取关条件", "风险项"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "candidate.quality", "contains_any": ["候选质量", "动作上限", "恢复条件", "取关条件", "风险项"], "label": "候选质量条件"},
+            ]
+        },
         "scenarios": ["daily_report", "candidate_quality", "review"],
         "report_slot": "候选质量",
         "confidence": "verified",
@@ -466,6 +604,14 @@ KNOWLEDGE_INDEX = [
             "中军",
             "分支龙头",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.selection_order", "contains_any": ["条件链", "板块资金扩散", "资金载体", "淘汰赛"], "label": "选择条件链"},
+                {"path": "market.sector_grid", "contains_any": ["板块资金扩散", "板块锚", "中军", "分支龙头"], "label": "板块资金事实"},
+                {"path": "candidate.quality", "contains_any": ["条件链", "价格行为", "量化参与痕迹", "趋势容量核心"], "label": "候选条件链"},
+                {"path": "decision.response_script", "contains_any": ["第一性原理", "伪精确", "评分", "概率"], "label": "反伪精确复核"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "选股原则",
         "confidence": "verified",
@@ -478,6 +624,14 @@ KNOWLEDGE_INDEX = [
         "title": "新股周期不能替代单票承接",
         "topics": ["新股周期", "市场情绪", "承接验证"],
         "trigger_terms": ["新股", "次新", "情绪出口", "弱修复", "强修复"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.market_form", "contains_any": ["新股", "次新", "情绪出口", "弱修复", "强修复"], "label": "新股周期事实"},
+                {"path": "market.corner_sample", "contains_any": ["新股", "次新"], "label": "新股样本"},
+                {"path": "candidate.identity", "contains_any": ["新股", "次新", "情绪出口"], "label": "候选身份"},
+                {"path": "candidate.quality", "contains_any": ["承接验证", "弱修复", "强修复"], "label": "承接质量"},
+            ]
+        },
         "scenarios": ["daily_report", "review"],
         "report_slot": "市场结构判断",
         "confidence": "verified",
@@ -490,6 +644,13 @@ KNOWLEDGE_INDEX = [
         "title": "复盘沉淀五字段",
         "topics": ["知识复利", "复盘", "判断样本"],
         "trigger_terms": ["复盘", "错题", "当时判断", "实际偏差", "可复用规则"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.response_mode", "contains_any": ["复盘", "判断样本"], "label": "复盘场景"},
+                {"path": "decision.response_script", "contains_any": ["复盘", "错题", "当时判断", "实际偏差", "可复用规则"], "label": "复盘五字段"},
+                {"path": "decision.action_layer", "contains_any": ["复盘", "知识复利"], "label": "知识复利层"},
+            ]
+        },
         "scenarios": ["review", "daily_report", "intraday_question"],
         "report_slot": "知识复利提示",
         "confidence": "reviewed",
@@ -502,6 +663,13 @@ KNOWLEDGE_INDEX = [
         "title": "指数价跌量增先防踩踏",
         "topics": ["价格行为", "成交量", "指数价跌量增"],
         "trigger_terms": ["指数大跌", "放量", "价跌量增", "踩踏", "出货风险"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.index_trend", "contains_any": ["指数大跌", "下跌"], "label": "指数下跌"},
+                {"path": "market.turnover_distribution", "contains_any": ["放量", "价跌量增", "踩踏", "出货风险"], "label": "放量卖压"},
+                {"path": "market.breadth", "contains_any": ["踩踏", "跌多涨少"], "label": "市场宽度走弱"},
+            ]
+        },
         "scenarios": ["daily_report", "review"],
         "report_slot": "市场结构判断",
         "confidence": "verified",
@@ -545,6 +713,14 @@ KNOWLEDGE_INDEX = [
             "阳包阴",
             "突破阳线",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "candidate.quality", "contains_any": ["价格行为", "价格趋势", "量价", "信号K线", "假底", "进攻雏形"], "label": "候选价格行为"},
+                {"path": "market.turnover_distribution", "contains_any": ["成交量", "放量", "缩量", "资金表态"], "label": "量价事实"},
+                {"path": "decision.response_script", "contains_any": ["布鲁克斯", "二次入场", "交易者等式", "再等等"], "label": "价格行为剧本"},
+                {"path": "position.capital_priority_reason", "contains_any": ["趋势", "回踩不破", "失效线"], "label": "持仓价格确认"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "价格行为判断",
         "confidence": "reviewed",
@@ -570,6 +746,13 @@ KNOWLEDGE_INDEX = [
             "旱地拔葱",
             "反包",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "candidate.quality", "contains_any": ["买点", "趋势地基", "盈亏同源", "股性", "异动K线"], "label": "买点质量"},
+                {"path": "decision.qualification", "contains_any": ["买入资格", "资格不足"], "label": "买入资格"},
+                {"path": "decision.response_script", "contains_any": ["追涨", "杀跌", "再等等", "认错线"], "label": "参与剧本"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "买点质量",
         "confidence": "reviewed",
@@ -593,6 +776,14 @@ KNOWLEDGE_INDEX = [
             "预测",
             "期待",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.response_script", "contains_any": ["当下", "未来", "短线", "预测", "期待"], "label": "执行时间事实"},
+                {"path": "decision.behavior_traps", "contains_any": ["焦虑", "焦躁", "未来焦虑"], "label": "心理时间偏差"},
+                {"path": "decision.response_mode", "contains_any": ["当下执行", "应对剧本"], "label": "执行模式"},
+                {"path": "decision.action_layer", "contains_any": ["观察", "研究"], "label": "动作边界"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "交易纪律",
         "confidence": "reviewed",
@@ -605,6 +796,13 @@ KNOWLEDGE_INDEX = [
         "title": "炒作逻辑链扩散后再升级",
         "topics": ["主线延续", "炒作逻辑链", "板块扩散"],
         "trigger_terms": ["逻辑链", "上游", "中游", "下游", "扩散", "主线延续"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.sector_grid", "contains_any": ["逻辑链", "上游", "中游", "下游", "扩散"], "label": "板块逻辑链"},
+                {"path": "market.selection_order", "contains_any": ["主线延续", "板块扩散"], "label": "主线延续"},
+                {"path": "market.market_form", "contains_any": ["扩散", "后排承接"], "label": "市场扩散"},
+            ]
+        },
         "scenarios": ["daily_report", "review"],
         "report_slot": "市场结构判断",
         "confidence": "verified",
@@ -692,6 +890,15 @@ KNOWLEDGE_INDEX = [
             "终于想通",
             "后手追涨",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.rebound_state", "contains_any": ["龙头二次发力", "二次发力", "人声鼎沸"], "label": "周期阶段"},
+                {"path": "market.rebound_roles", "contains_any": ["主动带动反弹", "领涨"], "label": "领涨角色"},
+                {"path": "candidate.rebound_state", "contains_any": ["龙头二次发力", "二次发力"], "label": "候选二次发力"},
+                {"path": "candidate.quality", "contains_any": ["鱼身", "鱼头", "鱼尾", "后手追涨"], "label": "候选周期位置"},
+                {"path": "decision.qualification", "contains_any": ["买入资格"], "label": "买入资格"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "市场结构判断",
         "confidence": "reviewed",
@@ -718,6 +925,14 @@ KNOWLEDGE_INDEX = [
             "客户认证",
             "反方验证",
         ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.sector_grid", "contains_any": ["供应链瓶颈", "产业链瓶颈", "关键瓶颈", "关键材料"], "label": "产业链瓶颈"},
+                {"path": "market.selection_order", "contains_any": ["先研究后交易", "反方验证"], "label": "研究顺序"},
+                {"path": "candidate.identity", "contains_any": ["不可替代", "产能稀缺", "客户认证"], "label": "瓶颈身份"},
+                {"path": "candidate.quality", "contains_any": ["供应链瓶颈", "关键材料", "反方验证"], "label": "研究证据"},
+            ]
+        },
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "研究线索",
         "confidence": "reviewed",
@@ -726,12 +941,16 @@ KNOWLEDGE_INDEX = [
 ]
 
 
-def _flatten_terms(value: Any) -> List[str]:
+_STRICT_FACT_SEPARATOR = "\x1e"
+
+
+def _flatten_terms(value: Any, *, include_keys: bool = True) -> List[str]:
     terms: List[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            terms.append(str(key))
-            terms.extend(_flatten_terms(item))
+            if include_keys:
+                terms.append(str(key))
+            terms.extend(_flatten_terms(item, include_keys=include_keys))
     elif isinstance(value, (list, tuple, set)):
         for item in value:
             terms.extend(_flatten_terms(item))
@@ -742,12 +961,17 @@ def _flatten_terms(value: Any) -> List[str]:
     return terms
 
 
-def _joined_terms(facts: Dict[str, Any]) -> str:
-    terms = _flatten_terms(facts or {})
+def _joined_terms(
+    facts: Dict[str, Any],
+    *,
+    include_keys: bool = True,
+    separator: str = " ",
+) -> str:
+    terms = _flatten_terms(facts or {}, include_keys=include_keys)
     market = (facts or {}).get("market") if isinstance(facts, dict) else {}
     if isinstance(market, dict) and str(market.get("index_trend", "") or "").strip() == "上涨":
         terms.append("指数上涨")
-    return " ".join(terms)
+    return separator.join(terms)
 
 
 def _value_at_path(value: Any, path: str) -> Any:
@@ -762,37 +986,71 @@ def _value_at_path(value: Any, path: str) -> Any:
     return current
 
 
-def _condition_matches(facts: Dict[str, Any], condition: Dict[str, Any]) -> bool:
+def _condition_matches(
+    facts: Dict[str, Any],
+    condition: Dict[str, Any],
+    *,
+    strict: bool = False,
+) -> bool:
     values = _flatten_terms(_value_at_path(facts, str(condition.get("path") or "")))
     if not values:
         return False
-    haystack = " ".join(values)
     if condition.get("exists"):
         return True
     if "equals" in condition:
         expected = str(condition.get("equals") or "").strip()
         return any(value == expected for value in values)
+    matcher = _strict_term_matches if strict else _term_matches
     if "contains" in condition:
         expected = str(condition.get("contains") or "").strip()
-        return bool(expected and expected in haystack)
+        return any(matcher(expected, value) for value in values)
     expected_values = [str(item or "").strip() for item in condition.get("contains_any") or []]
-    return any(expected and expected in haystack for expected in expected_values)
+    return any(
+        matcher(expected, value)
+        for expected in expected_values
+        for value in values
+    )
 
 
-def _matched_fact_conditions(entry: Dict[str, Any], facts: Dict[str, Any]) -> List[str]:
+def _matched_fact_condition_details(
+    entry: Dict[str, Any],
+    facts: Dict[str, Any],
+    *,
+    strict: bool = False,
+) -> List[Dict[str, str]]:
     conditions = entry.get("fact_conditions") if isinstance(entry.get("fact_conditions"), dict) else {}
-    matched_by_group: Dict[str, List[str]] = {"must_any": [], "prefer_any": []}
+    matched_by_group: Dict[str, List[Dict[str, str]]] = {"must_any": [], "prefer_any": []}
     for group in matched_by_group:
         for condition in conditions.get(group) or []:
-            if not isinstance(condition, dict) or not _condition_matches(facts, condition):
+            if not isinstance(condition, dict) or not _condition_matches(
+                facts,
+                condition,
+                strict=strict,
+            ):
                 continue
             label = str(condition.get("label") or condition.get("path") or "").strip()
             if label:
-                matched_by_group[group].append(label)
+                matched_by_group[group].append(
+                    {
+                        "label": label,
+                        "path": str(condition.get("path") or "").strip(),
+                    }
+                )
     if conditions.get("must_any") and not matched_by_group["must_any"]:
         return []
     matched = [*matched_by_group["must_any"], *matched_by_group["prefer_any"]]
-    return list(dict.fromkeys(matched))
+    unique: List[Dict[str, str]] = []
+    seen = set()
+    for item in matched:
+        key = (item["label"], item["path"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+def _matched_fact_conditions(entry: Dict[str, Any], facts: Dict[str, Any]) -> List[str]:
+    return [item["label"] for item in _matched_fact_condition_details(entry, facts)]
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -1122,14 +1380,7 @@ def _build_decision_response_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"decision": response_facts}
 
 
-def build_llm_wiki_fact_tags(data: Dict[str, Any] | None) -> Dict[str, Any]:
-    """Extract compact fact tags used by the explainable Wiki router."""
-    if not isinstance(data, dict):
-        return {}
-    explicit = data.get("knowledge_hit_facts")
-    if isinstance(explicit, dict):
-        return dict(explicit)
-
+def _derived_llm_wiki_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     facts: Dict[str, Any] = {}
     market_facts = _build_market_fact_tags(data)
     if market_facts:
@@ -1169,15 +1420,176 @@ def build_llm_wiki_fact_tags(data: Dict[str, Any] | None) -> Dict[str, Any]:
     return facts
 
 
+_REJECTED_FACT_VALUE = object()
+
+
+def _sanitize_fact_list_item(value: Any, *, path: str, warnings: List[str]) -> Any:
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        warnings.append(f"knowledge_fact_value_rejected:{path}")
+        return _REJECTED_FACT_VALUE
+    if isinstance(value, (list, tuple)):
+        sanitized = []
+        for index, item in enumerate(value):
+            result = _sanitize_fact_list_item(
+                item,
+                path=f"{path}[{index}]",
+                warnings=warnings,
+            )
+            if result is not _REJECTED_FACT_VALUE:
+                sanitized.append(result)
+        return sanitized
+    warnings.append(f"knowledge_fact_value_rejected:{path}")
+    return _REJECTED_FACT_VALUE
+
+
+def _sanitize_explicit_fact_value(value: Any, *, path: str, warnings: List[str]) -> Any:
+    is_leaf = path in EXPLICIT_FACT_PATHS
+    is_container = any(allowed.startswith(f"{path}.") for allowed in EXPLICIT_FACT_PATHS)
+    if isinstance(value, Mapping):
+        if not is_container:
+            warnings.append(f"knowledge_fact_path_rejected:{path}")
+            return _REJECTED_FACT_VALUE
+        sanitized = {}
+        for key, item in value.items():
+            key_text = str(key).strip()
+            nested_path = f"{path}.{key_text}" if path else key_text
+            if not key_text:
+                warnings.append(f"knowledge_fact_key_rejected:{nested_path or '<empty>'}")
+                continue
+            result = _sanitize_explicit_fact_value(
+                item,
+                path=nested_path,
+                warnings=warnings,
+            )
+            if result is not _REJECTED_FACT_VALUE:
+                sanitized[key_text] = result
+        return sanitized
+    if not is_leaf:
+        warnings.append(f"knowledge_fact_path_rejected:{path}")
+        return _REJECTED_FACT_VALUE
+    if isinstance(value, (list, tuple)):
+        return _sanitize_fact_list_item(value, path=path, warnings=warnings)
+    return _sanitize_fact_list_item(value, path=path, warnings=warnings)
+
+
+def _sanitize_routed_facts(
+    facts: Mapping[str, Any] | None,
+    *,
+    warnings: List[str],
+) -> Dict[str, Any]:
+    sanitized_facts: Dict[str, Any] = {}
+    for key, value in (facts or {}).items():
+        key_text = str(key).strip()
+        if key_text not in EXPLICIT_FACT_ROOTS:
+            warnings.append(f"knowledge_fact_root_rejected:{key_text or '<empty>'}")
+            continue
+        sanitized = _sanitize_explicit_fact_value(
+            value,
+            path=key_text,
+            warnings=warnings,
+        )
+        if sanitized is _REJECTED_FACT_VALUE or sanitized == {}:
+            continue
+        sanitized_facts[key_text] = sanitized
+    return sanitized_facts
+
+
+def _declared_fact_path(path: str) -> str:
+    normalized = str(path or "").strip()
+    while normalized.endswith("]"):
+        bracket = normalized.rfind("[")
+        if bracket < 0 or not normalized[bracket + 1 : -1].isdigit():
+            break
+        normalized = normalized[:bracket]
+    return normalized
+
+
+def _fact_source_map(
+    facts: Dict[str, Any],
+    *,
+    source: str,
+    explicit_prefix: str = "",
+) -> Dict[str, Dict[str, str]]:
+    fact_sources: Dict[str, Dict[str, str]] = {}
+    for leaf_path, _ in _iter_fact_leaves(facts):
+        path = _declared_fact_path(leaf_path)
+        if not path:
+            continue
+        fact_sources[path] = {
+            "source": source,
+            "input_path": f"{explicit_prefix}{path}" if explicit_prefix else path,
+        }
+    return fact_sources
+
+
+def build_llm_wiki_fact_bundle(data: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Return routed facts together with their origin and validation warnings."""
+    if not isinstance(data, dict):
+        return {
+            "facts": {},
+            "facts_source": "derived",
+            "fact_sources": {},
+            "warnings": [],
+        }
+    explicit = data.get("knowledge_hit_facts")
+    if isinstance(explicit, dict):
+        warnings: List[str] = []
+        facts = _sanitize_routed_facts(explicit, warnings=warnings)
+        return {
+            "facts": facts,
+            "facts_source": "explicit",
+            "fact_sources": _fact_source_map(
+                facts,
+                source="explicit",
+                explicit_prefix="knowledge_hit_facts.",
+            ),
+            "warnings": list(dict.fromkeys(warnings)),
+        }
+    facts = _derived_llm_wiki_fact_tags(data)
+    return {
+        "facts": facts,
+        "facts_source": "derived",
+        "fact_sources": _fact_source_map(facts, source="derived"),
+        "warnings": [],
+    }
+
+
+def build_llm_wiki_fact_tags(data: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Extract compact fact tags used by the explainable Wiki router."""
+    return dict(build_llm_wiki_fact_bundle(data)["facts"])
+
+
 def _term_matches(term: str, text: str) -> bool:
     return bool(term and term in text)
 
 
-def _matched_trigger_terms(entry: Dict[str, Any], facts_text: str) -> List[str]:
+def _strict_term_matches(term: str, text: str) -> bool:
+    if not term:
+        return False
+    start = 0
+    negative_markers = ("没有", "并非", "并未", "不是", "不能", "不", "非", "无", "未")
+    clause_separators = f"，。；！？{_STRICT_FACT_SEPARATOR}"
+    while True:
+        index = text.find(term, start)
+        if index < 0:
+            return False
+        clause_start = max(text.rfind(separator, 0, index) for separator in clause_separators) + 1
+        prefix = text[clause_start:index]
+        if not any(marker in prefix for marker in negative_markers):
+            return True
+        start = index + len(term)
+
+
+def _matched_trigger_terms(entry: Dict[str, Any], facts_text: str, *, strict: bool = False) -> List[str]:
+    matcher = _strict_term_matches if strict else _term_matches
     return [
         str(term)
         for term in entry.get("trigger_terms", [])
-        if _term_matches(str(term), facts_text)
+        if matcher(str(term), facts_text)
     ]
 
 
@@ -1193,8 +1605,24 @@ def _scenario_allowed(entry: Dict[str, Any], scenario: str) -> bool:
     return not scenario or scenario in scenarios
 
 
+def _required_fact_conditions_satisfied(
+    entry: Dict[str, Any],
+    facts: Dict[str, Any],
+    *,
+    strict: bool = False,
+) -> bool:
+    conditions = entry.get("fact_conditions") if isinstance(entry.get("fact_conditions"), dict) else {}
+    required = [item for item in conditions.get("must_any") or [] if isinstance(item, dict)]
+    return not required or any(
+        _condition_matches(facts, condition, strict=strict)
+        for condition in required
+    )
+
+
 def _build_hit(entry: Dict[str, Any], matched_terms: Iterable[str], matched_conditions: Iterable[str], index: int) -> Dict[str, Any]:
-    triggered_by = list(dict.fromkeys([*list(matched_terms), *list(matched_conditions)]))
+    matched_term_list = list(matched_terms)
+    matched_condition_list = list(matched_conditions)
+    triggered_by = list(dict.fromkeys(matched_term_list or matched_condition_list))
     return {
         "hit_id": f"kh-{index:03d}",
         "knowledge_id": entry["id"],
@@ -1202,12 +1630,328 @@ def _build_hit(entry: Dict[str, Any], matched_terms: Iterable[str], matched_cond
         "source_path": entry["source_path"],
         "title": entry["title"],
         "triggered_by": triggered_by,
-        "matched_conditions": list(matched_conditions),
+        "matched_conditions": matched_condition_list,
         "matched_topics": list(entry.get("topics", [])),
         "impact": entry["impact"],
         "report_slot": entry["report_slot"],
         "confidence": entry["confidence"],
     }
+
+
+def _rank_knowledge_entries(
+    facts: Dict[str, Any],
+    *,
+    entries: Iterable[Dict[str, Any]],
+    scenario: str,
+    include_fact_keys: bool = True,
+    enforce_required_conditions: bool = False,
+    strict_terms: bool = False,
+) -> List[tuple[int, int, int, int, Dict[str, Any], List[str], List[Dict[str, str]]]]:
+    facts_text = _joined_terms(
+        facts,
+        include_keys=include_fact_keys,
+        separator=_STRICT_FACT_SEPARATOR if strict_terms else " ",
+    )
+    ranked_matches = []
+    for order, entry in enumerate(entries):
+        if not _scenario_allowed(entry, scenario):
+            continue
+        if enforce_required_conditions and not _required_fact_conditions_satisfied(
+            entry,
+            facts,
+            strict=strict_terms,
+        ):
+            continue
+        matched_terms = _matched_trigger_terms(entry, facts_text, strict=strict_terms)
+        if enforce_required_conditions and not matched_terms:
+            continue
+        matched_details = _matched_fact_condition_details(
+            entry,
+            facts,
+            strict=strict_terms,
+        )
+        matched_conditions = [item["label"] for item in matched_details]
+        if (matched_terms or matched_conditions) and _entry_requirements_satisfied(
+            entry,
+            matched_terms,
+            matched_conditions,
+        ):
+            score = len(matched_terms) + len(matched_conditions) * 2
+            ranked_matches.append(
+                (
+                    score,
+                    len(matched_conditions),
+                    len(matched_terms),
+                    -order,
+                    entry,
+                    matched_terms,
+                    matched_details,
+                )
+            )
+    ranked_matches.sort(reverse=True)
+    return ranked_matches
+
+
+def _iter_fact_leaves(value: Any, *, path: str = "") -> Iterable[tuple[str, str]]:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            nested_path = f"{path}.{key}" if path else str(key)
+            yield from _iter_fact_leaves(item, path=nested_path)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from _iter_fact_leaves(item, path=f"{path}[{index}]")
+    elif value is not None:
+        text = str(value).strip()
+        if text:
+            yield path, text
+
+
+def _matched_fact_paths(
+    facts: Dict[str, Any],
+    matched_terms: Iterable[str],
+    matched_details: Iterable[Dict[str, str]],
+    strict_terms: bool = False,
+) -> List[str]:
+    paths = [
+        _declared_fact_path(str(item.get("path") or ""))
+        for item in matched_details
+    ]
+    leaves = [
+        (_declared_fact_path(path), text)
+        for path, text in _iter_fact_leaves(facts)
+    ]
+    matcher = _strict_term_matches if strict_terms else _term_matches
+    for term in matched_terms:
+        if (
+            str(term) == "指数上涨"
+            and _value_at_path(facts, "market.index_trend") == "上涨"
+        ):
+            paths.append("market.index_trend")
+        for path, text in leaves:
+            if path and matcher(str(term), text):
+                paths.append(path)
+    return sorted(set(path for path in paths if path))
+
+
+def _normalize_fact_sources(
+    facts: Dict[str, Any],
+    *,
+    facts_source: str,
+    fact_sources: Mapping[str, Any] | None,
+    warnings: List[str],
+) -> Dict[str, Dict[str, str]]:
+    supplied = fact_sources if isinstance(fact_sources, Mapping) else {}
+    normalized_source = "explicit" if facts_source == "explicit" else "derived"
+    leaf_paths = sorted(
+        {
+            _declared_fact_path(path)
+            for path, _ in _iter_fact_leaves(facts)
+            if path
+        }
+    )
+    normalized: Dict[str, Dict[str, str]] = {}
+    for path in leaf_paths:
+        expected_input_path = (
+            f"knowledge_hit_facts.{path}"
+            if normalized_source == "explicit"
+            else path
+        )
+        source_ref = supplied.get(path)
+        if isinstance(source_ref, Mapping):
+            supplied_source = str(source_ref.get("source") or "").strip()
+            supplied_input_path = str(source_ref.get("input_path") or "").strip()
+            if (
+                supplied_source != normalized_source
+                or supplied_input_path != expected_input_path
+            ):
+                warnings.append(f"knowledge_fact_source_rejected:{path}")
+        elif source_ref is not None:
+            warnings.append(f"knowledge_fact_source_rejected:{path}")
+        normalized[path] = {
+            "source": normalized_source,
+            "input_path": expected_input_path,
+        }
+    for supplied_path in sorted(str(path) for path in supplied if str(path) not in leaf_paths):
+        warnings.append(f"knowledge_fact_source_path_rejected:{supplied_path}")
+    return normalized
+
+
+def _manifest_entry_as_router_entry(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    source_ref = entry.get("source_ref") if isinstance(entry.get("source_ref"), Mapping) else {}
+    report_slots = [str(item) for item in entry.get("report_slots") or [] if str(item).strip()]
+    return {
+        "id": str(entry.get("knowledge_id") or "").strip(),
+        "prior": str(entry.get("prior") or "").strip(),
+        "source_path": str(source_ref.get("path") or "").strip(),
+        "source_ref": dict(source_ref),
+        "title": str(entry.get("title") or "").strip(),
+        "topics": list(entry.get("topics") or []),
+        "trigger_terms": list(entry.get("trigger_terms") or []),
+        "weak_trigger_terms": list(entry.get("weak_trigger_terms") or []),
+        "fact_conditions": dict(entry.get("fact_conditions") or {}),
+        "scenarios": list(entry.get("applies_to") or []),
+        "report_slot": report_slots[0] if report_slots else "",
+        "confidence": str(entry.get("confidence") or "").strip(),
+        "impact": str(entry.get("decision_effect") or "").strip(),
+        "decision_effect": str(entry.get("decision_effect") or "").strip(),
+        "decision_scope": str(entry.get("decision_scope") or "").strip(),
+    }
+
+
+def route_llm_wiki_knowledge_trace(
+    facts: Dict[str, Any] | None,
+    *,
+    manifest: Mapping[str, Any],
+    scenario: str = "daily_report",
+    limit: int = 3,
+    target_date: str = "",
+    query_date: str = "",
+    facts_source: str = "derived",
+    fact_sources: Mapping[str, Any] | None = None,
+    warnings: Iterable[str] | None = None,
+    source_root: Path | str | None = None,
+) -> Dict[str, Any]:
+    """Build a deterministic, source-linked Wiki routing trace."""
+    target_date_text = str(target_date or "")
+    query_date_text = str(query_date or "")
+    normalized_target_date = target_date_text.strip()
+    normalized_query_date = query_date_text.strip()
+    target_date_valid = (
+        target_date_text == normalized_target_date
+        and is_iso_calendar_date(normalized_target_date)
+    )
+    query_date_valid = (
+        query_date_text == normalized_query_date
+        and is_iso_calendar_date(normalized_query_date)
+    )
+    routing_warnings = [str(item) for item in warnings or []]
+    if not normalized_target_date:
+        routing_warnings.append("目标交易日缺失，知识引用日期无法核对")
+    elif not target_date_valid:
+        routing_warnings.append("目标交易日格式无效，知识引用日期无法核对")
+    if not normalized_query_date:
+        routing_warnings.append("查询日期缺失，知识引用时间无法核对")
+    elif not query_date_valid:
+        routing_warnings.append("查询日期格式无效，知识引用时间无法核对")
+    facts_valid = facts is None or isinstance(facts, Mapping)
+    if not facts_valid:
+        routing_warnings.append("knowledge_facts_type_invalid")
+    routed_facts = _sanitize_routed_facts(
+        facts if isinstance(facts, Mapping) else {},
+        warnings=routing_warnings,
+    )
+    normalized_facts_source = "explicit" if str(facts_source or "").strip() == "explicit" else "derived"
+    manifest_data = manifest if isinstance(manifest, Mapping) else {}
+    manifest_warning_items = manifest_data.get("warnings")
+    manifest_error_items = manifest_data.get("errors")
+    manifest_warnings = (
+        [str(item) for item in manifest_warning_items]
+        if isinstance(manifest_warning_items, list)
+        else []
+    )
+    manifest_errors = (
+        [str(item) for item in manifest_error_items]
+        if isinstance(manifest_error_items, list)
+        else []
+    )
+    validation_errors = list(
+        dict.fromkeys(
+            [
+                *validate_knowledge_manifest(manifest),
+                *validate_knowledge_manifest_sources(
+                    manifest,
+                    root=Path(source_root) if source_root is not None else PROJECT_ROOT,
+                ),
+            ]
+        )
+    )
+    manifest_availability = str(manifest_data.get("availability") or "invalid").strip()
+    trace_warnings = [
+        *routing_warnings,
+        *manifest_warnings,
+        *manifest_errors,
+        *validation_errors,
+    ]
+    if validation_errors or manifest_availability == "invalid":
+        trace_warnings.append("知识清单缺失或格式无效，停止生成知识引用")
+    trace_warnings = list(dict.fromkeys(trace_warnings))
+    if (
+        validation_errors
+        or manifest_availability == "invalid"
+        or not target_date_valid
+        or not query_date_valid
+        or not facts_valid
+    ):
+        manifest_availability = "invalid"
+        manifest_entries = []
+    else:
+        manifest_entries = [
+            _manifest_entry_as_router_entry(entry)
+            for entry in manifest_data.get("entries") or []
+            if isinstance(entry, Mapping) and entry.get("available") is True
+        ]
+    ranked_matches = _rank_knowledge_entries(
+        routed_facts,
+        entries=manifest_entries,
+        scenario=scenario,
+        include_fact_keys=False,
+        enforce_required_conditions=True,
+        strict_terms=True,
+    )
+    normalized_fact_sources = _normalize_fact_sources(
+        routed_facts,
+        facts_source=normalized_facts_source,
+        fact_sources=fact_sources,
+        warnings=trace_warnings,
+    )
+    trace_warnings = list(dict.fromkeys(trace_warnings))
+    hits = []
+    for rank, ranked in enumerate(ranked_matches[: max(0, int(limit or 0))], start=1):
+        score, _, _, _, entry, matched_terms, matched_details = ranked
+        matched_conditions = [item["label"] for item in matched_details]
+        hit = _build_hit(entry, matched_terms, matched_conditions, rank)
+        matched_paths = _matched_fact_paths(
+            routed_facts,
+            matched_terms,
+            matched_details,
+            strict_terms=True,
+        )
+        hit.update(
+            {
+                "rank": rank,
+                "score": score,
+                "matched_fact_paths": matched_paths,
+                "matched_fact_sources": [
+                    {"path": path, **normalized_fact_sources[path]}
+                    for path in matched_paths
+                    if path in normalized_fact_sources
+                ],
+                "source_ref": dict(entry.get("source_ref") or {}),
+                "decision_effect": entry.get("decision_effect") or entry.get("impact") or "",
+                "decision_scope": entry.get("decision_scope") or "explanation_only",
+                "used_for": ["knowledge_citation", "explanation", "review"],
+                "not_used_for": list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE),
+            }
+        )
+        hits.append(hit)
+
+    trace = {
+        "schema_version": TRACE_SCHEMA_VERSION,
+        "target_date": normalized_target_date,
+        "query_date": normalized_query_date,
+        "scenario": str(scenario or "").strip(),
+        "manifest_hash": str(manifest_data.get("manifest_hash") or "").strip(),
+        "facts_hash": stable_json_hash(routed_facts),
+        "facts_source": normalized_facts_source,
+        "fact_sources": normalized_fact_sources,
+        "decision_scope": "explanation_only",
+        "not_used_for": list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE),
+        "availability": manifest_availability,
+        "warnings": trace_warnings,
+        "hits": hits,
+    }
+    trace["trace_hash"] = stable_json_hash(trace)
+    return trace
 
 
 def route_llm_wiki_knowledge(
@@ -1216,23 +1960,38 @@ def route_llm_wiki_knowledge(
     scenario: str = "daily_report",
     limit: int = 3,
 ) -> List[Dict[str, Any]]:
-    """Return explainable Wiki knowledge hits for the supplied report facts."""
-    facts_text = _joined_terms(facts or {})
-    ranked_matches = []
-    for order, entry in enumerate(KNOWLEDGE_INDEX):
-        if not _scenario_allowed(entry, scenario):
-            continue
-        matched_terms = _matched_trigger_terms(entry, facts_text)
-        matched_conditions = _matched_fact_conditions(entry, facts or {})
-        if (matched_terms or matched_conditions) and _entry_requirements_satisfied(entry, matched_terms, matched_conditions):
-            score = len(matched_terms) + len(matched_conditions) * 2
-            ranked_matches.append((score, len(matched_conditions), len(matched_terms), -order, entry, matched_terms, matched_conditions))
-
-    ranked_matches.sort(reverse=True)
+    """Return compatibility hits from registered fact roots or a free-text question."""
+    if not isinstance(facts, Mapping):
+        return []
+    routed_facts = {
+        key: value
+        for key, value in facts.items()
+        if key in EXPLICIT_FACT_ROOTS
+        or (key == "question" and isinstance(value, str))
+    }
+    if not routed_facts:
+        return []
+    ranked_matches = _rank_knowledge_entries(
+        routed_facts,
+        entries=KNOWLEDGE_INDEX,
+        scenario=scenario,
+    )
     hits = []
-    for _, _, _, _, entry, matched_terms, matched_conditions in ranked_matches[: max(0, int(limit or 0))]:
+    for _, _, _, _, entry, matched_terms, matched_details in ranked_matches[: max(0, int(limit or 0))]:
+        matched_conditions = [item["label"] for item in matched_details]
         hits.append(_build_hit(entry, matched_terms, matched_conditions, len(hits) + 1))
     return hits
 
 
-__all__ = ["KNOWLEDGE_INDEX", "build_llm_wiki_fact_tags", "route_llm_wiki_knowledge"]
+__all__ = [
+    "DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE",
+    "EXPLICIT_FACT_ROOTS",
+    "EXPLICIT_FACT_PATHS",
+    "KNOWLEDGE_INDEX",
+    "TRACE_SCHEMA_VERSION",
+    "build_llm_wiki_fact_bundle",
+    "build_llm_wiki_fact_tags",
+    "is_iso_calendar_date",
+    "route_llm_wiki_knowledge",
+    "route_llm_wiki_knowledge_trace",
+]

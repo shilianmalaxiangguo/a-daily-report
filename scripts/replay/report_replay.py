@@ -1,6 +1,7 @@
 import datetime
 from pathlib import Path
 
+from knowledge.llm_wiki_context import build_replay_llm_wiki_context
 from report.position_context import (
     existing_position_summary_from_context,
     extract_position_timeline_markdown,
@@ -2637,6 +2638,22 @@ def _fetch_calendar_events_compat(tencent, target_date):
         return tencent.get_calendar_events()
 
 
+def _attach_replay_llm_wiki_context(snapshot_data, target_date):
+    knowledge = snapshot_data.get("knowledge") if isinstance(snapshot_data, dict) else {}
+    knowledge = dict(knowledge) if isinstance(knowledge, dict) else {}
+    frozen_context = knowledge.get("llm_wiki") if isinstance(knowledge.get("llm_wiki"), dict) else {}
+    replay_context = build_replay_llm_wiki_context(
+        frozen_context,
+        target_date=target_date,
+        query_date=datetime.datetime.now(
+            datetime.timezone(datetime.timedelta(hours=8))
+        ).date().isoformat(),
+    )
+    knowledge["llm_wiki"] = replay_context
+    snapshot_data["knowledge"] = knowledge
+    return replay_context
+
+
 def build_replay_snapshot_contract(
     target_date,
     refresh_sources=None,
@@ -2667,9 +2684,41 @@ def build_replay_snapshot_contract(
             "supplementary_perspective": supplementary or "",
             "module_logs": logs,
         }
+    if not isinstance(snapshot_data, dict):
+        print_fn(f"❌ 快照格式不完整: {target_date}，无法复盘")
+        _append_log(
+            logs,
+            "load.snapshot",
+            "error",
+            "快照格式不完整，无法进入复盘流程",
+            target_date=target_date,
+        )
+        return {
+            "found": False,
+            "data": None,
+            "target_date": target_date,
+            "supplementary_perspective": supplementary or "",
+            "module_logs": logs,
+        }
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
     snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
+    replay_llm_wiki = _attach_replay_llm_wiki_context(snapshot_data, target_date)
+    if replay_llm_wiki.get("artifact_origin") == "frozen_trace":
+        _append_log(
+            logs,
+            "load.llm_wiki_trace",
+            "success",
+            "已复用目标日冻结知识引用",
+            trace_hash=(replay_llm_wiki.get("knowledge_trace") or {}).get("trace_hash", ""),
+        )
+    else:
+        _append_log(
+            logs,
+            "load.llm_wiki_trace",
+            "warning",
+            "当时知识引用缺失，未使用当前经验库补写",
+        )
     explicit_helpers = helpers or {}
     runtime_helpers = {**_load_default_mainline_helpers(), **explicit_helpers}
     if "query_new_high_feedback_series" in explicit_helpers:
@@ -2788,6 +2837,7 @@ def build_replay_snapshot_contract(
         "target_date": target_date,
         "supplementary_perspective": supplementary or "",
         "module_logs": logs,
+        "llm_wiki": replay_llm_wiki,
     }
 
 

@@ -162,7 +162,8 @@ def _knowledge_source_label(source_path):
 def _format_knowledge_hit_row(hit):
     if not isinstance(hit, dict):
         return ""
-    title = str(hit.get("title") or hit.get("knowledge_id") or "").strip()
+    knowledge_id = str(hit.get("knowledge_id") or "").strip()
+    title = str(hit.get("title") or knowledge_id).strip()
     triggered_by = [
         str(item or "").strip()
         for item in hit.get("triggered_by") or []
@@ -170,21 +171,24 @@ def _format_knowledge_hit_row(hit):
     ]
     impact = str(hit.get("impact") or "").strip()
     source = _knowledge_source_label(hit.get("source_path"))
-    if not title or not triggered_by or not impact:
+    if not knowledge_id or not title or not triggered_by or not impact:
         return ""
-    return f"| {title} | {'；'.join(triggered_by)} | {impact} | {source} |"
+    return f"| {title} | `{knowledge_id}` | {'；'.join(triggered_by)} | {impact} | {source} |"
 
 
 def build_knowledge_hits_note(llm_wiki):
-    hits = (llm_wiki or {}).get("knowledge_hits") or []
+    wiki = llm_wiki or {}
+    trace = wiki.get("knowledge_trace") if isinstance(wiki.get("knowledge_trace"), dict) else {}
+    trace_hits = trace.get("hits") if trace.get("schema_version") == "knowledge_trace.v1" else None
+    hits = trace_hits if isinstance(trace_hits, list) else wiki.get("knowledge_hits") or []
     rows = [_format_knowledge_hit_row(hit) for hit in hits]
     rows = [row for row in rows if row]
     if not rows:
         return []
     return [
         "## 经验库命中",
-        "| 命中经验 | 触发事实 | 本次影响 | 来源 |",
-        "| --- | --- | --- | --- |",
+        "| 命中经验 | 知识ID | 触发事实 | 本次影响 | 来源 |",
+        "| --- | --- | --- | --- | --- |",
         *rows,
     ]
 

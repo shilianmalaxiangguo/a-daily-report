@@ -21,6 +21,8 @@ from report.execution_wording import (
     PREMARKET_FULL_EXECUTION_TEXT,
 )
 from report.front_page_v2_renderer import render_front_page_v2
+from knowledge.llm_wiki_manifest import build_knowledge_manifest
+from knowledge.llm_wiki_router import KNOWLEDGE_INDEX
 
 
 class _RuntimeMemoryFactService:
@@ -389,10 +391,57 @@ class ReportRuntimeTest(unittest.TestCase):
 
     def test_real_runtime_keeps_formal_decision_identical_with_market_language_artifact(self):
         formal_seed = {
+            "selection_workflow": {
+                "final": {
+                    "execution_object": {"name": "长电科技", "code": "600584"},
+                    "position_pct": 50,
+                    "action_text": "B1先取得参与权，B2确认后再补",
+                }
+            },
+            "final_target_resolution": {
+                "new_entry_target": {"name": "长电科技", "code": "600584"},
+                "display_target": {"name": "长电科技", "code": "600584"},
+                "old_position_plan": {
+                    "holding": {"name": "太极实业", "code": "600667"},
+                    "action": "exit",
+                    "decision_class": "failed",
+                    "primary_action_window": "09:50-10:10",
+                },
+                "exit_action": {
+                    "action": "exit",
+                    "window": "09:50-10:10",
+                },
+            },
             "position_decision": {
                 "signal_grade": "50",
                 "target_position_pct": 50,
                 "participation_script": {"b1": "参与权", "b2": "确认权"},
+            },
+            "planned_participation": {
+                "position_plan_pct": 50,
+                "window": "09:50-10:10",
+                "action": "participate",
+            },
+            "two_layer_decision_payload": {
+                "front_decision": {"position_pct": 50},
+                "final_object": {"name": "长电科技", "code": "600584"},
+                "next_day_action": {
+                    "b1": "先取得参与权",
+                    "b2": "确认后再补",
+                    "exit": "09:50-10:10退出失败旧仓",
+                },
+                "b_level_conditions": {
+                    "b1": {"confirm": ["板块承接"]},
+                    "b2": {"confirm": ["个股转强"]},
+                },
+                "old_position_action_rows": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "action": "exit",
+                        "window": "09:50-10:10",
+                    }
+                ],
             },
             "selected_position_candidate": {
                 "name": "长电科技",
@@ -446,55 +495,62 @@ class ReportRuntimeTest(unittest.TestCase):
             "next_window_task": "下一交易日09:30-09:35先补齐事实。",
         }
 
-        def run(translation=None):
-            data = {"exchange_monitor_today": [], "exchange_monitor_nextday": []}
-            result = report_runtime.render_markdown_report_runtime(
-                data,
-                "2026-07-10",
-                helpers=helpers,
-                config={},
-                market_language_translation=translation,
-                persist_strategy_tracking=False,
+        original_attach = report_runtime._attach_llm_wiki_knowledge_hits
+        attach_states = []
+
+        def attach_after_formal_decisions(payload, context):
+            attach_states.append(
+                (
+                    isinstance(payload.get("selection_workflow"), dict),
+                    isinstance(payload.get("final_target_resolution"), dict),
+                )
             )
+            for key in (
+                "selection_workflow",
+                "final_target_resolution",
+                "position_decision",
+                "planned_participation",
+                "two_layer_decision_payload",
+            ):
+                payload[key] = copy.deepcopy(formal_seed[key])
+            return original_attach(payload, context)
+
+        def run(translation=None):
+            data = {
+                "exchange_monitor_today": [],
+                "exchange_monitor_nextday": [],
+                "knowledge_hit_facts": {
+                    "market": {
+                        "index_trend": "上涨",
+                        "breadth": "上涨家数偏弱",
+                        "turnover_distribution": "成交集中",
+                    }
+                },
+            }
+            with patch.object(
+                report_runtime,
+                "_attach_llm_wiki_knowledge_hits",
+                side_effect=attach_after_formal_decisions,
+            ):
+                result = report_runtime.render_markdown_report_runtime(
+                    data,
+                    "2026-07-10",
+                    helpers=helpers,
+                    config={},
+                    market_language_translation=translation,
+                    persist_strategy_tracking=False,
+                )
             return data, result["report"]
 
         def formal_projection(data):
-            position = data.get("position_decision") or {}
-            resolution = data.get("final_target_resolution") or {}
-            two_layer = data.get("two_layer_decision_payload") or {}
-            return {
-                "selection_workflow": copy.deepcopy(data.get("selection_workflow")),
-                "final_target_resolution": copy.deepcopy(resolution),
-                "selected_position_candidate": copy.deepcopy(
-                    data.get("selected_position_candidate")
-                ),
-                "current_core_candidate": copy.deepcopy(data.get("current_core_candidate")),
-                "position": {
-                    key: copy.deepcopy(position.get(key))
-                    for key in (
-                        "signal_grade",
-                        "target_position_pct",
-                        "participation_mode",
-                        "participation_script",
-                        "final_action",
-                    )
-                },
-                "old_position_action": copy.deepcopy(
-                    resolution.get("existing_position_target")
-                ),
-                "account_exposure_plan": copy.deepcopy(
-                    resolution.get("account_exposure_plan")
-                ),
-                "two_layer_front_decision": copy.deepcopy(
-                    two_layer.get("front_decision")
-                ),
-                "two_layer_next_day_action": copy.deepcopy(
-                    two_layer.get("next_day_action")
-                ),
-            }
+            return copy.deepcopy(
+                report_runtime._llm_wiki_formal_decision_projection(data)
+            )
 
         baseline_data, baseline_report = run()
         integrated_data, integrated_report = run(copy.deepcopy(artifact))
+
+        self.assertEqual(attach_states, [(True, True), (True, True)])
 
         self.assertEqual(
             formal_projection(integrated_data),
@@ -507,6 +563,177 @@ class ReportRuntimeTest(unittest.TestCase):
             integrated_report.index("## 市场语言翻译（研究证据）"),
         )
         self.assertNotIn("market_language_translation", integrated_data)
+
+        def rehash(manifest):
+            manifest["manifest_hash"] = report_runtime.stable_json_hash(
+                manifest,
+                excluded_keys={"manifest_hash"},
+            )
+            return manifest
+
+        def context_with_manifest(base_context, manifest):
+            context = copy.deepcopy(base_context)
+            context["manifest"] = manifest
+            context["manifest_hash"] = manifest["manifest_hash"]
+            context["availability"] = manifest["availability"]
+            context["warnings"] = list(manifest["warnings"])
+            return context
+
+        def run_with_context(context):
+            with patch(
+                "report.runtime.build_llm_wiki_context",
+                return_value=copy.deepcopy(context),
+            ):
+                return run()[0]
+
+        with TemporaryDirectory(dir=ROOT / "wiki") as tempdir:
+            source_file = Path(tempdir) / "decision-isolation-source.md"
+            source_path = source_file.relative_to(ROOT).as_posix()
+            source_entry = copy.deepcopy(
+                next(
+                    entry
+                    for entry in KNOWLEDGE_INDEX
+                    if entry["id"] == "market.low-frequency-focus"
+                )
+            )
+            source_entry["source_path"] = source_path
+
+            def compile_source_context():
+                manifest = build_knowledge_manifest(
+                    [source_entry],
+                    root=ROOT,
+                    wiki_version="2026-07-17",
+                    expected_source_paths=[source_path],
+                )
+                return report_runtime.build_llm_wiki_context(
+                    target_date="2026-07-10",
+                    query_date="2026-07-17",
+                    manifest=manifest,
+                    source_root=ROOT,
+                )
+
+            source_file.write_text("知识正文版本A\n", encoding="utf-8")
+            baseline_context = compile_source_context()
+            baseline_source_hash = baseline_context["manifest"]["entries"][0][
+                "source_ref"
+            ]["content_hash"]
+
+            version_manifest = copy.deepcopy(baseline_context["manifest"])
+            version_manifest["wiki_version"] = "2026-07-17-version-only"
+            version_context = context_with_manifest(
+                baseline_context,
+                rehash(version_manifest),
+            )
+
+            hit_manifest = copy.deepcopy(baseline_context["manifest"])
+            hit_manifest["entries"][0]["trigger_terms"] = ["不会命中的知识词"]
+            hit_context = context_with_manifest(
+                baseline_context,
+                rehash(hit_manifest),
+            )
+
+            missing_manifest = copy.deepcopy(baseline_context["manifest"])
+            missing_manifest["entries"] = []
+            missing_context = context_with_manifest(
+                baseline_context,
+                rehash(missing_manifest),
+            )
+
+            variant_data = {
+                "baseline": run_with_context(baseline_context),
+                "version_only": run_with_context(version_context),
+                "hit_change": run_with_context(hit_context),
+                "knowledge_missing": run_with_context(missing_context),
+            }
+
+            source_file.write_text("知识正文版本B\n", encoding="utf-8")
+            variant_data["source_mismatch"] = run_with_context(baseline_context)
+            body_context = compile_source_context()
+            changed_source_hash = body_context["manifest"]["entries"][0][
+                "source_ref"
+            ]["content_hash"]
+            variant_data["content_hash_only"] = run_with_context(body_context)
+
+        self.assertNotEqual(changed_source_hash, baseline_source_hash)
+
+        baseline_projection = formal_projection(variant_data["baseline"])
+        self.assertEqual(
+            baseline_projection["selection_workflow"]["final"]["execution_object"]["code"],
+            "600584",
+        )
+        self.assertEqual(
+            baseline_projection["position_decision"]["participation_script"],
+            {"b1": "参与权", "b2": "确认权"},
+        )
+        self.assertEqual(baseline_projection["planned_participation"]["position_plan_pct"], 50)
+        self.assertEqual(
+            baseline_projection["two_layer_b_level_conditions"],
+            {
+                "b1": {"confirm": ["板块承接"]},
+                "b2": {"confirm": ["个股转强"]},
+            },
+        )
+        self.assertEqual(baseline_projection["old_position_plan"]["action"], "exit")
+        self.assertEqual(
+            baseline_projection["old_position_action_rows"][0]["action"],
+            "exit",
+        )
+        self.assertEqual(
+            baseline_projection["final_target_resolution"]["exit_action"]["action"],
+            "exit",
+        )
+        for name, data in variant_data.items():
+            with self.subTest(variant=name):
+                self.assertEqual(formal_projection(data), baseline_projection)
+                self.assertTrue(
+                    data["knowledge"]["llm_wiki"]["decision_isolation"]["unchanged"]
+                )
+
+        wiki_by_variant = {
+            name: data["knowledge"]["llm_wiki"]
+            for name, data in variant_data.items()
+        }
+        baseline_wiki = wiki_by_variant["baseline"]
+        baseline_ids = [
+            hit["knowledge_id"] for hit in baseline_wiki["knowledge_hits"]
+        ]
+        self.assertEqual(
+            [hit["knowledge_id"] for hit in wiki_by_variant["version_only"]["knowledge_hits"]],
+            baseline_ids,
+        )
+        self.assertEqual(
+            [hit["knowledge_id"] for hit in wiki_by_variant["content_hash_only"]["knowledge_hits"]],
+            baseline_ids,
+        )
+        self.assertNotEqual(
+            [hit["knowledge_id"] for hit in wiki_by_variant["hit_change"]["knowledge_hits"]],
+            baseline_ids,
+        )
+        self.assertEqual(wiki_by_variant["knowledge_missing"]["knowledge_hits"], [])
+        self.assertEqual(wiki_by_variant["source_mismatch"]["availability"], "invalid")
+        self.assertEqual(wiki_by_variant["source_mismatch"]["knowledge_hits"], [])
+        self.assertEqual(
+            wiki_by_variant["source_mismatch"]["manifest_hash"],
+            baseline_wiki["manifest_hash"],
+        )
+        self.assertNotEqual(
+            wiki_by_variant["source_mismatch"]["knowledge_trace"]["trace_hash"],
+            baseline_wiki["knowledge_trace"]["trace_hash"],
+        )
+        self.assertEqual(
+            wiki_by_variant["content_hash_only"]["manifest"]["entries"][0]["source_ref"]["content_hash"],
+            changed_source_hash,
+        )
+        for name in ("version_only", "content_hash_only", "hit_change", "knowledge_missing"):
+            with self.subTest(changed_trace=name):
+                self.assertNotEqual(
+                    wiki_by_variant[name]["manifest_hash"],
+                    baseline_wiki["manifest_hash"],
+                )
+                self.assertNotEqual(
+                    wiki_by_variant[name]["knowledge_trace"]["trace_hash"],
+                    baseline_wiki["knowledge_trace"]["trace_hash"],
+                )
 
     def test_runtime_stores_bayesian_diagnosis_in_all_contexts(self):
         data = {"target_date": "2026-06-04", "source_date": "2026-06-04"}
@@ -5539,6 +5766,199 @@ assert rendered == "# migrated"
         self.assertIn("选股形态审美 ASCII 流程图", "\n".join(data["knowledge"]["llm_wiki"]["process_flows"]))
         self.assertIn("knowledge_compounding_candidates", data["knowledge"]["llm_wiki"])
         self.assertEqual(result["artifacts"]["llm_wiki"]["version"], data["knowledge"]["llm_wiki"]["version"])
+    def test_render_markdown_report_runtime_builds_wiki_manifest_once(self):
+        original_builder = report_runtime.build_llm_wiki_context
+        with patch(
+            "report.runtime.build_llm_wiki_context",
+            wraps=original_builder,
+        ) as context_builder, patch(
+            "report.runtime._render_markdown_report_legacy_body",
+            return_value="# runtime report",
+        ):
+            report_runtime.render_markdown_report_runtime(
+                {"query_date": "2026-07-17"},
+                "2026-07-16",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        context_builder.assert_called_once_with(
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+    def test_runtime_syncs_trace_diagnostics_and_confidence(self):
+        data = {"query_date": "2026-02-30"}
+        with patch(
+            "report.runtime._render_markdown_report_legacy_body",
+            return_value="# runtime report",
+        ):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-07-16",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        wiki_context = result["artifacts"]["llm_wiki"]
+        trace = wiki_context["knowledge_trace"]
+        self.assertEqual(trace["availability"], "invalid")
+        self.assertEqual(wiki_context["availability"], trace["availability"])
+        self.assertEqual(wiki_context["warnings"], trace["warnings"])
+        self.assertEqual(wiki_context["confidence"], 0.0)
+
+    def test_legacy_report_body_cannot_read_wiki_before_formal_decisions_finish(self):
+        stale_wiki = {
+            "manifest_hash": "0" * 64,
+            "knowledge_hits": [{"knowledge_id": "forged.rule"}],
+        }
+        data = {
+            "query_date": "2026-07-17",
+            "knowledge": {"llm_wiki": stale_wiki},
+            "knowledge_hit_facts": {
+                "market": {
+                    "index_trend": "上涨",
+                    "breadth": "上涨家数偏弱",
+                }
+            },
+        }
+        visible_during_legacy = []
+
+        def legacy_body(payload, target_date, **kwargs):
+            visible_during_legacy.append(
+                copy.deepcopy((payload.get("knowledge") or {}).get("llm_wiki"))
+            )
+            payload["selection_workflow"] = {
+                "final": {"position_pct": 0, "execution_object": {}}
+            }
+            payload["final_target_resolution"] = {
+                "final": {"position_pct": 0, "action_text": "只观察，不新增参与"}
+            }
+            return "# runtime report"
+
+        with patch(
+            "report.runtime._render_markdown_report_legacy_body",
+            side_effect=legacy_body,
+        ):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-07-16",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        self.assertEqual(visible_during_legacy, [None])
+        self.assertEqual(data["selection_workflow"]["final"]["position_pct"], 0)
+        self.assertEqual(
+            data["knowledge"]["llm_wiki"]["knowledge_trace"]["schema_version"],
+            "knowledge_trace.v1",
+        )
+        self.assertTrue(result["artifacts"]["llm_wiki"]["decision_isolation"]["unchanged"])
+
+    def test_formal_decision_projection_includes_b_level_conditions(self):
+        conditions = {"b1": {"confirm": ["板块承接"]}, "b2": {"confirm": ["个股转强"]}}
+
+        projection = report_runtime._llm_wiki_formal_decision_projection(
+            {"two_layer_decision_payload": {"b_level_conditions": conditions}}
+        )
+
+        self.assertEqual(projection["two_layer_b_level_conditions"], conditions)
+
+    def test_runtime_refreshes_knowledge_after_legacy_body_clears_candidate(self):
+        data = {
+            "selected_position_candidate": {
+                "name": "过程候选",
+                "identity": "市场核心",
+                "action_limit": "核心观察",
+                "risk_items": ["公告风险待确认"],
+            }
+        }
+
+        def _legacy_body(payload, target_date, **kwargs):
+            payload.pop("selected_position_candidate", None)
+            payload["selection_workflow"] = {
+                "final_target": "无明日执行对象",
+                "final_position_pct": 0,
+                "execution_nature": "只观察",
+            }
+            payload["final_target_resolution"] = {
+                "final": {"position_pct": 0, "action_text": "只观察，不新增参与"}
+            }
+            return "# runtime report"
+
+        with patch("report.runtime._render_markdown_report_legacy_body", side_effect=_legacy_body):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-07-16",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        ids = {
+            hit["knowledge_id"]
+            for hit in data["knowledge"]["llm_wiki"]["knowledge_hits"]
+        }
+        self.assertNotIn("candidate.quality-action-layer", ids)
+        self.assertNotIn("候选质量条件链与动作上限", result["report"])
+
+    def test_replay_runtime_reuses_frozen_wiki_trace_without_current_manifest(self):
+        fresh_data = {
+            "query_date": "2026-07-16",
+            "knowledge_hit_facts": {
+                "market": {
+                    "index_trend": "上涨",
+                    "breadth": "上涨家数偏弱",
+                    "turnover_distribution": "成交集中",
+                }
+            },
+        }
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# fresh"):
+            report_runtime.render_markdown_report_runtime(
+                fresh_data,
+                "2026-07-16",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+        frozen_wiki = copy.deepcopy(fresh_data["knowledge"]["llm_wiki"])
+        frozen_trace_hash = frozen_wiki["knowledge_trace"]["trace_hash"]
+        replay_data = {"knowledge": {"llm_wiki": frozen_wiki}, "query_date": "2026-07-17"}
+
+        with patch(
+            "report.runtime.build_llm_wiki_context",
+            side_effect=AssertionError("replay must not compile current Wiki"),
+        ), patch("report.runtime._render_markdown_report_legacy_body", return_value="# replay"):
+            result = report_runtime.render_markdown_report_runtime(
+                replay_data,
+                "2026-07-16",
+                run_mode="replay",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        replay_wiki = result["artifacts"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "frozen_trace")
+        self.assertEqual(replay_wiki["knowledge_trace"]["trace_hash"], frozen_trace_hash)
+        self.assertEqual(replay_wiki["knowledge_hits"], frozen_wiki["knowledge_trace"]["hits"])
+
+    def test_replay_runtime_does_not_backfill_missing_trace_from_current_wiki(self):
+        replay_data = {"query_date": "2026-07-17"}
+        with patch(
+            "report.runtime.build_llm_wiki_context",
+            side_effect=AssertionError("replay must not compile current Wiki"),
+        ), patch("report.runtime._render_markdown_report_legacy_body", return_value="# replay"):
+            result = report_runtime.render_markdown_report_runtime(
+                replay_data,
+                "2026-07-16",
+                run_mode="replay",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        replay_wiki = result["artifacts"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "missing")
+        self.assertEqual(replay_wiki["knowledge_hits"], [])
+        self.assertIn("当时知识引用缺失", replay_wiki["warnings"][0])
+        self.assertNotIn("## 经验库命中", result["report"])
 
     def test_render_markdown_report_runtime_attaches_knowledge_hits_from_facts(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
@@ -5559,10 +5979,17 @@ assert rendered == "# migrated"
             )
 
         hits = data["knowledge"]["llm_wiki"]["knowledge_hits"]
+        trace = data["knowledge"]["llm_wiki"]["knowledge_trace"]
         self.assertEqual(hits[0]["knowledge_id"], "market.low-frequency-focus")
         self.assertIn("指数上涨", hits[0]["triggered_by"])
+        self.assertEqual(trace["schema_version"], "knowledge_trace.v1")
+        self.assertEqual(trace["target_date"], "2026-05-29")
+        self.assertEqual(trace["facts_source"], "explicit")
+        self.assertEqual(trace["hits"], hits)
+        self.assertEqual(hits[0]["decision_scope"], "explanation_only")
+        self.assertTrue(data["knowledge"]["llm_wiki"]["decision_isolation"]["unchanged"])
         self.assertIn("## 经验库命中", result["report"])
-        self.assertIn("| 指数强但赚钱效应弱 | 指数上涨；上涨家数偏弱；成交集中 |", result["report"])
+        self.assertIn("| 指数强但赚钱效应弱 | `market.low-frequency-focus` | 指数上涨；上涨家数偏弱；成交集中 |", result["report"])
         self.assertEqual(result["artifacts"]["llm_wiki"]["knowledge_hits"], hits)
 
     def test_render_markdown_report_runtime_derives_market_structure_knowledge_hits(self):
@@ -5808,7 +6235,7 @@ assert rendered == "# migrated"
         self.assertEqual(result["report"].count("去弱留强是短线执行表达"), 1)
         self.assertEqual(result["report"].count("## 交易原则"), 1)
 
-    def test_runtime_front_page_uses_account_knowledge_hit_for_real_action(self):
+    def test_runtime_routes_account_knowledge_after_formal_action(self):
         from report.report_document_builder import (
             build_report_shell_contract as _build_report_shell_contract_actual,
             replace_placeholder_lines as _replace_placeholder_lines_actual,
@@ -5826,6 +6253,10 @@ assert rendered == "# migrated"
             "target_position_pct": 50,
         }
         data = {
+            "knowledge_hit_facts": {
+                "account": {"status": "实际不可买"},
+                "candidate": {"identity": "市场核心"},
+            },
             "personal_position_context": {
                 "account_profile": {
                     "cash_available": 9800,
@@ -5883,12 +6314,23 @@ assert rendered == "# migrated"
         )
 
         report = result["report"]
+        account_section = report[
+            report.index("## 明日账户建议") : report.index("## 一、交易纪律")
+        ]
         self.assertIn("| 明日动作 | 0%不参与；只保留观察对象，不新开 |", report)
         self.assertIn("| 观察对象 | 暂无 |", report)
         self.assertIn("| 明日执行目标 | 无昨日持仓，不涉及明日执行对象 |", report)
         self.assertNotIn("| T0主对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", report)
         self.assertIn("| 新增参与上限 | 0 |", report)
-        self.assertIn("| 实际不可买不降低市场身份 | 实际不可买；市场核心 |", report)
+        self.assertIn(
+            "| 实际不可买不降低市场身份 | `account.unbuyable-core-anchor` | 实际不可买；市场核心 |",
+            report,
+        )
+        self.assertNotIn("| 经验库依据 |", account_section)
+        self.assertLess(
+            report.index("| 明日动作 | 0%不参与；只保留观察对象，不新开 |"),
+            report.index("## 经验库命中"),
+        )
         self.assertIn("| 当前状态 | 0%无合格标的 |", report)
         self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", report)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 |", report)

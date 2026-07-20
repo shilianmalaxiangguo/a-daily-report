@@ -773,6 +773,14 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "## 不执行条件",
                     "- 市场继续走弱",
                     "",
+                    "## 知识模块",
+                    "- LLM Wiki版本：2026-07-17",
+                    "",
+                    "## 经验库命中",
+                    "| 命中经验 | 知识ID |",
+                    "|---|---|",
+                    "| 指数强但赚钱效应弱 | `market.low-frequency-focus` |",
+                    "",
                     "## 市场语言翻译（研究证据）",
                     "| 项目 | 结论 |",
                     "|------|------|",
@@ -792,9 +800,13 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('<h2 class="bear-section-action" id="明日执行结论">明日执行结论</h2>', html)
         self.assertIn('<h2 class="bear-section-action" id="满仓条件执行条件">满仓条件执行条件</h2>', html)
         self.assertIn('<h2 class="bear-section-action" id="不执行条件">不执行条件</h2>', html)
+        self.assertIn('<h2 class="bear-section-evidence" id="知识模块">知识模块</h2>', html)
+        self.assertIn('<h2 class="bear-section-evidence" id="经验库命中">经验库命中</h2>', html)
         self.assertIn('<h2 class="bear-section-evidence" id="市场语言翻译研究证据">市场语言翻译（研究证据）</h2>', html)
         self.assertIn('<h2 class="bear-section-evidence" id="板块资金扩散淘汰赛">板块资金扩散淘汰赛</h2>', html)
         self.assertLess(html.index('id="明日执行结论"'), html.index('id="市场语言翻译研究证据"'))
+        self.assertLess(html.index('id="明日执行结论"'), html.index('id="知识模块"'))
+        self.assertLess(html.index('id="明日执行结论"'), html.index('id="经验库命中"'))
         self.assertLess(html.index('id="明日执行结论"'), html.index('id="板块资金扩散淘汰赛"'))
         self.assertIn(".markdown-body h2.bear-section-action", html)
         self.assertIn(".markdown-body h2.bear-section-evidence", html)

@@ -1,6 +1,9 @@
+import copy
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,16 +13,43 @@ sys.path.insert(0, str(ROOT / "scripts"))
 def _m(*parts):
     return "".join(parts)
 
-from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_context import (
+    build_llm_wiki_context,
+    build_replay_llm_wiki_context,
+    is_complete_frozen_llm_wiki_context,
+    llm_wiki_confidence_for_availability,
+)
+from knowledge.llm_wiki_manifest import build_knowledge_manifest, stable_json_hash
+from knowledge.llm_wiki_router import KNOWLEDGE_INDEX, route_llm_wiki_knowledge_trace
+
+
+def _frozen_context(target_date="2026-07-16"):
+    context = build_llm_wiki_context(target_date=target_date, query_date="2026-07-17")
+    trace = route_llm_wiki_knowledge_trace(
+        {
+            "account": {"status": "实际不可买"},
+            "candidate": {"identity": "市场核心"},
+        },
+        manifest=context["manifest"],
+        target_date=target_date,
+        query_date="2026-07-17",
+    )
+    context["knowledge_trace"] = trace
+    context["knowledge_hits"] = list(trace["hits"])
+    return context
 
 
 class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-07-09")
+        self.assertEqual(context["version"], "2026-07-17")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
+        self.assertEqual(context["manifest"]["schema_version"], "knowledge_manifest.v1")
+        self.assertEqual(context["manifest_hash"], context["manifest"]["manifest_hash"])
+        self.assertEqual(len(context["manifest"]["entries"]), len(KNOWLEDGE_INDEX))
+        self.assertEqual(context["availability"], context["manifest"]["availability"])
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
         self.assertIn("wiki/交易思想/价格行为与能量框架.md", context["source_paths"])
         self.assertIn("wiki/交易思想/布鲁克斯价格行为趋势.md", context["source_paths"])
@@ -228,6 +258,475 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("akshare/iwencai are fallback only", context["data_source_policy"])
         self.assertIn("daily report runtime writes reports, report companion docs, snapshots, and PostgreSQL facts only", context["publish_policy"])
         self.assertIn("retired frontend/static publish paths are not part of report generation", context["publish_policy"])
+
+    def test_context_keeps_target_dates_and_stable_manifest_without_breaking_legacy_fields(self):
+        first = build_llm_wiki_context(target_date="2026-07-16", query_date="2026-07-17")
+        second = build_llm_wiki_context(target_date="2026-07-16", query_date="2026-07-17")
+
+        self.assertEqual(first["target_date"], "2026-07-16")
+        self.assertEqual(first["query_date"], "2026-07-17")
+        self.assertEqual(first["manifest_hash"], second["manifest_hash"])
+        self.assertEqual(
+            first["available_source_paths"],
+            first["manifest"]["available_source_paths"],
+        )
+        self.assertEqual(first["source_paths"], second["source_paths"])
+        self.assertEqual(first["field_mappings"], second["field_mappings"])
+        self.assertEqual(
+            first["confidence"],
+            llm_wiki_confidence_for_availability(first["availability"]),
+        )
+        self.assertEqual(first["expected_source_paths"], list(dict.fromkeys(first["expected_source_paths"])))
+        self.assertEqual(
+            set(first["expected_source_paths"]),
+            set(first["source_paths"]) | set(first["missing_source_paths"]),
+        )
+
+    def test_field_mappings_remain_compatibility_context_not_manifest_entries(self):
+        compatibility_only = "只属于兼容上下文的流程说明，不是可路由知识"
+        with patch(
+            "knowledge.llm_wiki_context.FIELD_MAPPINGS",
+            [compatibility_only],
+        ):
+            context = build_llm_wiki_context(
+                target_date="2026-07-16",
+                query_date="2026-07-17",
+            )
+
+        self.assertEqual(context["field_mappings"], [compatibility_only])
+        self.assertNotIn(
+            compatibility_only,
+            {
+                value
+                for entry in context["manifest"]["entries"]
+                for value in [
+                    entry["knowledge_id"],
+                    entry["title"],
+                    *entry["trigger_terms"],
+                ]
+            },
+        )
+
+    def test_context_rejects_injected_manifest_with_inconsistent_availability(self):
+        manifest = dict(build_llm_wiki_context()["manifest"])
+        manifest["availability"] = "ready"
+        manifest["manifest_hash"] = stable_json_hash(
+            manifest,
+            excluded_keys={"manifest_hash"},
+        )
+
+        context = build_llm_wiki_context(manifest=manifest)
+
+        self.assertEqual(context["availability"], "invalid")
+        self.assertIn("manifest_availability_inconsistent", context["warnings"])
+
+    def test_context_reports_malformed_manifest_list_fields_without_raising(self):
+        base_manifest = build_llm_wiki_context()["manifest"]
+        for field in (
+            "entries",
+            "sources",
+            "expected_source_paths",
+            "available_source_paths",
+            "missing_source_paths",
+            "invalid_source_paths",
+            "warnings",
+            "errors",
+        ):
+            with self.subTest(field=field):
+                manifest = copy.deepcopy(base_manifest)
+                manifest[field] = 1
+                manifest["manifest_hash"] = stable_json_hash(
+                    manifest,
+                    excluded_keys={"manifest_hash"},
+                )
+
+                context = build_llm_wiki_context(manifest=manifest)
+
+                self.assertEqual(context["availability"], "invalid")
+                self.assertEqual(context["confidence"], 0.0)
+                self.assertIn(
+                    f"manifest_field_type_invalid:{field}",
+                    context["warnings"],
+                )
+                self.assertIsInstance(context["warnings"], list)
+
+    def test_replay_rejects_incomplete_self_hashed_trace(self):
+        trace = {
+            "schema_version": "knowledge_trace.v1",
+            "target_date": "2026-07-16",
+            "manifest_hash": "f" * 64,
+        }
+        trace["trace_hash"] = stable_json_hash(trace)
+
+        context = build_replay_llm_wiki_context(
+            {
+                "manifest_hash": trace["manifest_hash"],
+                "knowledge_trace": trace,
+            },
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(context["replay_knowledge_status"], "missing")
+        self.assertEqual(context["knowledge_hits"], [])
+        self.assertIn("冻结知识引用不完整", context["warnings"][0])
+
+    def test_missing_replay_trace_defaults_query_date_to_shanghai_calendar(self):
+        with patch("knowledge.llm_wiki_context.datetime") as datetime_mock:
+            datetime_mock.now.return_value.date.return_value.isoformat.return_value = "2026-07-18"
+            context = build_replay_llm_wiki_context(
+                {},
+                target_date="2026-07-16",
+            )
+
+        datetime_mock.now.assert_called_once()
+        self.assertEqual(context["query_date"], "2026-07-18")
+        self.assertEqual(context["knowledge_trace"]["query_date"], "2026-07-18")
+
+    def test_fresh_trace_completeness_check_rejects_partial_context(self):
+        complete = _frozen_context()
+        partial = copy.deepcopy(complete)
+        partial["knowledge_trace"].pop("facts_hash")
+        partial["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            partial["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+
+        self.assertTrue(
+            is_complete_frozen_llm_wiki_context(
+                complete,
+                target_date="2026-07-16",
+            )
+        )
+        self.assertFalse(
+            is_complete_frozen_llm_wiki_context(
+                partial,
+                target_date="2026-07-16",
+            )
+        )
+
+        missing_fact_sources = copy.deepcopy(complete)
+        missing_fact_sources["knowledge_trace"].pop("fact_sources")
+        missing_fact_sources["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            missing_fact_sources["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+        self.assertFalse(
+            is_complete_frozen_llm_wiki_context(
+                missing_fact_sources,
+                target_date="2026-07-16",
+            )
+        )
+
+        forged_fact_source = copy.deepcopy(complete)
+        first_path = next(iter(forged_fact_source["knowledge_trace"]["fact_sources"]))
+        forged_fact_source["knowledge_trace"]["fact_sources"][first_path] = {
+            "source": "official",
+            "input_path": "forged://not-a-source",
+        }
+        forged_fact_source["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            forged_fact_source["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+        self.assertFalse(
+            is_complete_frozen_llm_wiki_context(
+                forged_fact_source,
+                target_date="2026-07-16",
+            )
+        )
+
+        missing_hit_sources = copy.deepcopy(complete)
+        missing_hit_sources["knowledge_trace"]["hits"][0].pop(
+            "matched_fact_sources"
+        )
+        missing_hit_sources["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            missing_hit_sources["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+        self.assertFalse(
+            is_complete_frozen_llm_wiki_context(
+                missing_hit_sources,
+                target_date="2026-07-16",
+            )
+        )
+
+        for field in ("decision_scope", "not_used_for"):
+            with self.subTest(trace_boundary_field=field):
+                missing_boundary = copy.deepcopy(complete)
+                missing_boundary["knowledge_trace"].pop(field)
+                missing_boundary["knowledge_trace"]["trace_hash"] = stable_json_hash(
+                    missing_boundary["knowledge_trace"],
+                    excluded_keys={"trace_hash"},
+                )
+                self.assertFalse(
+                    is_complete_frozen_llm_wiki_context(
+                        missing_boundary,
+                        target_date="2026-07-16",
+                    )
+                )
+
+    def test_frozen_trace_completeness_rejects_noncanonical_dates_even_with_valid_hash(self):
+        invalid_dates = (
+            "",
+            " ",
+            " 2026-07-16",
+            "2026-07-16 ",
+            "2026-7-16",
+            "2026-02-30",
+        )
+        for invalid_date in invalid_dates:
+            with self.subTest(date_field="target_date", value=repr(invalid_date)):
+                frozen = _frozen_context()
+                frozen["target_date"] = invalid_date
+                frozen["knowledge_trace"]["target_date"] = invalid_date
+                frozen["knowledge_trace"]["trace_hash"] = stable_json_hash(
+                    frozen["knowledge_trace"],
+                    excluded_keys={"trace_hash"},
+                )
+
+                self.assertFalse(
+                    is_complete_frozen_llm_wiki_context(
+                        frozen,
+                        target_date=invalid_date,
+                    )
+                )
+                replay = build_replay_llm_wiki_context(
+                    frozen,
+                    target_date=invalid_date,
+                    query_date="2026-07-17",
+                )
+                self.assertEqual(replay["artifact_origin"], "missing")
+                self.assertEqual(replay["knowledge_hits"], [])
+
+        for invalid_date in invalid_dates:
+            with self.subTest(date_field="query_date", value=repr(invalid_date)):
+                frozen = _frozen_context()
+                frozen["query_date"] = invalid_date
+                frozen["knowledge_trace"]["query_date"] = invalid_date
+                frozen["knowledge_trace"]["trace_hash"] = stable_json_hash(
+                    frozen["knowledge_trace"],
+                    excluded_keys={"trace_hash"},
+                )
+
+                self.assertFalse(
+                    is_complete_frozen_llm_wiki_context(
+                        frozen,
+                        target_date="2026-07-16",
+                    )
+                )
+                replay = build_replay_llm_wiki_context(
+                    frozen,
+                    target_date="2026-07-16",
+                    query_date="2026-07-18",
+                )
+                self.assertEqual(replay["artifact_origin"], "missing")
+                self.assertEqual(replay["knowledge_hits"], [])
+
+    def test_frozen_trace_completeness_rejects_context_trace_query_date_mismatch(self):
+        frozen = _frozen_context()
+        frozen["query_date"] = "2026-07-18"
+
+        self.assertFalse(
+            is_complete_frozen_llm_wiki_context(
+                frozen,
+                target_date="2026-07-16",
+            )
+        )
+
+    def test_fresh_trace_normalizes_list_fact_sources_and_remains_replay_safe(self):
+        target_date = "2026-07-16"
+        context = build_llm_wiki_context(
+            target_date=target_date,
+            query_date="2026-07-17",
+        )
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"rebound_roles": ["主动带动反弹"]}},
+            manifest=context["manifest"],
+            target_date=target_date,
+            query_date="2026-07-17",
+            facts_source="explicit",
+            limit=10,
+        )
+        context["knowledge_trace"] = trace
+        context["knowledge_hits"] = list(trace["hits"])
+
+        self.assertEqual(
+            trace["fact_sources"],
+            {
+                "market.rebound_roles": {
+                    "source": "explicit",
+                    "input_path": "knowledge_hit_facts.market.rebound_roles",
+                }
+            },
+        )
+        rebound_hit = next(
+            hit
+            for hit in trace["hits"]
+            if hit["knowledge_id"] == "market.rebound-quality-active-passive"
+        )
+        self.assertEqual(rebound_hit["matched_fact_paths"], ["market.rebound_roles"])
+        self.assertEqual(
+            rebound_hit["matched_fact_sources"],
+            [
+                {
+                    "path": "market.rebound_roles",
+                    "source": "explicit",
+                    "input_path": "knowledge_hit_facts.market.rebound_roles",
+                }
+            ],
+        )
+        self.assertTrue(
+            is_complete_frozen_llm_wiki_context(
+                context,
+                target_date=target_date,
+            )
+        )
+
+    def test_replay_rejects_frozen_hit_whose_source_differs_from_manifest(self):
+        frozen = _frozen_context()
+        frozen["knowledge_trace"]["hits"][0]["source_ref"]["content_hash"] = "0" * 64
+        frozen["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            frozen["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+
+        context = build_replay_llm_wiki_context(
+            frozen,
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(context["artifact_origin"], "missing")
+        self.assertEqual(context["knowledge_hits"], [])
+        self.assertIn("冻结知识引用不完整", context["warnings"][0])
+        self.assertEqual(context["confidence"], 0.0)
+        self.assertEqual(context["review_confidence"], 0.0)
+
+    def test_replay_rejects_unknown_trace_availability(self):
+        frozen = _frozen_context()
+        frozen["knowledge_trace"]["availability"] = "unknown"
+        frozen["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            frozen["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+
+        context = build_replay_llm_wiki_context(
+            frozen,
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(context["artifact_origin"], "missing")
+        self.assertEqual(context["knowledge_hits"], [])
+
+    def test_replay_rejects_duplicate_frozen_trace_hits_and_ranks(self):
+        frozen = _frozen_context()
+        frozen["knowledge_trace"]["hits"].append(dict(frozen["knowledge_trace"]["hits"][0]))
+        frozen["knowledge_trace"]["trace_hash"] = stable_json_hash(
+            frozen["knowledge_trace"],
+            excluded_keys={"trace_hash"},
+        )
+
+        context = build_replay_llm_wiki_context(
+            frozen,
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(context["artifact_origin"], "missing")
+        self.assertEqual(context["knowledge_hits"], [])
+        self.assertIn("冻结知识引用不完整", context["warnings"][0])
+
+    def test_replay_rejects_frozen_trace_from_another_target_date(self):
+        context = build_replay_llm_wiki_context(
+            _frozen_context("2026-07-15"),
+            target_date="2026-07-16",
+            query_date="2026-07-17",
+        )
+
+        self.assertEqual(context["artifact_origin"], "missing")
+        self.assertEqual(context["knowledge_hits"], [])
+        self.assertIn("冻结知识引用日期与目标交易日不一致", context["warnings"][0])
+
+    def test_replay_keeps_frozen_trace_and_reports_current_source_change(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_path = "wiki/交易思想/测试节点.md"
+            source = root / source_path
+            source.parent.mkdir(parents=True)
+            source.write_text("# 测试节点\n\n第一版。\n", encoding="utf-8")
+            entry = copy.deepcopy(KNOWLEDGE_INDEX[0])
+            entry["source_path"] = source_path
+            manifest = build_knowledge_manifest([entry], root=root, wiki_version="v1")
+            frozen = build_llm_wiki_context(
+                target_date="2026-07-16",
+                query_date="2026-07-16",
+                manifest=manifest,
+                source_root=root,
+            )
+            trace = route_llm_wiki_knowledge_trace(
+                {
+                    "market": {
+                        "index_trend": "上涨",
+                        "breadth": "上涨家数偏弱",
+                    }
+                },
+                manifest=manifest,
+                source_root=root,
+                target_date="2026-07-16",
+                query_date="2026-07-16",
+            )
+            frozen["knowledge_trace"] = trace
+            frozen["knowledge_hits"] = copy.deepcopy(trace["hits"])
+            frozen_trace_hash = trace["trace_hash"]
+            frozen_trace = copy.deepcopy(trace)
+            frozen_manifest = copy.deepcopy(manifest)
+            frozen_availability = frozen["availability"]
+            source.write_text("# 测试节点\n\n第二版。\n", encoding="utf-8")
+
+            replay = build_replay_llm_wiki_context(
+                frozen,
+                target_date="2026-07-16",
+                query_date="2026-07-17",
+                source_root=root,
+            )
+            replay_again = build_replay_llm_wiki_context(
+                replay,
+                target_date="2026-07-16",
+                query_date="2026-07-18",
+                source_root=root,
+            )
+
+        self.assertEqual(replay["artifact_origin"], "frozen_trace")
+        self.assertEqual(replay["knowledge_trace"]["trace_hash"], frozen_trace_hash)
+        self.assertEqual(replay["knowledge_trace"], frozen_trace)
+        self.assertEqual(replay["manifest"], frozen_manifest)
+        self.assertEqual(replay["knowledge_hits"], frozen_trace["hits"])
+        self.assertEqual(replay["frozen_availability"], frozen_availability)
+        self.assertEqual(replay["availability"], "source_changed")
+        self.assertEqual(replay["frozen_confidence"], frozen["confidence"])
+        self.assertEqual(replay["confidence"], 0.4)
+        self.assertEqual(replay["review_confidence"], 0.4)
+        self.assertEqual(replay["replay_source_diagnostics"]["status"], "changed")
+        self.assertEqual(
+            replay["replay_source_diagnostics"]["review_availability"],
+            "source_changed",
+        )
+        self.assertIn(
+            f"source_content_hash_mismatch:{source_path}",
+            replay["replay_source_diagnostics"]["issues"],
+        )
+        self.assertTrue(
+            any("当前经验库来源与冻结版本不同" in item for item in replay["warnings"])
+        )
+        self.assertEqual(replay_again["artifact_origin"], "frozen_trace")
+        self.assertEqual(replay_again["manifest"], frozen_manifest)
+        self.assertEqual(replay_again["knowledge_trace"], frozen_trace)
+        self.assertEqual(replay_again["knowledge_hits"], frozen_trace["hits"])
+        self.assertEqual(replay_again["availability"], "source_changed")
+        self.assertEqual(replay_again["frozen_confidence"], frozen["confidence"])
+        self.assertEqual(replay_again["confidence"], 0.4)
+        self.assertEqual(replay_again["review_confidence"], 0.4)
 
     def test_build_llm_wiki_context_exposes_selection_shape_ascii_flow(self):
         context = build_llm_wiki_context()
