@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-07-18
+- **Total Sessions**: 8
+- **Last Active**: 2026-07-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~252 | Active |
+| `journal-1.md` | ~285 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-07-21 | LLM Wiki引用轨迹与决定质量优化 | `dd052294` | `develop` |
 | 7 | 2026-07-18 | 完成受控 Agent Memory Vault 试点 | `10c92985` | `develop` |
 | 6 | 2026-07-11 | 量化压力回放校准与HTML研究汇报 | `43911824`, `0568e125` | `develop` |
 | 5 | 2026-06-23 | 日报HTML盘面反馈复盘模块 | `026d0a6d` | `develop` |

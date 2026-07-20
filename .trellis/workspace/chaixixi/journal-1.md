@@ -250,3 +250,36 @@ Bear/readable 日报 HTML 新增盘面反馈复盘图卡：从标准 Markdown �
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: LLM Wiki引用轨迹与决定质量优化
+
+**Date**: 2026-07-21
+**Task**: LLM Wiki引用轨迹与决定质量优化
+**Branch**: `develop`
+
+### Summary
+
+完成LLM Wiki来源清单、事实路径、fresh/replay冻结轨迹、决定隔离、短引用、导航与检查；独立提交前审计及隔离验证通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dd052294` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
