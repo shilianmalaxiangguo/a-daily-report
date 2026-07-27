@@ -7,10 +7,164 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.selection_workflow import build_selection_workflow, render_selection_workflow_mermaid
+from report.selection_workflow import (
+    _action_text,
+    _apply_premarket_review_position,
+    _position_pct,
+    build_selection_workflow,
+    candidate_limit_down_risk_review_reason,
+    render_selection_workflow_mermaid,
+)
+
+
+def _complete_local_trend_sector_proof(direction):
+    return {
+        "direction": direction,
+        "cross_day_continuity": True,
+        "divergence_acceptance": True,
+        "internal_expansion": True,
+        "competition_comparison": True,
+        "competition_state": "单主线聚焦",
+    }
+
+
+def _qualified_sector_context(*, direction="电力", candidate_sector=None, **market_fields):
+    context = {
+        "market_state_snapshot": {
+            "market_state": "收缩防守",
+            "execution_bias": "avoid",
+            "pulse_stage": "退潮",
+            "operation_state": "观察态",
+        },
+        "mainline_name": direction,
+        "local_trend_sector_proof": _complete_local_trend_sector_proof(direction),
+        "sector_derived_candidates": [
+            {
+                "name": "豫能控股",
+                "code": "001896",
+                "sector": candidate_sector or direction,
+                "anchor_reversal_decision": "可作为主对象",
+                "candidate_role": "板块锚",
+                "sector_derivation_evidence": "跨日持续、分歧承接、内部扩散并完成竞争方向对照",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "条件不满足回到0%不参与",
+            }
+        ],
+    }
+    context.update(market_fields)
+    return context
 
 
 class SelectionWorkflowTest(unittest.TestCase):
+    def test_position_decision_rejects_non_tier_plans_before_selection(self):
+        for position_pct in (1, 33, 39, 40, 60, 61, 75, 99, 150):
+            with self.subTest(position_pct=position_pct):
+                self.assertEqual(_position_pct({"target_position_pct": position_pct}), 0)
+        for position_pct, expected in ((0, 0), (50, 50), (100, 100)):
+            with self.subTest(position_pct=position_pct):
+                self.assertEqual(
+                    _position_pct({"target_position_pct": position_pct}),
+                    expected,
+                )
+
+    def test_premarket_position_cap_keeps_final_position_on_an_exact_tier(self):
+        for cap_pct, expected in ((0, 0), (40, 0), (50, 50), (60, 50), (75, 50), (100, 100)):
+            with self.subTest(cap_pct=cap_pct):
+                position_pct = _apply_premarket_review_position(
+                    100,
+                    {"position_cap_pct": cap_pct},
+                )
+                self.assertEqual(position_pct, expected)
+                self.assertEqual(
+                    _action_text(position_pct),
+                    {0: "0%不参与", 50: "50%条件执行", 100: "100%核心进攻"}[expected],
+                )
+        for position_pct in (33, 40, 60, 75):
+            with self.subTest(position_pct=position_pct):
+                self.assertEqual(_action_text(position_pct), "0%不参与")
+
+    def test_weak_market_with_complete_local_trend_allows_b1_only(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=_qualified_sector_context(),
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "001896")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertTrue(workflow["final"]["b1_only"])
+        self.assertFalse(workflow["final"]["b2_allowed"])
+        self.assertEqual(workflow["market_participation_limit"]["max_position_pct"], 50)
+
+    def test_stale_sector_fact_date_cannot_create_target_day_participation(self):
+        context = _qualified_sector_context()
+        context["source_date"] = "2026-07-26"
+        context["sector_derived_candidates"][0]["source_date"] = "2026-07-26"
+
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=context,
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["data_completeness"]["status"], "failed")
+        self.assertIn("板块事实日期", workflow["data_completeness"]["missing_fields"])
+        self.assertEqual(workflow["source_dates"]["report_date"], "2026-07-27")
+        self.assertEqual(workflow["source_dates"]["sector_source_date"], "2026-07-26")
+
+    def test_broad_market_confirmation_with_complete_local_trend_allows_b2(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=_qualified_sector_context(
+                broad_market_confirmation=True,
+            ),
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(workflow["final"]["position_pct"], 100)
+        self.assertFalse(workflow["final"]["b1_only"])
+        self.assertTrue(workflow["final"]["b2_allowed"])
+
+    def test_weak_market_without_complete_local_trend_stays_out(self):
+        context = _qualified_sector_context()
+        context["local_trend_sector_proof"]["competition_comparison"] = False
+
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=context,
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("竞争方向对照", workflow["local_trend_sector_proof"]["evidence_gaps"])
+
+    def test_systemic_risk_blocks_even_complete_local_trend(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=_qualified_sector_context(
+                systemic_risk_active=True,
+            ),
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertTrue(workflow["market_participation_limit"]["systemic_risk"])
+
+    def test_candidate_outside_proven_direction_stays_out(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=_qualified_sector_context(candidate_sector="半导体"),
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("个股与已证明方向不匹配", workflow["final"]["failure_conditions"])
+
     def test_builds_required_nodes_and_final_source(self):
         workflow = build_selection_workflow(
             target_date="2026-06-04",
@@ -18,6 +172,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "发酵"},
                 "mainline_name": "电力",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("电力"),
                 "mainline_turnover_summary": {"current_mainline": "电力"},
                 "sector_trend_snapshot": [
                     {
@@ -371,6 +526,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "板块发酵"},
                 "mainline_name": "AI算力",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力"),
                 "sector_trend_snapshot": [
                     {
                         "sector": "AI算力",
@@ -447,10 +603,24 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["final"]["execution_object"], {})
         self.assertEqual(workflow["final"]["position_pct"], 0)
         self.assertFalse(row["new_entry_qualified"])
+        self.assertEqual(row["status"], "风险复核样本")
         self.assertEqual(row["eliminated_at"], "N7")
+        self.assertEqual(row["observation_layer"], "process_observation")
         self.assertIn("跌停", row["price_action_block_reason"])
         self.assertEqual(row["brooks_price_action_judge"]["verdict"], "跌停风险优先")
         self.assertIn("反包专项", row["eliminated_reason"])
+
+    def test_bare_reversal_plan_boolean_cannot_bypass_limit_down_risk(self):
+        reason = candidate_limit_down_risk_review_reason(
+            {
+                "name": "华天科技",
+                "code": "002185",
+                "change_pct": -10.0,
+                "limit_down_reversal_plan": True,
+            }
+        )
+
+        self.assertIn("跌停", reason)
 
     def test_limit_down_quote_backfill_blocks_sector_candidate(self):
         class FakeService:
@@ -650,6 +820,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "修复"},
                 "mainline_name": "半导体",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("半导体"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -688,6 +859,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "修复"},
                 "mainline_name": "半导体",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("半导体"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -727,6 +899,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "修复"},
                 "mainline_name": "半导体",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("半导体"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -850,6 +1023,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "收缩防守"},
                 "mainline_name": "半导体",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("半导体"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -874,6 +1048,7 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["final"]["position_pct"], 50)
         self.assertTrue(row["new_entry_qualified"])
         self.assertEqual(row["status"], "最终执行对象")
+        self.assertTrue(row["limit_down_reversal_plan"])
         self.assertEqual(row["price_action_block_reason"], "")
         self.assertEqual(row["brooks_price_action_judge"]["verdict"], "跌停后反包修复待确认")
 
@@ -894,6 +1069,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "收缩防守"},
                 "mainline_name": "半导体",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("半导体"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1074,6 +1250,47 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertTrue(any("显式对象不在候选池" in item for item in n6["conflicts"]))
         self.assertTrue(any("000001" in item for item in n9["conflicts"]))
 
+    def test_unqualified_selected_pool_candidate_yields_to_qualified_sector_candidate(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("电力"),
+                "sector_derived_candidates": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                    }
+                ],
+                "extreme_conviction_list": [
+                    {
+                        "name": "上海石化",
+                        "code": "600688",
+                        "sector": "炼化及贸",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "条件不满足回到0%",
+                    }
+                ],
+            },
+            selected_position_candidate={
+                "name": "上海石化",
+                "code": "600688",
+                "sector": "炼化及贸",
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "001896")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        by_code = {item["stock"]["code"]: item for item in workflow["candidate_pool"]}
+        self.assertEqual(by_code["001896"]["status"], "最终执行对象")
+        self.assertEqual(by_code["600688"]["status"], "过程候选")
+
     def test_selected_candidate_needs_execution_evidence_even_when_reversal_passes(self):
         workflow = build_selection_workflow(
             target_date="2026-06-05",
@@ -1139,7 +1356,7 @@ class SelectionWorkflowTest(unittest.TestCase):
         n6 = next(node for node in workflow["nodes"] if node["node_id"] == "N6")
         self.assertTrue(any("显式对象不在候选池" in item for item in n6["conflicts"]))
 
-    def test_position_is_normalized_to_allowed_values(self):
+    def test_position_rejects_outside_contract_and_accepts_exact_full_tier(self):
         workflow = build_selection_workflow(
             target_date="2026-06-04",
             execution_stage_context={
@@ -1157,14 +1374,17 @@ class SelectionWorkflowTest(unittest.TestCase):
             position_decision={"target_position_pct": 70},
         )
 
-        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["final"]["execution_object"], {})
         self.assertNotIn("70", workflow["final"]["action_text"])
 
         full_workflow = build_selection_workflow(
             target_date="2026-06-04",
             execution_stage_context={
                 "mainline_name": "电力",
-                "extreme_conviction_list": [
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("电力"),
+                "sector_derived_candidates": [
                     {
                         "name": "豫能控股",
                         "code": "001896",
@@ -1174,7 +1394,7 @@ class SelectionWorkflowTest(unittest.TestCase):
                     }
                 ],
             },
-            position_decision={"target_position_pct": 120},
+            position_decision={"target_position_pct": 100},
         )
         empty_workflow = build_selection_workflow(
             target_date="2026-06-04",
@@ -1190,7 +1410,7 @@ class SelectionWorkflowTest(unittest.TestCase):
                     }
                 ],
             },
-            position_decision={"target_position_pct": 49},
+            position_decision={"target_position_pct": 39},
         )
 
         self.assertEqual(full_workflow["final"]["position_pct"], 100)
@@ -1214,6 +1434,8 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "进攻分歧"},
                 "mainline_name": "AI算力基础设施",
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1265,6 +1487,8 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "进攻分歧"},
                 "mainline_name": "AI算力基础设施",
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1327,6 +1551,8 @@ class SelectionWorkflowTest(unittest.TestCase):
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "进攻分歧"},
                 "mainline_name": "AI算力基础设施",
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1385,6 +1611,7 @@ class SelectionWorkflowTest(unittest.TestCase):
             },
             execution_stage_context={
                 "mainline_name": "AI算力基础设施",
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1430,6 +1657,8 @@ class SelectionWorkflowTest(unittest.TestCase):
             },
             execution_stage_context={
                 "mainline_name": "AI算力基础设施",
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1469,6 +1698,8 @@ class SelectionWorkflowTest(unittest.TestCase):
             },
             execution_stage_context={
                 "mainline_name": "AI算力基础设施",
+                "broad_market_confirmation": True,
+                "local_trend_sector_proof": _complete_local_trend_sector_proof("AI算力基础设施"),
                 "sector_derived_candidates": [
                     {
                         "name": "太极实业",
@@ -1510,8 +1741,37 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertIn("N1[\"N1 市场周期判断", mermaid)
         self.assertIn("N7[\"N7 候选对照淘汰", mermaid)
         self.assertIn("布鲁克斯", mermaid)
+        self.assertIn("布鲁克斯裁判：价格确认1只", mermaid)
         self.assertIn("N8[\"N8 仓位与执行条件", mermaid)
         self.assertIn("豫能控股(001896)", mermaid)
+        self.assertIn(
+            'N1["N1 市场周期判断<br/>允许继续诊断"]',
+            mermaid,
+        )
+        self.assertIn(
+            'FINAL["最终：豫能控股(001896)<br/>仓位：50%"]',
+            mermaid,
+        )
+        self.assertNotIn(r"\n", mermaid)
+
+    def test_render_mermaid_wraps_long_judgement_with_explicit_line_breaks(self):
+        workflow = {
+            "nodes": [
+                {
+                    "node_id": "N7",
+                    "node_name": "候选对照淘汰",
+                    "judgement": "布鲁克斯价格行为裁判：价格确认6只，二次确认0只，风险/分歧0只；共同选择待复核37只",
+                }
+            ],
+            "final": {"position_pct": 0},
+        }
+
+        mermaid = render_selection_workflow_mermaid(workflow)
+        node_line = next(line for line in mermaid.splitlines() if line.strip().startswith('N7['))
+        judgement_lines = node_line.split("<br/>")[1:]
+
+        self.assertGreaterEqual(len(judgement_lines), 3)
+        self.assertTrue(all(len(line.rstrip('"]')) <= 22 for line in judgement_lines))
 
 
 if __name__ == "__main__":

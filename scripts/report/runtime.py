@@ -88,6 +88,7 @@ from report.execution_wording import (
     PREMARKET_50_TRIGGER_TEXT,
     PREMARKET_FULL_EXECUTION_SHORT_TEXT,
     PREMARKET_FULL_EXECUTION_TEXT,
+    PREMARKET_FULL_TRIGGER_TEXT,
     SAME_STOCK_T_CONFIRMATION_CLAUSE,
 )
 from report.bayesian_diagnosis import build_bayesian_diagnosis_packet
@@ -98,8 +99,20 @@ from report.sniper_target_derivation import (
 )
 from report.next_day_attribution import render_next_day_attribution_lines
 from report.position_context import (
-    PENDING_PREVIOUS_REPORT_ROLE,
+    build_old_position_plan,
+    is_tomorrow_empty_account_action,
     is_inferred_previous_report_position,
+    normalize_inferred_previous_target_records,
+    position_fact_status as _position_fact_status,
+    resolve_tomorrow_account_action,
+)
+from report.position_tier_contract import (
+    POSITION_TIER_NONE_PCT,
+    POSITION_TIER_B1_PCT,
+    POSITION_TIER_B1_B2_PCT,
+    normalize_planned_position_tier_pct,
+    normalize_position_tier_pct,
+    position_tier_pct_to_x,
 )
 from report.selection_workflow import (
     build_selection_workflow as _default_build_selection_workflow,
@@ -149,9 +162,9 @@ _APPENDIX_FRONT_PAGE_HEADING_RENAMES = {
     "## 七、最终结论": "## 结论依据",
 }
 
-_INFERRED_PREVIOUS_PLAN_ZERO_VERDICT = "🟠 0%不参与；先确认成交事实"
+_INFERRED_PREVIOUS_PLAN_ZERO_VERDICT = "🟠 0%不参与；外部交易待核实"
 _INFERRED_PREVIOUS_PLAN_ZERO_ACTION = (
-    "先确认前日报计划对象是否成交；未确认成交前按0x，不执行持仓卖出或加仓动作"
+    "只核实外部交易是否成交；未核实成交前按0x，不执行持仓卖出或加仓动作"
 )
 
 _SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -624,6 +637,8 @@ def _has_final_zero_participation_surface(lines):
     if "| 仓位姿态 | 0%不参与 |" in text:
         return True
     if "| 明日仓位 | 0%不参与 |" in text:
+        return True
+    if "| 明日新仓 | 0%不参与 |" in text:
         return True
     if "| 最终对象 | 无 |" in text:
         return True
@@ -1548,11 +1563,13 @@ def _decision_ledger_final_action_from_runtime(
     preflight = sector_capital_preflight if isinstance(sector_capital_preflight, dict) else {}
     preflight_action = preflight.get("final_action") if isinstance(preflight.get("final_action"), dict) else {}
     preflight_target = preflight_action.get("target") if isinstance(preflight_action.get("target"), dict) else {}
-    preflight_pct = int(_runtime_cell_float(preflight_action.get("position_pct")) or 0)
-    if preflight_target and preflight_pct >= 50:
+    preflight_pct = _normalize_position_pct_to_allowed_state(
+        preflight_action.get("position_pct")
+    )
+    if preflight_target and preflight_pct in (POSITION_TIER_B1_PCT, POSITION_TIER_B1_B2_PCT):
         return {
             "label": _first_runtime_text(preflight_action.get("label")) or "50%条件执行",
-            "position_pct": _normalize_position_pct_to_allowed_state(preflight_pct),
+            "position_pct": preflight_pct,
             "target": dict(preflight_target),
             "source": _first_runtime_text(preflight_action.get("source")) or "sector_capital_preflight",
             "reason": _first_runtime_text(preflight_action.get("reason")),
@@ -2144,7 +2161,12 @@ def _runtime_existing_position_summary(data=None, market_research_snapshot=None)
         data.get("existing_position_summary"),
         market_research_snapshot.get("existing_position_summary"),
     ):
-        if isinstance(source, dict) and (source.get("has_position") or source.get("summary")):
+        if isinstance(source, dict) and (
+            isinstance(source.get("has_position"), bool)
+            or source.get("has_pending_position")
+            or source.get("summary")
+            or source.get("position_source") == "explicit_empty_input"
+        ):
             return source
     return {}
 
@@ -2241,19 +2263,41 @@ def _runtime_enrich_opportunity_payload(payload=None, data=None, reference_targe
 def _runtime_existing_position_target(summary, data=None):
     if not isinstance(summary, dict):
         return {}
+    summary = dict(summary)
+    normalize_inferred_previous_target_records(summary)
     text = _first_runtime_text(summary.get("summary"))
-    if not text:
-        return {}
-    inherited_fields = {
-        key: summary.get(key)
-        for key in ("source_report_date", "inferred_from_previous_report", "position_source", "default_position_pct")
-        if summary.get(key) not in (None, "")
-    }
-    role = (
-        PENDING_PREVIOUS_REPORT_ROLE
-        if is_inferred_previous_report_position(summary)
-        else "旧仓处理"
-    )
+    inherited_fields = {}
+    for key in (
+        "source_report_date",
+        "inferred_from_previous_report",
+        "position_source",
+        "default_position_pct",
+        "has_position",
+        "has_pending_position",
+        "position",
+        "position_pct",
+        "lots",
+        "shares",
+        "cost",
+        "position_kind",
+        "holding_note",
+        "trade_action",
+    ):
+        if summary.get(key) not in (None, ""):
+            inherited_fields[key] = summary.get(key)
+    if isinstance(summary.get("old_position_plan"), dict):
+        inherited_fields["old_position_plan"] = dict(summary.get("old_position_plan"))
+    role = _first_runtime_text(summary.get("role"), "旧仓处理")
+    structured_name = _first_runtime_text(summary.get("name"), summary.get("stock_name"))
+    structured_code = _normalize_runtime_stock_code(summary.get("code") or summary.get("stock_code"))
+    if structured_name or structured_code:
+        return {
+            "name": structured_name or structured_code,
+            "code": structured_code,
+            "role": role,
+            "summary": text,
+            **inherited_fields,
+        }
     match = re.search(r"([\u4e00-\u9fffA-Za-z0-9Ａ-Ｚａ-ｚ]+)\((\d{6})\)", text)
     if match:
         name = re.sub(r"^(?:持有|已清仓|旧仓|上一份日报目标)", "", match.group(1)).strip()
@@ -2275,15 +2319,12 @@ def _runtime_existing_position_target(summary, data=None):
                 "summary": text,
                 **inherited_fields,
             }
-    return {"name": text, "role": role, "summary": text, **inherited_fields}
+    return {"name": text, "role": role, "summary": text, **inherited_fields} if text else inherited_fields
 
 
 def _runtime_old_position_for_opportunity(data=None, market_research_snapshot=None):
     summary = _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot)
-    if isinstance(summary, dict) and (
-        summary.get("inferred_from_previous_report") is True
-        or summary.get("position_source") == "previous_report_target_default_1x"
-    ):
+    if _position_fact_status(summary, context_provided=True) != "confirmed":
         return {}
     old_position = _runtime_existing_position_target(summary, data=data)
     if not old_position:
@@ -2300,8 +2341,6 @@ def _runtime_old_position_for_opportunity(data=None, market_research_snapshot=No
 
 def _runtime_existing_position_requires_action(existing=None):
     existing = existing if isinstance(existing, dict) else {}
-    if existing.get("inferred_from_previous_report") is True:
-        return False
     text = _first_runtime_text(existing.get("summary"), existing.get("action"), existing.get("role"))
     if not text:
         return False
@@ -2432,6 +2471,8 @@ def _runtime_opportunity_comparison(
         account_capital=account_capital,
         requested_participation_pct=requested_pct,
     )
+    if not old_position:
+        comparison["old_position"] = {}
     extra_comparisons = []
     for extra_target in _runtime_opportunity_extra_candidates(
         data=data,
@@ -2445,6 +2486,8 @@ def _runtime_opportunity_comparison(
             account_capital=account_capital,
             requested_participation_pct=requested_pct,
         )
+        if not old_position:
+            extra_comparison["old_position"] = {}
         if extra_comparison:
             extra_comparisons.append(extra_comparison)
     if extra_comparisons:
@@ -2573,7 +2616,7 @@ def _runtime_same_stock_target(left=None, right=None):
     )
 
 
-def _runtime_full_or_empty_exposure_plan(
+def _runtime_position_tier_exposure_plan(
     *,
     existing=None,
     new_entry=None,
@@ -2581,65 +2624,169 @@ def _runtime_full_or_empty_exposure_plan(
     priority="",
     inferred_default_old_position=False,
     proxy_ready=False,
+    position_fact_status="",
+    new_entry_position_pct=None,
 ):
     existing = existing if isinstance(existing, dict) else {}
     new_entry = new_entry if isinstance(new_entry, dict) else {}
     tradable_proxy = tradable_proxy if isinstance(tradable_proxy, dict) else {}
     priority = _first_runtime_text(priority)
     visible_new_entry = tradable_proxy if proxy_ready and tradable_proxy else new_entry
-    pending_position_confirmation = bool(existing and inferred_default_old_position)
+    fact_status = _first_runtime_text(position_fact_status)
+    if not fact_status:
+        fact_status = "confirmed" if inferred_default_old_position or existing else "none"
+    pending_position_confirmation = fact_status == "pending_confirmation"
     same_stock_candidate = bool(
         existing
         and not pending_position_confirmation
         and visible_new_entry
         and _runtime_same_stock_target(existing, visible_new_entry)
     )
-    old_position_1x = bool(
-        existing
-        and not pending_position_confirmation
-        and (priority == "same_stock_t" or same_stock_candidate)
-    )
-    new_entry_1x = bool(
+    old_position_active = bool(existing and fact_status == "confirmed")
+    planned_new_entry_active = bool(
         visible_new_entry
         and priority in {"new_entry", "tradable_proxy", "new_entry_after_old_exit", "same_stock_t"}
     )
-    same_stock_t = bool(old_position_1x and new_entry_1x and same_stock_candidate)
-    possible_overlap_2x = bool(
-        old_position_1x
-        and new_entry_1x
+    old_position_pct = None
+    old_position_actual_pct = None
+    if old_position_active:
+        old_position_actual_pct = (
+            POSITION_TIER_B1_PCT
+            if inferred_default_old_position
+            else next(
+                (
+                    existing.get(key)
+                    for key in ("position_pct", "position", "default_position_pct")
+                    if existing.get(key) not in (None, "")
+                ),
+                None,
+            )
+        )
+        if old_position_actual_pct is not None:
+            try:
+                old_position_pct = normalize_position_tier_pct(old_position_actual_pct)
+            except (TypeError, ValueError):
+                old_position_pct = None
+    planned_new_entry_pct = 0
+    if planned_new_entry_active:
+        new_entry_value = new_entry_position_pct
+        if new_entry_value in (None, ""):
+            new_entry_value = next(
+                (
+                    visible_new_entry.get(key)
+                    for key in ("target_position_pct", "position_pct", "position")
+                    if visible_new_entry.get(key) not in (None, "")
+                ),
+                POSITION_TIER_NONE_PCT,
+            )
+        try:
+            planned_new_entry_pct = normalize_planned_position_tier_pct(new_entry_value)
+        except (TypeError, ValueError):
+            planned_new_entry_pct = 0
+    old_position_x = position_tier_pct_to_x(old_position_pct) if old_position_pct is not None else None
+    planned_new_entry_x = position_tier_pct_to_x(planned_new_entry_pct)
+    old_position_tier_known = old_position_pct is not None
+    same_stock_target = bool(
+        old_position_active
+        and old_position_tier_known
+        and planned_new_entry_pct > 0
+        and same_stock_candidate
+    )
+    new_entry_pct = planned_new_entry_pct
+    if old_position_active and not old_position_tier_known:
+        new_entry_pct = 0
+    elif old_position_active and planned_new_entry_pct > 0:
+        if same_stock_target:
+            new_entry_pct = max(0, planned_new_entry_pct - int(old_position_pct or 0))
+        else:
+            remaining_account_pct = max(0, POSITION_TIER_B1_B2_PCT - int(old_position_pct or 0))
+            new_entry_pct = min(planned_new_entry_pct, remaining_account_pct)
+    new_entry_x = position_tier_pct_to_x(new_entry_pct)
+    new_entry_active = bool(planned_new_entry_active and new_entry_pct > 0)
+    same_stock_t = bool(new_entry_active and same_stock_target)
+    possible_overlap = bool(
+        old_position_active
+        and new_entry_active
         and (priority in {"new_entry", "tradable_proxy", "same_stock_t"} or same_stock_candidate)
     )
-    max_exposure_x = 2 if possible_overlap_2x else (1 if old_position_1x or new_entry_1x else 0)
-    if pending_position_confirmation and new_entry_1x:
-        policy = "前日报计划对象待成交确认，未确认前按0x；新目标按计划先B1，B2确认后才补"
+    max_exposure_pct = (
+        None
+        if fact_status == "unknown" or (old_position_active and not old_position_tier_known)
+        else min(POSITION_TIER_B1_B2_PCT, int(old_position_pct or 0) + int(new_entry_pct or 0))
+    )
+    max_exposure_x = position_tier_pct_to_x(max_exposure_pct) if max_exposure_pct is not None else None
+    possible_overlap_2x = bool(possible_overlap and max_exposure_x == 2)
+    if old_position_active and not old_position_tier_known:
+        policy = "旧仓实际比例无法归入0/1x/2x；账户风险暴露待确认，明日新仓不新增参与"
+    elif fact_status == "unknown" and planned_new_entry_active:
+        policy = "持仓未输入；执行B1前先确认旧仓，账户风险暴露待确认"
+    elif fact_status == "unknown":
+        policy = "持仓未输入；账户风险暴露待确认"
+    elif pending_position_confirmation and planned_new_entry_active:
+        policy = "外部交易待核实，未核实前按0x；新目标按计划先B1，B2确认后才补"
     elif pending_position_confirmation:
-        policy = "前日报计划对象待成交确认，未确认前按0x；确认成交后才计入B1"
+        policy = "外部交易待核实，未核实前按0x；核实成交后才计入B1"
     elif possible_overlap_2x and same_stock_t:
-        policy = f"同股T：{SAME_STOCK_T_CONFIRMATION_CLAUSE}；B2只作临时风险暴露，尾盘回到1x或更低"
+        policy = (
+            f"同股T：{SAME_STOCK_T_CONFIRMATION_CLAUSE}；"
+            "B2确认后总仓位到2x/100%，确认失败保持1x/50%或更低"
+        )
     elif possible_overlap_2x:
-        policy = "旧仓1x + 新买1x只作临时交叉最高2x；旧仓失效先卖可卖旧仓"
-    elif old_position_1x and new_entry_1x:
-        policy = "旧仓1x先处理；新买1x只在资金释放后执行，计划内最高1x"
-    elif old_position_1x:
-        policy = "旧仓1x；明日不新增参与"
-    elif new_entry_1x:
-        policy = "新买1x；条件不满足回到0%不参与"
+        policy = "旧仓1x/50% + 新仓1x/50%合计2x/100%；旧仓失效先卖可卖旧仓"
+    elif same_stock_target and planned_new_entry_pct <= int(old_position_pct or 0):
+        policy = (
+            f"同股计划总档{planned_new_entry_x}x/{planned_new_entry_pct}%已由现有仓位满足；"
+            + (
+                "维持1x/50%，本计划不追加B2"
+                if planned_new_entry_pct == POSITION_TIER_B1_PCT
+                else "维持2x/100%，不新增参与"
+            )
+        )
+    elif old_position_active and planned_new_entry_active and not new_entry_active:
+        policy = "账户已有2x/100%；新仓只在旧仓释放后执行，账户总仓位不超过2x/100%"
+    elif old_position_active and planned_new_entry_active:
+        policy = (
+            f"先按旧仓计划释放资金；新仓计划{planned_new_entry_x}x/{planned_new_entry_pct}%"
+            "只在旧仓处理后执行；账户总仓位不超过2x/100%"
+        )
+    elif old_position_active:
+        policy = f"旧仓{old_position_x}x/{old_position_pct}%；明日不新增参与"
+    elif new_entry_active:
+        policy = f"新仓{new_entry_x}x/{new_entry_pct}%；条件不满足回到0%不参与"
+    elif fact_status == "none":
+        policy = "0x；已确认无旧仓且没有执行对象"
     else:
         policy = "0x；没有执行对象"
     return {
-        "schema_version": "full_or_empty_exposure.v1",
-        "old_position_1x": old_position_1x,
-        "new_entry_1x": new_entry_1x,
+        "schema_version": "position_tier_exposure.v2",
+        "position_fact_status": fact_status,
+        "old_position_actual_pct": old_position_actual_pct,
+        "old_position_pct": old_position_pct,
+        "old_position_x": old_position_x,
+        "planned_new_entry_pct": planned_new_entry_pct,
+        "planned_new_entry_x": planned_new_entry_x,
+        "new_entry_pct": new_entry_pct,
+        "new_entry_x": new_entry_x,
+        "same_stock_target": same_stock_target,
         "same_stock_t": same_stock_t,
-        "possible_intraday_overlap_2x": possible_overlap_2x,
+        "possible_intraday_overlap": possible_overlap,
+        "max_runtime_exposure_pct": max_exposure_pct,
         "max_runtime_exposure_x": max_exposure_x,
-        "old_position_label": _runtime_stock_label(existing) if old_position_1x else "",
+        "old_position_1x": old_position_x == 1,
+        "new_entry_1x": bool(new_entry_active),
+        "possible_intraday_overlap_2x": possible_overlap_2x,
+        "old_position_label": _runtime_stock_label(existing) if old_position_active else "",
         "pending_position_confirmation": pending_position_confirmation,
         "pending_position_label": _runtime_stock_label(existing) if pending_position_confirmation else "",
-        "new_entry_label": _runtime_stock_label(visible_new_entry) if new_entry_1x else "",
+        "new_entry_label": _runtime_stock_label(visible_new_entry) if planned_new_entry_active else "",
         "priority": priority,
         "policy": policy,
+        "legacy": {"source_schema_version": None},
     }
+
+
+def _runtime_full_or_empty_exposure_plan(**kwargs):
+    return _runtime_position_tier_exposure_plan(**kwargs)
 
 
 def _build_runtime_selection_workflow(
@@ -2722,6 +2869,15 @@ def _store_runtime_selection_workflow(workflow, data=None, execution_stage_conte
     if not isinstance(workflow, dict) or not workflow:
         return {}
     stored = _default_store_selection_workflow(workflow, data, execution_stage_context, market_research_snapshot)
+    local_trend_sector_proof = (
+        stored.get("local_trend_sector_proof")
+        if isinstance(stored.get("local_trend_sector_proof"), dict)
+        else {}
+    )
+    if local_trend_sector_proof:
+        for target in (data, execution_stage_context, market_research_snapshot):
+            if isinstance(target, dict):
+                target["local_trend_sector_proof"] = local_trend_sector_proof
     traces = _candidate_traces_from_selection_workflow(stored)
     if traces and isinstance(execution_stage_context, dict):
         execution_stage_context["candidate_traces"] = traces
@@ -2750,13 +2906,24 @@ def _runtime_selection_workflow(data=None, market_research_snapshot=None, execut
         sources.extend([data.get("market_research_snapshot"), data.get("execution_stage_context")])
     if isinstance(execution_stage_context, dict):
         sources.append(execution_stage_context.get("market_research_snapshot"))
+    target_date = ""
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        target_date = _runtime_fact_date(source)
+        if target_date:
+            break
     for source in sources:
         if not isinstance(source, dict):
             continue
         workflow = source.get("selection_workflow")
         if not isinstance(workflow, dict):
             continue
-        if workflow.get("schema_version") == "selection_workflow.v1":
+        workflow_date = _runtime_fact_date(workflow)
+        if (
+            workflow.get("schema_version") == "selection_workflow.v1"
+            and not (target_date and workflow_date and workflow_date != target_date)
+        ):
             return workflow
     return {}
 
@@ -3208,6 +3375,19 @@ def _build_runtime_final_target_resolution(
         market_research_snapshot=market_research_snapshot,
         execution_stage_context=execution_stage_context,
     )
+    tomorrow_account_action = resolve_tomorrow_account_action(
+        *(
+            source.get("tomorrow_account_action")
+            for source in (
+                data,
+                position_decision,
+                market_research_snapshot,
+                execution_stage_context,
+            )
+            if isinstance(source, dict)
+        )
+    )
+    tomorrow_empty = is_tomorrow_empty_account_action(tomorrow_account_action)
     workflow_final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     workflow_execution_object = workflow_final.get("execution_object") if isinstance(workflow_final, dict) else {}
     workflow_position_pct = _front_page_target_pct(
@@ -3253,14 +3433,33 @@ def _build_runtime_final_target_resolution(
         )
     ):
         selected_position_candidate = {}
-    existing = _runtime_existing_position_target(
-        _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot),
-        data=data,
+    if tomorrow_empty:
+        position_decision = dict(position_decision or {})
+        position_decision["target_position_pct"] = 0
+        selected_position_candidate = {}
+    existing_summary = deepcopy(
+        _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot)
     )
+    normalize_inferred_previous_target_records(existing_summary)
+    data_context = data if isinstance(data, dict) else {}
+    personal_context = data_context.get("personal_position_context") if isinstance(data_context.get("personal_position_context"), dict) else {}
+    position_context_provided = bool(data_context.get("position_context_provided")) or any(
+        isinstance(container.get("existing_position_summary"), dict)
+        and bool(container.get("existing_position_summary"))
+        for container in (personal_context, data_context, market_research_snapshot if isinstance(market_research_snapshot, dict) else {})
+    )
+    fact_status = _position_fact_status(existing_summary, context_provided=position_context_provided)
+    existing = _runtime_existing_position_target(existing_summary, data=data)
+    old_position_plan = build_old_position_plan(existing_summary)
     if existing.get("position_source") == "previous_report_target_default_1x":
         existing["inferred_from_previous_report"] = True
-        existing["has_position"] = False
-        existing["has_pending_position"] = True
+        existing["has_position"] = True
+        existing["has_pending_position"] = False
+        existing["role"] = "旧仓处理"
+        existing["position"] = float(POSITION_TIER_B1_PCT)
+        existing["position_pct"] = float(POSITION_TIER_B1_PCT)
+        fact_status = "confirmed"
+        old_position_plan = build_old_position_plan(existing)
     new_entry = _runtime_stock_payload(selected_position_candidate)
     if workflow_zero_controls_execution:
         new_entry = {}
@@ -3292,71 +3491,134 @@ def _build_runtime_final_target_resolution(
             or existing.get("position_source") == "previous_report_target_default_1x"
         )
     )
-    existing_requires_action = _runtime_existing_position_requires_action(existing)
+    existing_requires_action = _runtime_existing_position_requires_action(existing) or bool(
+        old_position_plan.get("action") in {"exit", "reduce", "wait_for_repair"}
+    )
     if inferred_default_old_position:
         existing_requires_action = False
     old_position_first = bool(existing_requires_action and new_entry and not (new_entry_ready or proxy_ready))
     old_position_only = bool(existing_requires_action and existing and not new_entry and not proxy_ready)
+    holding_full_old_position = False
+    if old_position_plan.get("action") == "hold" and existing:
+        try:
+            holding_full_old_position = normalize_position_tier_pct(
+                existing.get("position_pct", existing.get("position"))
+            ) == POSITION_TIER_B1_B2_PCT
+        except (TypeError, ValueError):
+            holding_full_old_position = False
     priority = (
-        "new_entry_after_old_exit"
-        if existing_requires_action and (new_entry_ready or proxy_ready)
+        "tomorrow_empty"
+        if tomorrow_empty
         else (
-            "tradable_proxy"
-            if proxy_ready
-            else ("old_position_t" if (old_position_first or old_position_only) else ("new_entry" if new_entry_ready else "wait"))
+            "old_position"
+            if holding_full_old_position and (new_entry_ready or proxy_ready)
+            else (
+                "new_entry_after_old_exit"
+                if existing_requires_action and (new_entry_ready or proxy_ready)
+                else (
+                    "tradable_proxy"
+                    if proxy_ready
+                    else ("old_position_t" if (old_position_first or old_position_only) else ("new_entry" if new_entry_ready else "wait"))
+                )
+            )
         )
     )
+    if priority == "old_position":
+        account_observation_target = dict(new_entry)
+        execution_new_entry = {}
+    account_exposure_plan = _runtime_position_tier_exposure_plan(
+        existing=existing,
+        new_entry=execution_new_entry,
+        tradable_proxy=tradable_proxy,
+        priority=priority,
+        inferred_default_old_position=inferred_default_old_position,
+        proxy_ready=proxy_ready and not tomorrow_empty,
+        position_fact_status=fact_status,
+        new_entry_position_pct=target_pct,
+    )
+    account_requires_release = bool(
+        priority == "new_entry"
+        and existing_requires_action
+        and account_exposure_plan.get("planned_new_entry_pct", 0) > 0
+        and account_exposure_plan.get("new_entry_pct", 0) == 0
+        and not account_exposure_plan.get("same_stock_target")
+        and account_exposure_plan.get("old_position_pct") == POSITION_TIER_B1_B2_PCT
+    )
+    if account_requires_release:
+        priority = "new_entry_after_old_exit"
+        account_exposure_plan = _runtime_position_tier_exposure_plan(
+            existing=existing,
+            new_entry=execution_new_entry,
+            tradable_proxy=tradable_proxy,
+            priority=priority,
+            inferred_default_old_position=inferred_default_old_position,
+            proxy_ready=proxy_ready and not tomorrow_empty,
+            position_fact_status=fact_status,
+            new_entry_position_pct=target_pct,
+        )
     new_entry_label = _runtime_stock_label(new_entry)
     proxy_label = _runtime_stock_label(tradable_proxy)
     proxy_reason = f"目标标的{new_entry_label}，小资金账户可用{proxy_label}替代"
     if proxy_ready and existing_requires_action:
         proxy_reason = f"先处理旧仓，{proxy_reason}"
-    elif proxy_ready and inferred_default_old_position:
-        proxy_reason = f"前日报计划对象待成交确认；{proxy_reason}；未确认前不视为B1"
-    reason = (
-        "约1w账户先处理已有仓，新强对象只保留观察对象"
-        if old_position_first
-        else (
-            proxy_reason
-            if priority == "tradable_proxy"
-            else (
-                (
-                    f"前日报计划对象待成交确认；新开仓对象具备执行资格时，{PREMARKET_50_TRIGGER_TEXT}；未确认前不把前日报对象计入B1"
-                    if inferred_default_old_position
-                    else f"新开仓对象具备执行资格，{PREMARKET_50_TRIGGER_TEXT}"
-                )
-                if priority == "new_entry"
-                else (
-                    (
-                        f"先处理旧仓，目标标的{new_entry_label}，小资金账户可用{proxy_label}替代；{PREMARKET_50_TRIGGER_TEXT}"
-                        if proxy_ready
-                        else f"先处理旧仓，买{new_entry_label}；{PREMARKET_50_TRIGGER_TEXT}"
-                    )
-                    if priority == "new_entry_after_old_exit"
-                    else (
-                        "明日无新增参与对象，前日报计划对象待成交确认；未确认前按0x"
-                        if inferred_default_old_position
-                        else "无明日执行对象，保持观察"
-                    )
-                )
-            )
-        )
+    same_stock_plan_satisfied = bool(
+        account_exposure_plan.get("same_stock_target")
+        and account_exposure_plan.get("planned_new_entry_pct", 0) > 0
+        and account_exposure_plan.get("new_entry_pct", 0) == 0
     )
+    same_stock_b2_only = bool(account_exposure_plan.get("same_stock_t"))
+    if tomorrow_empty:
+        reason = "明日空仓：不买新股，集合竞价卖清全部可卖旧仓，不做T；未全部成交继续尽早卖"
+    elif same_stock_plan_satisfied or same_stock_b2_only:
+        reason = account_exposure_plan.get("policy")
+    elif old_position_first:
+        reason = "约1w账户先处理已有仓，新强对象只保留观察对象"
+    elif priority == "tradable_proxy":
+        reason = proxy_reason
+    elif priority == "new_entry":
+        reason = f"新开仓对象具备执行资格，{PREMARKET_50_TRIGGER_TEXT}"
+    elif priority == "new_entry_after_old_exit":
+        reason = (
+            f"先处理旧仓，目标标的{new_entry_label}，小资金账户可用{proxy_label}替代；{PREMARKET_50_TRIGGER_TEXT}"
+            if proxy_ready
+            else f"先处理旧仓，买{new_entry_label}；{PREMARKET_50_TRIGGER_TEXT}"
+        )
+    elif priority == "old_position":
+        reason = "旧仓继续持有；新机会只保留观察，不因新机会处理旧仓"
+    else:
+        reason = "无明日执行对象，保持观察"
     display = (
-        existing
-        if (old_position_first or old_position_only)
-        else (tradable_proxy if proxy_ready else (execution_new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
+        {}
+        if tomorrow_empty
+        else (
+            existing
+            if (old_position_first or old_position_only or priority == "old_position")
+            else (tradable_proxy if proxy_ready else (execution_new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
+        )
     )
     watch_target = (
         workflow_zero_observation_target
         or account_observation_target
-        or (dict(new_entry) if (old_position_first or proxy_ready or (priority == "wait" and new_entry)) else {})
+        or (
+            dict(new_entry)
+            if (old_position_first or proxy_ready or (priority in {"wait", "old_position"} and new_entry))
+            else {}
+        )
     )
     if not _candidate_can_be_current_observation_target(watch_target):
         watch_target = {}
-    return {
+    if tomorrow_empty:
+        watch_target = {}
+        execution_new_entry = {}
+    if tomorrow_empty:
+        account_exposure_plan["tomorrow_closing_target_position_pct"] = 0
+        account_exposure_plan["tomorrow_policy"] = (
+            "明日不买新股；集合竞价卖清全部可卖旧仓；不做T；未全部成交继续尽早卖"
+        )
+    resolution = {
         "new_entry_target": dict(execution_new_entry),
         "existing_position_target": dict(existing),
+        "old_position_plan": dict(old_position_plan),
         "tradable_proxy_target": dict(tradable_proxy) if proxy_ready else {},
         "watch_target": watch_target,
         "process_target": dict(execution_new_entry),
@@ -3366,16 +3628,12 @@ def _build_runtime_final_target_resolution(
             "capital_priority": priority,
             "reason": reason,
         },
-        "account_exposure_plan": _runtime_full_or_empty_exposure_plan(
-            existing=existing,
-            new_entry=execution_new_entry,
-            tradable_proxy=tradable_proxy,
-            priority=priority,
-            inferred_default_old_position=inferred_default_old_position,
-            proxy_ready=proxy_ready,
-        ),
+        "account_exposure_plan": account_exposure_plan,
         "opportunity_comparison": opportunity_comparison,
     }
+    if tomorrow_account_action:
+        resolution["tomorrow_account_action"] = dict(tomorrow_account_action)
+    return resolution
 
 
 def _runtime_final_resolution_identity(resolution):
@@ -4049,6 +4307,11 @@ def _store_runtime_sector_capital_preflight_payload(payload, data=None, executio
 
 
 _RHYTHM_RESET_REVIEW_TYPES = ("防守空仓", "节奏复位空仓", "延后确认空仓", "错失待批改")
+_CONFIRMED_OLD_POSITION_RHYTHM_TYPE_MAP = {
+    "防守空仓": "防守不新增",
+    "节奏复位空仓": "节奏复位不新增",
+    "延后确认空仓": "延后确认不新增",
+}
 
 
 def _runtime_compact_text(value, *, max_depth=4, max_chars=6000):
@@ -4256,6 +4519,12 @@ def _build_runtime_rhythm_reset_review(
     workflow = selection_workflow if isinstance(selection_workflow, dict) else {}
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     preflight = sector_capital_preflight if isinstance(sector_capital_preflight, dict) else {}
+    account_exposure_plan = (
+        resolution.get("account_exposure_plan")
+        if isinstance(resolution.get("account_exposure_plan"), dict)
+        else {}
+    )
+    confirmed_old_position = account_exposure_plan.get("position_fact_status") == "confirmed"
     final_action = preflight.get("final_action") if isinstance(preflight.get("final_action"), dict) else {}
     workflow_final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     final_reason = _first_runtime_text(
@@ -4340,8 +4609,12 @@ def _build_runtime_rhythm_reset_review(
 
     if "节奏复位空仓" in categories:
         reset_row = {
-            "candidate": "空仓复位：T+1市场强者",
-            "why_possible": "最优反推不是今天指定旧目标，而是承认T0空仓，明天重新看市场实际选择的强主线和强载体。",
+            "candidate": "新仓复位：T+1市场强者" if confirmed_old_position else "空仓复位：T+1市场强者",
+            "why_possible": (
+                "最优反推不是今天指定旧目标，而是承认T0没有新增参与对象，明天重新看市场实际选择的强主线和强载体。"
+                if confirmed_old_position
+                else "最优反推不是今天指定旧目标，而是承认T0空仓，明天重新看市场实际选择的强主线和强载体。"
+            ),
             "why_t0_not": (
                 f"{final_reason}；不能把过程样本写成明日执行对象。"
                 if final_reason
@@ -4356,18 +4629,31 @@ def _build_runtime_rhythm_reset_review(
         rows.append(
             {
                 "candidate": "最终0%结论",
-                "why_possible": "没有候选取得完整执行资格，空仓本身是可复盘样本。",
+                "why_possible": (
+                    "没有候选取得完整执行资格，0%不参与本身是可复盘样本。"
+                    if confirmed_old_position
+                    else "没有候选取得完整执行资格，空仓本身是可复盘样本。"
+                ),
                 "why_t0_not": final_reason or "关键条件不完整，停止新增参与。",
                 "tplus1_confirmation": "T+1只批改市场是否给出新主线确认，不把观察直接升级为当日参与。",
             }
         )
+
+    if confirmed_old_position:
+        categories = [_CONFIRMED_OLD_POSITION_RHYTHM_TYPE_MAP.get(item, item) for item in categories]
+        allowed_classifications = [
+            _CONFIRMED_OLD_POSITION_RHYTHM_TYPE_MAP.get(item, item)
+            for item in _RHYTHM_RESET_REVIEW_TYPES
+        ]
+    else:
+        allowed_classifications = list(_RHYTHM_RESET_REVIEW_TYPES)
 
     return {
         "schema_version": "rhythm_reset_review.v1",
         "trade_date": str(target_date or ""),
         "classification": categories[0],
         "secondary_classifications": categories[1:],
-        "allowed_classifications": list(_RHYTHM_RESET_REVIEW_TYPES),
+        "allowed_classifications": allowed_classifications,
         "t0_boundary": "T0只按当日已知事实决定最终动作；0%不是思考终点，但复核对象不能被倒推成当日答案。",
         "review_boundary": "T+1事实只用于批改防守、节奏复位、延后确认或漏判，不回写T0最终动作。",
         "rows": rows[:5],
@@ -4379,7 +4665,7 @@ def _runtime_final_resolution_waits_without_watch_target(final_target_resolution
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
     capital_priority = _first_runtime_text(decision.get("capital_priority"))
-    if capital_priority == "wait":
+    if capital_priority in {"wait", "tomorrow_empty"}:
         return True
     if capital_priority not in {"old_position_t", "old_position", "existing_position", "existing_position_t"}:
         return False
@@ -4783,7 +5069,7 @@ def _effective_preflight_front_action(payload):
     payload = payload if isinstance(payload, dict) else {}
     final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
     target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
-    position_pct = int(final_action.get("position_pct") or 0)
+    position_pct = _normalize_position_pct_to_allowed_state(final_action.get("position_pct"))
     if position_pct <= 0 or not (target.get("name") or target.get("code")):
         return {}
     return final_action
@@ -4795,13 +5081,16 @@ def _sync_front_page_tables_with_preflight_action(report_lines, payload):
         return list(report_lines or [])
     target = action.get("target") if isinstance(action.get("target"), dict) else {}
     target_label = _runtime_stock_label(target) or _target_candidate_label(target)
-    action_label = _clean_runtime_cell(action.get("label") or "50%条件执行")
-    position_pct = int(action.get("position_pct") or 50)
+    position_pct = _normalize_position_pct_to_allowed_state(action.get("position_pct"))
+    action_label = _clean_runtime_cell(
+        action.get("label")
+        or ("100%核心进攻" if position_pct == POSITION_TIER_B1_B2_PCT else "50%条件执行")
+    )
     reason = _clean_runtime_cell(action.get("reason") or "板块资金扩散链路恢复出唯一主样本")
     position_text = (
         PREMARKET_50_EXECUTION_TEXT
         if position_pct < 100
-        else f"{action_label}；盘中不满足取消，回到0%不参与"
+        else PREMARKET_FULL_EXECUTION_TEXT
     )
     synced = []
     for line in list(report_lines or []):
@@ -4814,8 +5103,9 @@ def _sync_front_page_tables_with_preflight_action(report_lines, payload):
             text = f"| 对象性质 | {action_label} |"
         elif text.startswith("| 推导摘要 |"):
             text = f"| 推导摘要 | {target_label}来自板块资金扩散链路；{reason} |"
-        elif text.startswith("| 明日仓位 |"):
-            text = f"| 明日仓位 | {position_text} |"
+        elif text.startswith(("| 明日仓位 |", "| 明日新仓 |")):
+            label = "明日新仓" if text.startswith("| 明日新仓 |") else "明日仓位"
+            text = f"| {label} | {position_text} |"
         elif text.startswith("| 明日执行对象 |"):
             text = f"| 明日执行对象 | {target_label} |"
         elif text.startswith("| 执行性质 |"):
@@ -5660,7 +5950,12 @@ def _runtime_two_layer_execution_object(*sources):
             continue
         front = payload.get("front_decision") if isinstance(payload.get("front_decision"), dict) else {}
         target = front.get("execution_object") if isinstance(front.get("execution_object"), dict) else {}
-        if _runtime_candidate_key(target):
+        position_pct = _normalize_position_pct_to_allowed_state(front.get("position_pct"))
+        if (
+            _first_runtime_text(front.get("execution_identity")) == "明日执行对象"
+            and position_pct in (POSITION_TIER_B1_PCT, POSITION_TIER_B1_B2_PCT)
+            and _runtime_candidate_key(target)
+        ):
             return target
     return {}
 
@@ -5675,16 +5970,11 @@ def _runtime_sector_capital_execution_object(*sources):
                 continue
             final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
             target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
-            if int(_runtime_cell_float(final_action.get("position_pct")) or 0) >= 50 and _runtime_candidate_key(target):
+            position_pct = _normalize_position_pct_to_allowed_state(
+                final_action.get("position_pct")
+            )
+            if position_pct in (POSITION_TIER_B1_PCT, POSITION_TIER_B1_B2_PCT) and _runtime_candidate_key(target):
                 return target
-        strategy = source.get("sector_capital_carrier_strategy")
-        if not isinstance(strategy, dict) or strategy.get("action") != "paper_participate":
-            continue
-        primary = strategy.get("primary_candidate") if isinstance(strategy.get("primary_candidate"), dict) else {}
-        stock = primary.get("stock") if isinstance(primary.get("stock"), dict) else {}
-        target = _runtime_stock_payload(stock)
-        if target:
-            return target
     return {}
 
 
@@ -5769,17 +6059,10 @@ def _runtime_selected_target_solution_lines(
         if wait_priority
         else (f"观察对象：{label}" if old_position_first else (_runtime_stock_label(display_target) or label))
     )
-    existing_label = _runtime_stock_label(existing_target)
-    inferred_existing_target = is_inferred_previous_report_position(existing_target)
-    existing_row_label = "成交确认" if inferred_existing_target else "旧仓处理"
-    existing_display_text = (
-        _first_runtime_text(
-            existing_target.get("summary"),
-            f"前日报计划推定，待成交确认：{existing_label}",
-        )
-        if inferred_existing_target
-        else existing_label
-    )
+    existing_fact_status = _position_fact_status(existing_target, context_provided=True)
+    existing_label = _runtime_stock_label(existing_target) if existing_fact_status in {"confirmed", "pending_confirmation"} else ""
+    existing_row_label = "旧仓处理" if existing_fact_status == "confirmed" else "外部交易核实"
+    existing_display_text = _first_runtime_text(existing_target.get("summary"), existing_label)
     proxy_effect_type = _first_runtime_text(
         tradable_proxy_target.get("proxy_effect_type"),
         tradable_proxy_target.get("effect_type"),
@@ -6634,12 +6917,10 @@ def _front_page_target_pct(position_decision):
 
 
 def _normalize_position_pct_to_allowed_state(value):
-    pct = _runtime_cell_float(value)
-    if pct is None or pct <= 0:
+    try:
+        return normalize_planned_position_tier_pct(value)
+    except (TypeError, ValueError):
         return 0
-    if pct >= 100:
-        return 100
-    return 50
 
 
 def _front_page_candidate_position_pct(candidate):
@@ -6653,14 +6934,21 @@ def _front_page_candidate_position_pct(candidate):
         candidate.get("participation_script") if isinstance(candidate.get("participation_script"), dict) else {},
     ]
     for source in sources:
-        for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
-            value = _runtime_cell_float(source.get(key))
-            if value is not None:
-                value = _normalize_position_pct_to_allowed_state(value)
-                if value >= 50:
-                    positive_values.append(value)
-                else:
-                    fallback_values.append(value)
+        for key in ("target_position_pct", "position_pct", "planned_position_pct"):
+            if source.get(key) in (None, ""):
+                continue
+            value = _normalize_position_pct_to_allowed_state(source.get(key))
+            if value >= 50:
+                positive_values.append(value)
+            else:
+                fallback_values.append(value)
+        attack_state = str(source.get("attack_state") or "").strip().replace("％", "%")
+        if attack_state in {"0", "0%", "50", "50%", "100", "100%"}:
+            value = int(attack_state.replace("%", ""))
+            if value >= 50:
+                positive_values.append(value)
+            else:
+                fallback_values.append(value)
     if positive_values:
         return max(positive_values)
     if fallback_values:
@@ -6771,32 +7059,174 @@ def _normalize_full_or_empty_account_visible_lines(
     position_decision=None,
 ):
     visible_lines = list(lines or [])
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    exposure = resolution.get("account_exposure_plan") if isinstance(resolution.get("account_exposure_plan"), dict) else {}
+    priority_decision = (
+        resolution.get("capital_priority_decision")
+        if isinstance(resolution.get("capital_priority_decision"), dict)
+        else {}
+    )
+    capital_priority = _first_runtime_text(priority_decision.get("capital_priority"))
+    final_new_entry_target = _runtime_stock_payload(resolution.get("new_entry_target"))
+    explicit_empty_has_zero_final_action = (
+        capital_priority == "wait" and not final_new_entry_target
+        if capital_priority
+        else _front_page_target_pct(position_decision) <= 0
+    )
+    tomorrow_account_action = resolve_tomorrow_account_action(resolution)
+    if is_tomorrow_empty_account_action(tomorrow_account_action):
+        visible_lines = [_normalize_tomorrow_empty_visible_text(line) for line in visible_lines]
+    if exposure.get("position_fact_status") == "confirmed":
+        visible_lines = [_normalize_confirmed_old_position_visible_text(line) for line in visible_lines]
+    elif exposure.get("position_fact_status") == "none" and explicit_empty_has_zero_final_action:
+        visible_lines = [_normalize_explicit_empty_zero_action_text(line) for line in visible_lines]
     if _inferred_previous_plan_zero_action_active(final_target_resolution, position_decision):
         visible_lines = [
             _normalize_inferred_previous_plan_zero_action_line(line)
             for line in visible_lines
         ]
-    if _front_page_target_pct(position_decision) != 50:
-        return [_normalize_market_snapshot_risk_text(line) for line in visible_lines]
-    target = _runtime_final_execution_target_payload(
-        final_target_resolution,
-        selected_position_candidate=selected_position_candidate,
-        position_decision=position_decision,
-    )
-    if not target:
-        return [_normalize_market_snapshot_risk_text(line) for line in visible_lines]
+    return [_full_or_empty_account_visible_text(line) for line in visible_lines]
 
-    normalized = []
-    for line in visible_lines:
-        text = _full_or_empty_account_visible_text(line)
-        if text.startswith("| 仓位=50% 动作=满仓条件执行 "):
-            text = text.replace("| 仓位=50% 动作=满仓条件执行 ", "| 账户动作=满仓条件执行（底层策略档=50%） ", 1)
-        if text.startswith("| 进攻仓位三态 | 50% |"):
-            text = "| 进攻仓位三态 | 满仓条件执行 |"
-        elif text.startswith("| 明日最大仓位 | 50% |"):
-            text = "| 明日最大仓位 | 满仓或0%不参与 |"
-        normalized.append(text)
-    return normalized
+
+def _normalize_confirmed_old_position_visible_text(value):
+    text = str(value or "")
+    replacements = (
+        ("保持空仓或只做旧仓处理", "不新增参与，只做旧仓处理"),
+        ("空仓复位：T+1市场强者", "新仓复位：T+1市场强者"),
+        ("承认T0空仓", "承认T0没有新增参与对象"),
+        ("空仓本身是可复盘样本", "0%不参与本身是可复盘样本"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    for old, new in _CONFIRMED_OLD_POSITION_RHYTHM_TYPE_MAP.items():
+        text = text.replace(old, new)
+    return text
+
+
+def _normalize_tomorrow_empty_visible_text(value):
+    text = str(value or "")
+    replacements = (
+        (
+            "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
+            "明日空仓：不买新股、不做T，集合竞价卖清全部可卖旧仓；未全部成交继续尽早卖",
+        ),
+        (
+            "- ✅ 保持空仓：当前不新增参与",
+            "- ✅ 明日空仓：不买新股、不做T，集合竞价卖清全部可卖旧仓",
+        ),
+        ("| 操作风格 | 空仓 |", "| 操作风格 | 明日空仓账户归零 |"),
+        (
+            "当前没有能下手的票，明日空仓观察",
+            "明日空仓：不买新股、不做T，集合竞价卖清全部可卖旧仓",
+        ),
+        (
+            "- **明天仓位放多少**: 0%（保持空仓）",
+            "- **明天仓位放多少**: 0%（全部可卖旧仓卖清后）",
+        ),
+        (
+            "不新增参与；若有旧仓只处理旧仓，否则保持空仓",
+            "不买新股、不做T；集合竞价卖清全部可卖旧仓，未全部成交继续尽早卖",
+        ),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def _normalize_explicit_empty_zero_action_text(value):
+    text = str(value or "")
+    if "\n" in text:
+        return "\n".join(
+            _normalize_explicit_empty_zero_action_text(line)
+            for line in text.split("\n")
+        )
+    stripped = text.lstrip()
+    indent = text[: len(text) - len(stripped)]
+    if stripped.startswith("| 不参与依据 |"):
+        return indent + "| 不参与依据 | 已确认无旧仓；明日新仓0%不参与，只观察风险是否钝化。 |"
+    if stripped.startswith("| 无执行目标原因 |"):
+        return indent + "| 无执行目标原因 | 已确认无旧仓；明日新仓0%不参与 |"
+    if stripped.startswith("| 账户后台任务负担 |"):
+        return indent + "| 账户后台任务负担 | 已确认无旧仓 |"
+    if stripped.startswith("| 持仓优先动作 |"):
+        return indent + "| 持仓优先动作 | 已确认无旧仓；明日不新增参与 |"
+    if stripped.startswith("| 执行纪律 |"):
+        return indent + stripped.replace(
+            "0%不参与，只观察或处理旧仓；不满足执行资格就回到0%",
+            "0%不参与，只观察；不满足执行资格继续0%不参与",
+        )
+    if stripped.startswith("> **怎么执行**："):
+        return indent + stripped.replace(
+            "0%不参与，只观察或处理旧仓；不临场改单。",
+            "0%不参与，只观察；不临场改单。",
+        )
+
+    current_action_prefixes = (
+        "| 明天能不能开仓 |",
+        "| 明天是否参与 |",
+        "| 明日大盘预期 |",
+        "| 明日环境与跟随裁决 |",
+        "| 市场情绪状态 |",
+        "| 明日策略 |",
+        "**明日裁决**:",
+        "**裁决依据**:",
+        "**开盘前动作**:",
+        "> **Step 0 结论**:",
+        "- **明日裁决**:",
+        "- **明天能不能开仓**:",
+        "- **明天具体怎么做**:",
+        "- **明天仓位放多少**:",
+        "- ✅ 保持空仓：",
+        "- ✅ 禁止恋战：",
+        "- ✅ 不做新仓日内回转：",
+        "- 若你有仓位，失效价失守或日内明显转弱",
+        "- 若你有旧仓，确认风险线是否需要上移",
+        "- 重点观察优先对象是否继续走强；",
+        "- 候选观察样本对象是否继续走强；",
+        "- 以观察和处理持仓为主",
+        "- 当前条件不允许新增参与，本时段只确认环境是否继续支持持仓/观察",
+        "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
+        "先处理旧仓，不新增参与；新强对象只保留观察对象",
+        "禁止新增；若你有旧仓",
+    )
+    if not stripped.startswith(current_action_prefixes):
+        return text
+
+    replacements = (
+        ("🟠 只处理旧仓", "0%不参与"),
+        ("环境已转撤退，先退出，等下一轮新脉冲。", "环境已转撤退，保持0%不参与，等下一轮新脉冲。"),
+        ("若你有旧仓先去弱留强，不新增参与", "已确认无旧仓，明日不新增参与"),
+        ("禁止新增；若你有旧仓，去弱留强，不强就卖", "已确认无旧仓；明日新仓0%不参与"),
+        ("不新增参与；若有旧仓只处理旧仓，否则保持空仓", "不新增参与；已确认无旧仓，保持0%不参与"),
+        ("若你有旧仓，只处理旧仓，不做新增", "只作观察，不做新增"),
+        (
+            "环境条件未满足且主线偏弱，当前只允许处理旧仓，不再给新增观察资格。",
+            "环境条件未满足且主线偏弱；已确认无旧仓，明日新仓0%不参与。",
+        ),
+        (
+            "环境条件未满足且主线偏弱，当前只允许处理旧仓，不再给新增买入资格。",
+            "环境条件未满足且主线偏弱；已确认无旧仓，明日新仓0%不参与。",
+        ),
+        ("以观察和处理持仓为主", "以观察为主"),
+        ("环境是否继续支持持仓/观察", "环境与观察条件是否改善"),
+        ("- ✅ 保持空仓：当前不新增参与", "- ✅ 当前空仓；明日新仓0%不参与"),
+        ("- ✅ 禁止恋战：若你有旧仓，只做退出，不做摊平和自救", "- ✅ 已确认无旧仓；不生成旧仓动作"),
+        (
+            "- ✅ 不做新仓日内回转：次日不做日内回转；若有旧仓，只按旧仓处理策略处理",
+            "- ✅ 明日新仓0%不参与；不生成新仓日内回转动作",
+        ),
+        (
+            "- **明天仓位放多少**: 0%（保持空仓）",
+            "- **明天仓位放多少**: 明日新仓0%；按当前已确认无旧仓，收盘目标仓位0%",
+        ),
+        ("- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损", "- 已确认无旧仓；本日不生成减仓或止损动作"),
+        ("- 若你有旧仓，确认风险线是否需要上移", "- 已确认无旧仓；本窗口不生成旧仓动作"),
+        ("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", "已确认无旧仓；明日新仓0%不参与"),
+        ("先处理旧仓，不新增参与；新强对象只保留观察对象", "已确认无旧仓；明日新仓0%不参与"),
+    )
+    for old, new in replacements:
+        stripped = stripped.replace(old, new)
+    return indent + stripped
 
 
 def _normalize_market_snapshot_risk_text(value):
@@ -6815,43 +7245,79 @@ def _normalize_market_snapshot_risk_text(value):
     return text
 
 
-def _normalize_full_position_surface_text(value):
+def _normalize_unknown_position_visible_text(value):
     text = str(value or "")
-    text = text.replace("仓位=50% 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
-    text = text.replace("仓位=50 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
-    text = text.replace("'base_position_pct': 50, '账户动作': '满仓条件执行'", "'账户动作': '满仓条件执行'")
-    text = text.replace('"base_position_pct": 50, "账户动作": "满仓条件执行"', '"账户动作": "满仓条件执行"')
+    replacements = (
+        (
+            "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
+            "明日不新增参与；先核对实际持仓，不预设旧仓动作",
+        ),
+        (
+            "- ✅ 保持空仓：当前不新增参与",
+            "- ✅ 明日新仓0%不参与；账户仓位待确认",
+        ),
+        (
+            "| 操作风格 | 空仓 |",
+            "| 操作风格 | 0%不参与；账户仓位待确认 |",
+        ),
+        (
+            "当前没有能下手的票，明日空仓观察",
+            "当前没有能下手的票，明日不新增参与",
+        ),
+        (
+            "后续只保留观察和空仓预案",
+            "后续只保留观察和不新增参与预案",
+        ),
+        (
+            "- **现在到底是什么状态**: 空仓",
+            "- **现在到底是什么状态**: 持仓未输入，待确认",
+        ),
+        (
+            "- **明天仓位放多少**: 0%（保持空仓）",
+            "- **明天仓位放多少**: 0%新仓；账户仓位待确认",
+        ),
+        (
+            "- **明天具体怎么做**: 不新增参与；若有旧仓只处理旧仓，否则保持空仓",
+            "- **明天具体怎么做**: 不新增参与；先核对实际持仓，再按已确认旧仓预案处理",
+        ),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def _normalize_full_position_surface_text(value, *, position_pct=None):
+    text = str(value or "")
+    if position_pct == POSITION_TIER_B1_PCT:
+        text = text.replace("结论：满仓条件执行", "结论：1x/50%半仓条件执行")
+    text = text.replace("仓位=50% 动作=满仓条件执行", "仓位=50% 动作=50%条件执行")
+    text = text.replace("仓位=50 动作=满仓条件执行", "仓位=50 动作=50%条件执行")
+    text = text.replace("'base_position_pct': 50, '账户动作': '满仓条件执行'", "'base_position_pct': 50, '账户动作': '50%条件执行'")
+    text = text.replace('"base_position_pct": 50, "账户动作": "满仓条件执行"', '"base_position_pct": 50, "账户动作": "50%条件执行"')
     return text
 
 
 def _full_or_empty_account_visible_text(value):
     text = _normalize_market_snapshot_risk_text(value)
-    text = text.replace("已决定50%条件执行；盘中不满足取消，回到0%不参与", PREMARKET_FULL_EXECUTION_TEXT)
-    text = text.replace("已决定50%条件执行；不满足回到0%", PREMARKET_FULL_EXECUTION_SHORT_TEXT)
-    text = text.replace(PREMARKET_50_EXECUTION_TEXT, PREMARKET_FULL_EXECUTION_TEXT)
-    text = text.replace(PREMARKET_50_EXECUTION_SHORT_TEXT, PREMARKET_FULL_EXECUTION_SHORT_TEXT)
-    text = text.replace("50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0%", PREMARKET_FULL_EXECUTION_TEXT)
-    text = text.replace("50%条件执行条件", "满仓条件执行条件")
-    text = text.replace("50%执行条件", "满仓执行条件")
-    text = text.replace("50%条件执行对象", "满仓条件执行对象")
-    text = text.replace("50%条件执行资格", "满仓条件执行资格")
-    text = text.replace("50%条件执行", "满仓条件执行")
-    text = text.replace("50%按条件参与", "满仓条件执行")
-    text = text.replace("按50%条件执行", "按满仓条件执行")
-    text = text.replace("才可做50%", "才可满仓条件执行")
+    text = text.replace(
+        "已决定50%条件执行；盘中不满足取消，回到0%不参与",
+        PREMARKET_50_EXECUTION_TEXT,
+    )
+    text = text.replace(
+        "已决定50%条件执行；不满足回到0%",
+        PREMARKET_50_EXECUTION_SHORT_TEXT,
+    )
+    text = text.replace(
+        "50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0%",
+        PREMARKET_50_EXECUTION_TEXT,
+    )
     text = text.replace("最多25%试仓", "只做尾盘复核，不默认试仓")
     text = text.replace("只允许25%试仓", "只允许尾盘复核，不默认试仓")
-    text = text.replace("50%底仓跟随，50%机动仓只在确认后做T", "旧仓独立处理，机动仓只在确认后做T")
-    text = text.replace("尽量回到50%底仓", "尽量回到既定底仓")
-    text = text.replace("| 账户动作=满仓条件执行（底层策略档=50%） ", "| 账户动作=满仓条件执行 ")
-    text = text.replace("；满仓条件执行；50%", "；满仓条件执行；账户动作=满仓或0%不参与")
-    text = re.sub(
-        r'FINAL\["最终：([^"]+)\\n仓位：50%"\]',
-        lambda match: f'FINAL["最终：{match.group(1)}\\n账户动作：满仓条件执行"]',
-        text,
+    text = text.replace(
+        "50%底仓跟随，50%机动仓只在确认后做T",
+        "已有1x视为B1参与权，B2只在确认后补到2x/100%",
     )
-    text = text.replace("'position_pct': 50", "'账户动作': '满仓条件执行'")
-    text = text.replace('"position_pct": 50', '"账户动作": "满仓条件执行"')
+    text = text.replace("尽量回到50%底仓", "尽量回到既定底仓")
     return _normalize_full_position_surface_text(text)
 
 
@@ -7298,9 +7764,14 @@ def _build_front_page_position_decision(
     promoted_signal_grade = "100" if promoted_target_pct >= 100 else "50"
     promoted_mode = "full_100" if promoted_signal_grade == "100" else "attack_50_preview"
     promoted_reason = (
-        "明日极度看好目标标的已存在，市场未到极端冰点；盘前已决定100%核心进攻，盘中不满足执行资格就回到0%。"
+        f"明日极度看好目标标的已存在，市场未到极端冰点；{PREMARKET_FULL_EXECUTION_TEXT}。"
         if promoted_signal_grade == "100"
         else f"明日极度看好目标标的已存在，市场未到极端冰点；{PREMARKET_50_EXECUTION_TEXT}。"
+    )
+    promoted_trigger_text = (
+        PREMARKET_FULL_TRIGGER_TEXT
+        if promoted_signal_grade == "100"
+        else PREMARKET_50_TRIGGER_TEXT
     )
     monthly_rhythm.update(
         {
@@ -7326,7 +7797,7 @@ def _build_front_page_position_decision(
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "clear",
-                "reason": f"已缩到明日极度看好目标，盘中{PREMARKET_50_TRIGGER_TEXT}。",
+                "reason": f"已缩到明日极度看好目标，盘中{promoted_trigger_text}。",
             },
         }
     )
@@ -7422,11 +7893,99 @@ def _build_effective_front_page_final_gate(
         )
         return updated
 
+    exposure_plan = (
+        resolution.get("account_exposure_plan")
+        if isinstance(resolution.get("account_exposure_plan"), dict)
+        else {}
+    )
+    uses_position_tier_exposure = exposure_plan.get("schema_version") == "position_tier_exposure.v2"
+    planned_new_entry_pct = (
+        normalize_planned_position_tier_pct(exposure_plan.get("planned_new_entry_pct", 0))
+        if uses_position_tier_exposure
+        else target_pct
+    )
+    current_new_entry_pct = (
+        normalize_planned_position_tier_pct(exposure_plan.get("new_entry_pct", 0))
+        if uses_position_tier_exposure
+        else target_pct
+    )
+    same_stock_plan_satisfied = bool(
+        uses_position_tier_exposure
+        and exposure_plan.get("same_stock_target")
+        and planned_new_entry_pct > 0
+        and current_new_entry_pct == 0
+    )
+    same_stock_b2_only = bool(
+        uses_position_tier_exposure
+        and exposure_plan.get("same_stock_t")
+        and planned_new_entry_pct == POSITION_TIER_B1_B2_PCT
+        and current_new_entry_pct == POSITION_TIER_B1_PCT
+    )
+    new_entry_waits_for_old_release = bool(
+        uses_position_tier_exposure
+        and not exposure_plan.get("same_stock_target")
+        and planned_new_entry_pct > 0
+        and current_new_entry_pct == 0
+    )
+    exposure_policy = _first_runtime_text(
+        exposure_plan.get("policy"),
+        (resolution.get("capital_priority_decision") or {}).get("reason"),
+    )
+    if same_stock_plan_satisfied:
+        updated = dict(final_gate)
+        updated.update(
+            {
+                "gate_status": "条件维持",
+                "operation_state": "持仓维持态",
+                "can_new_entry": False,
+                "should_reduce": False,
+                "allow_attack_50_ready": False,
+                "base_position_cap_pct": 0,
+                "final_action": exposure_policy,
+                "final_participation": "现有仓位已满足计划总档，维持1x/50%，本计划不新增B1或B2。",
+                "gate_reason": "同股现有仓位已经覆盖计划总档，不重复执行B1，也不追加B2。",
+            }
+        )
+        return updated
+    if same_stock_b2_only:
+        updated = dict(final_gate)
+        updated.update(
+            {
+                "gate_status": "B2待确认",
+                "operation_state": "B2确认态",
+                "can_new_entry": False,
+                "should_reduce": False,
+                "allow_attack_50_ready": True,
+                "base_position_cap_pct": POSITION_TIER_B1_PCT,
+                "final_action": exposure_policy,
+                "final_participation": "已有1x视为B1，本次只新增1x/B2；B2未确认不补。",
+                "gate_reason": "计划总档为2x，现有1x已经承担B1，新增动作只剩B2确认。",
+            }
+        )
+        return updated
+    if new_entry_waits_for_old_release:
+        updated = dict(final_gate)
+        updated.update(
+            {
+                "gate_status": "等待资金释放",
+                "operation_state": "先处理旧仓",
+                "can_new_entry": False,
+                "should_reduce": True,
+                "allow_attack_50_ready": False,
+                "base_position_cap_pct": 0,
+                "final_action": exposure_policy,
+                "final_participation": "保留新对象；当前新增0%，旧仓释放后再按既定1x/50%计划执行。",
+                "gate_reason": "账户当前已无新增空间，先释放旧仓资金，再执行已决定的新仓计划。",
+            }
+        )
+        return updated
+
     effective_target = resolved_target or selected_position_candidate
     target_label = _target_candidate_label(effective_target)
     target_display_label = _runtime_stock_label(effective_target) or target_label
-    target_grade = "100" if target_pct >= 100 else "50"
+    target_grade = "100" if current_new_entry_pct >= 100 else "50"
     target_action_label = "条件100%核心进攻" if target_grade == "100" else "50%条件执行"
+    target_trigger_text = PREMARKET_FULL_TRIGGER_TEXT if target_grade == "100" else PREMARKET_50_TRIGGER_TEXT
     capital_action_reason = _first_runtime_text(final_gate.get("capital_action_reason"))
     old_exit_for_new_entry = bool(final_gate.get("old_position_exit_for_new_entry"))
     if capital_action_reason or old_exit_for_new_entry:
@@ -7438,10 +7997,13 @@ def _build_effective_front_page_final_gate(
                 "can_new_entry": False,
                 "should_reduce": old_exit_for_new_entry,
                 "allow_attack_50_ready": True,
-                "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), target_pct),
+                "base_position_cap_pct": max(
+                    int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0),
+                    current_new_entry_pct,
+                ),
                 "final_action": (
                     capital_action_reason
-                    or f"先处理旧仓，买{target_display_label}；{PREMARKET_50_TRIGGER_TEXT}"
+                    or f"先处理旧仓，买{target_display_label}；{target_trigger_text}"
                 ),
                 "final_participation": (
                     "小账户先释放旧仓资金，再只看新核心执行条件。"
@@ -7464,8 +8026,11 @@ def _build_effective_front_page_final_gate(
             "can_new_entry": False,
             "should_reduce": False,
             "allow_attack_50_ready": True,
-            "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), target_pct),
-            "final_action": f"明日目标标的已决定{target_action_label}：只看{target_label}，{PREMARKET_50_TRIGGER_TEXT}",
+            "base_position_cap_pct": max(
+                int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0),
+                current_new_entry_pct,
+            ),
+            "final_action": f"明日目标标的已决定{target_action_label}：只看{target_label}，{target_trigger_text}",
             "final_participation": "有明日极度看好目标时，防守态只缩小容器，不取消推荐属性。",
             "gate_reason": "普通防守态不等于每天推荐空仓；先定明日目标标的，再用大盘、板块和分时确认决定是否接雨。",
         }
@@ -7501,7 +8066,7 @@ def _inferred_previous_plan_zero_action_active(final_target_resolution=None, pos
         if isinstance(resolution.get("existing_position_target"), dict)
         else {}
     )
-    if not is_inferred_previous_report_position(existing_target):
+    if _position_fact_status(existing_target, context_provided=True) != "pending_confirmation":
         return False
     priority_decision = (
         resolution.get("capital_priority_decision")
@@ -7524,7 +8089,7 @@ def _normalize_inferred_previous_plan_zero_action_line(line):
     )
     text = text.replace(
         "保持空仓或只做旧仓处理",
-        "保持0%不参与，只核实成交记录",
+        "保持0%不参与，只核实外部交易记录",
     )
     stripped = text.strip()
     if stripped.startswith("|"):
@@ -7533,21 +8098,21 @@ def _normalize_inferred_previous_plan_zero_action_line(line):
         if label == "市场情绪状态" and len(cells) >= 2:
             cells[1] = _INFERRED_PREVIOUS_PLAN_ZERO_VERDICT
         elif label == "账户后台任务负担" and len(cells) >= 2:
-            cells[1] = "前日报计划对象待成交确认；未确认成交前按0x"
+            cells[1] = "外部交易待核实；未核实成交前按0x"
         elif label == "持仓优先动作" and len(cells) >= 2:
-            cells[1] = "先确认成交事实；未确认成交前不执行持仓卖出或加仓动作"
+            cells[1] = "只核实外部交易；未核实成交前不执行持仓卖出或加仓动作"
         elif label in {"账户约束", "账户风险暴露"} and len(cells) >= 2:
-            cells[1] = "前日报计划对象待成交确认；未确认成交前按0x"
-        elif label == "明日仓位" and len(cells) >= 2:
-            cells[1] = "0%不参与；先确认成交事实"
+            cells[1] = "外部交易待核实；未核实成交前按0x"
+        elif label in {"明日仓位", "明日新仓"} and len(cells) >= 2:
+            cells[1] = "0%不参与" if label == "明日新仓" else "0%不参与；外部交易待核实"
         elif label == "明日动作" and len(cells) >= 2:
-            cells[1] = "只核实成交记录；未确认成交前按0x"
+            cells[1] = "只核实外部交易记录；未核实成交前按0x"
         elif label in {"明天能不能开仓", "明天是否参与"} and len(cells) >= 2:
             cells[1] = _INFERRED_PREVIOUS_PLAN_ZERO_VERDICT
             if len(cells) >= 3:
-                cells[2] = "前日报计划对象待成交确认，未确认成交前按0x。"
+                cells[2] = "外部交易待核实，未核实成交前按0x。"
         elif label in {"明日大盘预期", "明日环境与跟随裁决", "明日策略"} and len(cells) >= 2:
-            cells[1] = f"{_INFERRED_PREVIOUS_PLAN_ZERO_VERDICT}；未确认成交前按0x"
+            cells[1] = f"{_INFERRED_PREVIOUS_PLAN_ZERO_VERDICT}；未核实成交前按0x"
         else:
             return text
         return "| " + " | ".join(cells) + " |"
@@ -7561,16 +8126,16 @@ def _normalize_inferred_previous_plan_zero_action_line(line):
     if stripped.startswith("- **明天能不能开仓**:"):
         return (
             f"- **明天能不能开仓**: {_INFERRED_PREVIOUS_PLAN_ZERO_VERDICT}；"
-            "前日报计划对象待成交确认，未确认成交前按0x"
+            "外部交易待核实，未核实成交前按0x"
         )
     if stripped.startswith("- **明天仓位放多少**:"):
-        return "- **明天仓位放多少**: 0%新仓；先确认成交事实"
+        return "- **明天仓位放多少**: 0%新仓；外部交易待核实"
     if stripped.startswith("- **明天具体怎么做**:"):
         return f"- **明天具体怎么做**: {_INFERRED_PREVIOUS_PLAN_ZERO_ACTION}"
     if stripped.startswith("- 重点观察优先对象") and "只处理旧仓" in stripped:
         return f"- {_INFERRED_PREVIOUS_PLAN_ZERO_ACTION}"
     if stripped.startswith(("- 明日动作：", "- 明日动作:")) and "只处理旧仓" in stripped:
-        return "- 明日动作：0%不参与；只核实成交记录；未确认成交前按0x"
+        return "- 明日动作：0%不参与；只核实外部交易记录；未核实成交前按0x"
     return text
 
 
@@ -7619,7 +8184,7 @@ def _sync_inferred_previous_plan_zero_action_context(
                 **follow_verdict,
                 "code": "pending_confirmation",
                 "label": _INFERRED_PREVIOUS_PLAN_ZERO_VERDICT,
-                "reason": "前日报计划对象待成交确认；未确认成交前按0x。",
+                "reason": "外部交易待核实；未核实成交前按0x。",
                 "action": _INFERRED_PREVIOUS_PLAN_ZERO_ACTION,
             }
             if context.get("follow_verdict") != normalized_follow_verdict:
@@ -8051,7 +8616,14 @@ def _normalize_attack_preview_appendix_lines(
     capital_priority = _first_runtime_text(
         (final_target_resolution.get("capital_priority_decision") or {}).get("capital_priority")
     )
-    if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t", "wait"}:
+    if capital_priority in {
+        "old_position_t",
+        "old_position",
+        "existing_position",
+        "existing_position_t",
+        "wait",
+        "tomorrow_empty",
+    }:
         normalized_zero_lines = [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
         normalized_zero_lines = _normalize_empty_final_action_plan_lines(
             normalized_zero_lines,
@@ -8191,18 +8763,27 @@ def _normalize_positive_final_action_appendix_lines(
         else {}
     )
     existing_summary = final_target_resolution.get("existing_position_summary")
-    has_visible_position_context = bool(
-        _runtime_stock_label(existing_target)
-        or (isinstance(existing_summary, dict) and (existing_summary.get("has_position") or existing_summary.get("summary")))
-        or (isinstance(existing_summary, str) and existing_summary.strip())
-    )
-    has_inferred_old_path = bool(
-        existing_target.get("inferred_from_previous_report") is True
-        or (
-            isinstance(existing_summary, dict)
-            and existing_summary.get("inferred_from_previous_report") is True
+    existing_fact_source = (
+        existing_target
+        if existing_target
+        else (
+            existing_summary
+            if isinstance(existing_summary, dict)
+            else ({"summary": existing_summary.strip()} if isinstance(existing_summary, str) and existing_summary.strip() else {})
         )
     )
+    exposure_plan = (
+        final_target_resolution.get("account_exposure_plan")
+        if isinstance(final_target_resolution.get("account_exposure_plan"), dict)
+        else {}
+    )
+    existing_fact_status = _first_runtime_text(exposure_plan.get("position_fact_status")) or _position_fact_status(
+        existing_fact_source,
+        context_provided=bool(existing_fact_source),
+    )
+    has_visible_position_context = existing_fact_status == "confirmed"
+    has_inferred_old_path = existing_fact_status == "pending_confirmation"
+    has_explicit_empty_context = bool(existing_fact_source) and existing_fact_status == "none"
     normalized = []
     in_final_action_table = False
     action_table_header = None
@@ -8445,18 +9026,32 @@ def _normalize_positive_final_action_appendix_lines(
             text = f"| 市场情绪状态 | 50%条件执行；只看{target_label}；{PREMARKET_50_TRIGGER_TEXT} |"
         elif text.startswith("| 账户后台任务负担 |") and "有持仓需先处理" in text:
             if has_inferred_old_path:
-                text = "| 账户后台任务负担 | 前日报计划对象待成交确认，不覆盖唯一明日动作 |"
+                text = "| 账户后台任务负担 | 外部交易待核实，不覆盖唯一明日动作 |"
             elif has_visible_position_context:
                 text = "| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |"
-        elif text.startswith("| 账户后台任务负担 |") and has_inferred_old_path and "无持仓负担" in text:
-            text = "| 账户后台任务负担 | 前日报计划对象待成交确认，不覆盖唯一明日动作 |"
+            elif has_explicit_empty_context:
+                text = "| 账户后台任务负担 | 已确认无旧仓 |"
+        elif text.startswith("| 账户后台任务负担 |") and "无持仓负担" in text:
+            if has_inferred_old_path:
+                text = "| 账户后台任务负担 | 外部交易待核实，不覆盖唯一明日动作 |"
+            elif has_visible_position_context:
+                text = "| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |"
+            elif has_explicit_empty_context:
+                text = "| 账户后台任务负担 | 已确认无旧仓 |"
         elif text.startswith("| 持仓优先动作 |") and "先处理旧仓" in text:
             if has_inferred_old_path:
                 text = "| 持仓优先动作 | 未确认成交前不视为B1；新机会按自身资格判断 |"
             elif has_visible_position_context:
                 text = "| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |"
-        elif text.startswith("| 持仓优先动作 |") and has_inferred_old_path and "无旧仓" in text:
-            text = "| 持仓优先动作 | 未确认成交前不视为B1；新机会按自身资格判断 |"
+            elif has_explicit_empty_context:
+                text = "| 持仓优先动作 | 无旧仓；新机会按自身条件处理 |"
+        elif text.startswith("| 持仓优先动作 |") and "无旧仓" in text:
+            if has_inferred_old_path:
+                text = "| 持仓优先动作 | 未确认成交前不视为B1；新机会按自身资格判断 |"
+            elif has_visible_position_context:
+                text = "| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |"
+            elif has_explicit_empty_context:
+                text = "| 持仓优先动作 | 无旧仓；新机会按自身条件处理 |"
         elif text.startswith("| 今日新增上限 |") and re.search(r"\|\s*0\s*\|", text):
             text = f"| 今日新增上限 | 50%条件执行；{PREMARKET_50_TRIGGER_TEXT} |"
         elif text.startswith("| 主买对象 |") and target_label not in text:
@@ -8507,7 +9102,10 @@ def _normalize_positive_final_action_appendix_lines(
             )
         elif "若你有旧仓，只处理旧仓，不做新增" in text:
             text = text.replace("若你有旧仓，只处理旧仓，不做新增", f"只看{target_label}；{PREMARKET_50_TRIGGER_TEXT}")
-        text = _normalize_full_position_surface_text(text)
+        text = _normalize_full_position_surface_text(
+            text,
+            position_pct=_front_page_target_pct(position_decision),
+        )
         normalized.append(text)
     return normalized
 
@@ -10481,8 +11079,8 @@ def _render_markdown_report_legacy_body(
         if isinstance(personal_position_context, dict)
         else {}
     )
-    position_context_provided = bool(data.get("position_context_provided")) or (
-        isinstance(personal_position_context, dict) and "existing_position_summary" in personal_position_context
+    position_context_provided = bool(data.get("position_context_provided")) or bool(
+        existing_position_summary if isinstance(existing_position_summary, dict) else {}
     )
 
     execution_stage_result = run_registered_execution_stages(
@@ -11040,6 +11638,8 @@ def _render_markdown_report_legacy_body(
                 "final_target_resolution": final_target_resolution,
                 "mainline_name": mainline_name,
                 "market_research_snapshot": market_research_snapshot,
+                "personal_position_context": personal_position_context if isinstance(personal_position_context, dict) else {},
+                "existing_position_summary": existing_position_summary if isinstance(existing_position_summary, dict) else {},
                 "watchlist": watchlist,
                 "core_stocks": core_stocks,
                 "secondary_stocks": secondary_stocks,
@@ -11449,8 +12049,9 @@ def _render_markdown_report_legacy_body(
             for key in ("account_profile", "existing_position_summary"):
                 if isinstance(personal_position_context.get(key), dict):
                     market_research_snapshot[key] = dict(personal_position_context.get(key) or {})
-            market_research_snapshot["position_context_provided"] = (
-                position_context_provided or "existing_position_summary" in personal_position_context
+            position_summary = personal_position_context.get("existing_position_summary")
+            market_research_snapshot["position_context_provided"] = position_context_provided or bool(
+                position_summary if isinstance(position_summary, dict) else {}
             )
         elif position_context_provided:
             market_research_snapshot["position_context_provided"] = True
@@ -11573,15 +12174,31 @@ def _render_markdown_report_legacy_body(
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
     )
+    position_context_unknown = (
+        isinstance(data, dict)
+        and data.get("position_context_provided") is False
+        and _position_fact_status(
+            _runtime_existing_position_summary(
+                data=data,
+                market_research_snapshot=market_research_snapshot,
+            ),
+            context_provided=False,
+        )
+        == "unknown"
+    )
+    if position_context_unknown:
+        report = [_normalize_unknown_position_visible_text(line) for line in report]
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
         data["execution_stage_context"] = execution_stage_context
     final_action_print_text = sanitize_user_visible_text(front_page_final_gate.get("final_action", "未知"))
-    if _front_page_target_pct(position_decision) == 50 and _runtime_final_execution_target_payload(
-        final_target_resolution,
+    final_action_print_text = _normalize_full_or_empty_account_visible_lines(
+        [final_action_print_text],
+        final_target_resolution=final_target_resolution,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
-    ):
-        final_action_print_text = _full_or_empty_account_visible_text(final_action_print_text)
+    )[0]
+    if position_context_unknown:
+        final_action_print_text = _normalize_unknown_position_visible_text(final_action_print_text)
     print(f"   ✅ 最终执行条件: {final_action_print_text}")
     _finalize_helper_diagnostics(data)
     report = _sanitize_report_lines(

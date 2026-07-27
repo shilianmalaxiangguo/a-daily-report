@@ -505,8 +505,33 @@ class MarketOverviewBuilderTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("| 市场情绪总状态 | 震荡偏风险 |", rendered)
-        self.assertIn("| 局部热度处理 | 创新高高潮，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。 |", rendered)
-        self.assertIn("| 明日总体含义 | 趋势扩散偏热，但指数和涨跌家数破坏，先防降温，等待止跌和核心承接。 |", rendered)
+        self.assertIn("| 局部热度处理 | 创新高达到极致扩散，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。 |", rendered)
+        self.assertIn("| 明日总体含义 | 创新高达到极致扩散，但指数和涨跌家数破坏，先防降温，等待止跌和核心承接。 |", rendered)
+
+    def test_unified_market_sentiment_does_not_call_low_new_high_extreme_when_margin_is_hot(self):
+        result = resolve_unified_market_sentiment(
+            {
+                "indices": {"上证指数": {"涨跌幅": -2.04}},
+                "market_stats": {"up_count": 695, "down_count": 4773},
+                "turnover_rank": [],
+                "dt_pool": [{"code": "000001"}] * 65,
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 9,
+                    "all_a_share_pct": 0.18,
+                },
+                "margin_pressure": {
+                    "available": True,
+                    "latest_pressure_label": "高压",
+                    "rows": [],
+                },
+            },
+            target_date="2026-07-17",
+        )
+
+        self.assertIn("融资承接压力高", result["local_heat"])
+        self.assertIn("融资承接压力高", result["meaning"])
+        self.assertNotIn("极致扩散", result["meaning"])
 
     def test_build_market_trend_sections_contract_separates_0609_local_style_from_overall_temperature(self):
         result = build_market_trend_sections_contract(
@@ -560,8 +585,8 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("| 市场情绪总状态 | 震荡 |", rendered)
         self.assertIn("| 2026-06-09 | +1.96% | -0.72% | +2.68pct | 高价相对占优 | 高价占优 |", rendered)
-        self.assertIn("> 当前解读：全A占比1.64%，趋势扩散偏冷，说明趋势赚钱效应扩散不足；这不是整体市场冰点。", rendered)
-        self.assertIn("| 2026-06-09 | 82 | 1.64% | 趋势扩散偏冷 | -78 | 元器件、化工原料、专用机械 |", rendered)
+        self.assertIn("> 当前解读：全A占比1.64%，扩散偏冷，说明趋势赚钱效应扩散不足；同一低值仍要结合变化方向判断。", rendered)
+        self.assertIn("| 2026-06-09 | 82 | 1.64% | 扩散偏冷 | -78 | 元器件、化工原料、专用机械 |", rendered)
         self.assertNotIn("最新差值 +2.68pct，当前为高潮", rendered)
         self.assertNotIn("全A占比1.64%，处于冰点", rendered)
 
@@ -672,23 +697,121 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("### 4. 创新高趋势反馈", rendered)
         self.assertIn("今日非ST非新股非次新阶段新高 126 只，占全A约 2.52%", rendered)
         self.assertIn(
-            "> 用途：创新高看的是趋势赚钱效应有没有扩散。全A占比越高，说明越多股票突破过去约250个交易日高点；但超过5%后若同时放量，往往偏热，次日更容易降温。",
+            "> 用途：创新高看的是趋势赚钱效应有没有扩散。绝对水位说明覆盖广度，变化方向说明扩散是在增强、收缩还是低位修复；5%及以上若同时放量，往往偏热，次日更容易降温。",
             rendered,
         )
         self.assertIn(
-            "> 读法：全A占比低于2%看趋势扩散偏冷，2%到5%看趋势扩散震荡，5%以上看趋势扩散偏热。这个指标只作趋势扩散背景，整体市场温度仍要结合成交额、指数位置、涨跌家数和核心承接。",
+            "> 读法：5%及以上为极致扩散，2%到5%为有效扩散，1%到2%为扩散偏冷，0.2%到1%为极低扩散；低于0.2%或新高数低于10只为扩散断层。绝对水位不是买卖动作，同一低值还要结合变化方向、板块成群度、核心板块同步性和来源质量。",
             rendered,
         )
         self.assertIn(
-            "> 当前解读：全A占比2.52%，趋势扩散震荡，说明趋势扩散存在但还不是极端热度。",
+            "> 当前解读：全A占比2.52%，有效扩散，说明趋势赚钱效应已有可用宽度，但仍需观察方向能否持续。",
             rendered,
         )
-        self.assertIn("| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |", rendered)
-        self.assertIn("| 2026-05-18 | 126 | 2.52% | 趋势扩散震荡 | +26 | 半导体、机器人 |", rendered)
+        self.assertIn("> 结构判断：扩散震荡：当前126只、全A占比2.52%，绝对水位为有效扩散", rendered)
+        self.assertIn("> 风险含义：当前尚未确认快速收缩", rendered)
+        self.assertIn("> 主要反证：长期下跌后的低位可能对应卖压衰竭", rendered)
+        self.assertIn("> 下一窗口：下一窗口复核创新高是否连续回升", rendered)
+        self.assertLess(rendered.index("> 当前解读："), rendered.index("> 结构判断："))
+        self.assertLess(rendered.index("> 下一窗口："), rendered.index("| 日期 | 新高数 |"))
+        self.assertIn("| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 板块分布前列 |", rendered)
+        self.assertIn("| 2026-05-18 | 126 | 2.52% | 有效扩散 | +26 | 半导体、机器人 |", rendered)
         self.assertIn("| 半导体 | 35 | 27.78% | 趋势一号、趋势二号 |", rendered)
         self.assertIn("| 排名 | 股票 | 代码 | 所属板块 | 涨跌幅 | 成交额 | 新高跨度 |", rendered)
         self.assertNotIn("新高周期", rendered)
         self.assertIn("| 1 | 趋势一号 | 000001 | 半导体 | +5.20% | 25.00亿 | 260日新高 |", rendered)
+        signal = result["node_outputs"]["new_high"]["new_high_structure_signal"]
+        self.assertEqual(signal["state"], "扩散震荡")
+        self.assertFalse(signal["history_comparable"])
+
+    def test_build_market_trend_sections_contract_uses_five_absolute_breadth_levels(self):
+        rows = [
+            ("2026-05-01", 9, 0.18, "扩散断层"),
+            ("2026-05-02", 10, 0.20, "极低扩散"),
+            ("2026-05-03", 50, 1.00, "扩散偏冷"),
+            ("2026-05-04", 100, 2.00, "有效扩散"),
+            ("2026-05-05", 250, 5.00, "极致扩散"),
+        ]
+        result = build_market_trend_sections_contract(
+            data={
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 250,
+                    "all_a_share_pct": 5.0,
+                    "summary": "创新高绝对水位边界样本。",
+                    "trend_rows": [
+                        {
+                            "trade_date": trade_date,
+                            "new_high_count": count,
+                            "all_a_share_pct": pct,
+                            "change_text": "待累计",
+                            "leading_sectors": "待补充板块",
+                        }
+                        for trade_date, count, pct, _label in rows
+                    ],
+                    "sector_distribution": [],
+                    "top_stocks": [],
+                }
+            },
+            target_date="2026-05-05",
+            enabled_node_keys=["new_high"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("> 当前解读：全A占比5.00%，极致扩散", rendered)
+        for trade_date, count, pct, label in rows:
+            self.assertIn(f"| {trade_date} | {count} | {pct:.2f}% | {label} |", rendered)
+
+    def test_build_market_trend_sections_contract_marks_mixed_source_single_digit_as_structure_only(self):
+        sectors = [
+            {"sector": sector, "new_high_count": 1, "share_pct": 16.67}
+            for sector in ["半导体", "水运", "纺织", "医药", "银行", "机械"]
+        ]
+        result = build_market_trend_sections_contract(
+            data={
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 6,
+                    "all_a_share_pct": 0.12,
+                    "summary": "阶段新高6只，占全A约0.12%。",
+                    "trend_rows": [
+                        {
+                            "trade_date": "2026-07-10",
+                            "source": "tushare",
+                            "new_high_count": 18,
+                            "all_a_share_pct": 0.36,
+                            "change_text": "-4",
+                            "leading_sectors": "半导体、IT设备、元器件",
+                        },
+                        {
+                            "trade_date": "2026-07-13",
+                            "source": "akshare",
+                            "new_high_count": 6,
+                            "all_a_share_pct": 0.12,
+                            "change_text": "-12",
+                            "leading_sectors": "半导体、水运、纺织",
+                            "sector_distribution": sectors,
+                        },
+                    ],
+                    "sector_distribution": sectors,
+                    "top_stocks": [],
+                },
+            },
+            target_date="2026-07-13",
+            enabled_node_keys=["new_high"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        structure_line = next(line for line in result["lines"] if line.startswith("> 结构判断："))
+        self.assertIn("扩散断层预警", structure_line)
+        self.assertIn("首次进入个位数", structure_line)
+        self.assertIn("呈板块碎片化", structure_line)
+        self.assertIn("跨日速度和峰值保留率只作结构观察", structure_line)
+        self.assertIn("事实不足", structure_line)
+        self.assertNotIn("-66.67%", structure_line)
+        self.assertNotIn("半导体主导", structure_line)
+        self.assertNotIn("主导板块", rendered)
+        self.assertIn("不是机械卖出条件", rendered)
 
     def test_build_market_trend_sections_contract_renders_margin_pressure(self):
         margin_rows = []

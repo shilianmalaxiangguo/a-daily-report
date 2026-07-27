@@ -141,6 +141,9 @@ POSTGRES_SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS new_high_feedback_daily (
         trade_date DATE PRIMARY KEY,
+        source_date DATE,
+        query_date DATE,
+        requested_trade_date DATE,
         new_high_count INTEGER NOT NULL DEFAULT 0,
         all_a_share_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
         leading_sectors TEXT NOT NULL DEFAULT '',
@@ -151,6 +154,9 @@ POSTGRES_SCHEMA_STATEMENTS = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    "ALTER TABLE new_high_feedback_daily ADD COLUMN IF NOT EXISTS source_date DATE",
+    "ALTER TABLE new_high_feedback_daily ADD COLUMN IF NOT EXISTS query_date DATE",
+    "ALTER TABLE new_high_feedback_daily ADD COLUMN IF NOT EXISTS requested_trade_date DATE",
     """
     CREATE TABLE IF NOT EXISTS monthly_account_ledger (
         trade_date DATE NOT NULL,
@@ -5007,6 +5013,105 @@ class PostgresDailyFactDb:
             conn.commit()
         return len(rows)
 
+    def query_tomorrow_action_history(self, end_date, *, mode="frozen", limit=25):
+        report_end_date = _date_or_none(end_date)
+        if not report_end_date:
+            return []
+        normalized_mode = _text(mode) or "frozen"
+        normalized_limit = max(_safe_int(limit, 25), 1)
+        columns = (
+            "report_date",
+            "field_path",
+            "value_text",
+            "value_number",
+            "value_bool",
+            "value_kind",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH recent_dates AS (
+                        SELECT report_date
+                        FROM strategy_factor_snapshots
+                        WHERE mode = %s AND report_date <= %s
+                        ORDER BY report_date DESC
+                        LIMIT %s
+                    )
+                    SELECT recent_dates.report_date, fields.field_path,
+                           fields.value_text, fields.value_number,
+                           fields.value_bool, fields.value_kind
+                    FROM recent_dates
+                    LEFT JOIN strategy_factor_snapshot_fields AS fields
+                      ON fields.report_date = recent_dates.report_date
+                     AND fields.mode = %s
+                     AND fields.field_path IN (
+                          'two_layer_decision_payload.next_day_action.final_object_identity',
+                          'two_layer_decision_payload.next_day_action.position_stance',
+                          'two_layer_decision_payload.next_day_action.stock.code',
+                          'two_layer_decision_payload.next_day_action.stock.name',
+                          'two_layer_decision_payload.tomorrow_account_action.action'
+                      )
+                    ORDER BY fields.report_date ASC, fields.field_path ASC
+                    """,
+                    (normalized_mode, report_end_date, normalized_limit, normalized_mode),
+                )
+                rows = cursor.fetchall()
+
+        fields_by_date = {}
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            report_date = _date_or_none(item.get("report_date"))
+            field_path = _text(item.get("field_path"))
+            if not report_date:
+                continue
+            fields = fields_by_date.setdefault(report_date, {})
+            if field_path:
+                fields[field_path] = _restore_typed_value(item)
+
+        records = []
+        for report_date in sorted(fields_by_date):
+            fields = fields_by_date[report_date]
+            identity = _text(
+                fields.get("two_layer_decision_payload.next_day_action.final_object_identity")
+            )
+            position_stance = _text(
+                fields.get("two_layer_decision_payload.next_day_action.position_stance")
+            )
+            stock_code = _stock_code(
+                {
+                    "stock_code": fields.get(
+                        "two_layer_decision_payload.next_day_action.stock.code"
+                    )
+                }
+            )
+            stock_name = _text(
+                fields.get("two_layer_decision_payload.next_day_action.stock.name")
+            )
+            account_action = _text(
+                fields.get("two_layer_decision_payload.tomorrow_account_action.action")
+            )
+            tomorrow_account_empty = account_action.lower() == "empty" or account_action == "明日空仓"
+            has_target = bool(stock_code or stock_name)
+            no_new_entry = identity in {"无", "none", "None"} or (
+                "0%" in position_stance and "不参与" in position_stance
+            )
+            records.append(
+                {
+                    "report_date": report_date,
+                    "action_type": (
+                        "no_trade" if no_new_entry else "execute" if has_target else ""
+                    ),
+                    "can_new_entry": False if no_new_entry else True if has_target else None,
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "tomorrow_account_empty": tomorrow_account_empty,
+                    "final_object_identity": identity,
+                    "position_stance": position_stance,
+                }
+            )
+        return records
+
     def load_strategy_performance_ledger(self, mode="frozen"):
         columns = (
             "mode",
@@ -6332,6 +6437,13 @@ class PostgresDailyFactDb:
             return {}
         item = {
             "trade_date": trade_date,
+            "source_date": _date_or_none(
+                row.get("source_date") or fallback_trend_row.get("source_date")
+            ),
+            "query_date": _date_or_none(
+                row.get("query_date") or fallback_trend_row.get("query_date")
+            ),
+            "requested_trade_date": _date_or_none(row.get("requested_trade_date")),
             "new_high_count": _safe_int(row.get("new_high_count")),
             "all_a_share_pct": _safe_float(row.get("all_a_share_pct")),
             "leading_sectors": _text(row.get("leading_sectors")),
@@ -6345,11 +6457,15 @@ class PostgresDailyFactDb:
                 cursor.execute(
                     """
                     INSERT INTO new_high_feedback_daily(
-                        trade_date, new_high_count, all_a_share_pct, leading_sectors,
+                        trade_date, source_date, query_date, requested_trade_date,
+                        new_high_count, all_a_share_pct, leading_sectors,
                         sector_distribution_json, top_stocks_json, source_policy, source_run_id
                     )
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                     ON CONFLICT (trade_date) DO UPDATE SET
+                        source_date=EXCLUDED.source_date,
+                        query_date=EXCLUDED.query_date,
+                        requested_trade_date=EXCLUDED.requested_trade_date,
                         new_high_count=EXCLUDED.new_high_count,
                         all_a_share_pct=EXCLUDED.all_a_share_pct,
                         leading_sectors=EXCLUDED.leading_sectors,
@@ -6361,6 +6477,9 @@ class PostgresDailyFactDb:
                     """,
                     (
                         item["trade_date"],
+                        item["source_date"],
+                        item["query_date"],
+                        item["requested_trade_date"],
                         item["new_high_count"],
                         item["all_a_share_pct"],
                         item["leading_sectors"],
@@ -6380,6 +6499,9 @@ class PostgresDailyFactDb:
             return []
         columns = (
             "trade_date",
+            "source_date",
+            "query_date",
+            "requested_trade_date",
             "new_high_count",
             "all_a_share_pct",
             "leading_sectors",
@@ -6392,7 +6514,8 @@ class PostgresDailyFactDb:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT trade_date, new_high_count, all_a_share_pct, leading_sectors,
+                    SELECT trade_date, source_date, query_date, requested_trade_date,
+                           new_high_count, all_a_share_pct, leading_sectors,
                            sector_distribution_json, top_stocks_json, source_policy, source_run_id
                     FROM new_high_feedback_daily
                     WHERE trade_date <= %s
@@ -6420,6 +6543,9 @@ class PostgresDailyFactDb:
             result.append(
                 {
                     "trade_date": _text(item.get("trade_date")),
+                    "source_date": _text(item.get("source_date")),
+                    "query_date": _text(item.get("query_date")),
+                    "requested_trade_date": _text(item.get("requested_trade_date")),
                     "new_high_count": _safe_int(item.get("new_high_count")),
                     "all_a_share_pct": _safe_float(item.get("all_a_share_pct")),
                     "leading_sectors": _text(item.get("leading_sectors")),
@@ -6567,6 +6693,14 @@ class PostgresDailyFactDb:
             return snapshot
         snapshot["source"] = "storage.stock_daily_quotes_recent.high_break"
         snapshot["source_policy"] = "storage.stock_daily_quotes_recent.high_break"
+        snapshot["source_date"] = trade_date
+        snapshot["query_date"] = trade_date
+        snapshot["requested_trade_date"] = trade_date
+        for row in snapshot.get("trend_rows") or []:
+            if isinstance(row, dict) and _date_or_none(row.get("trade_date")) == trade_date:
+                row["source"] = snapshot["source"]
+                row["source_date"] = trade_date
+                row["query_date"] = trade_date
         snapshot["topdays_threshold"] = lookback_days
         snapshot["message"] = "Tushare 技术因子未返回时，使用本地日线历史高点重建阶段新高反馈。"
         return snapshot

@@ -160,7 +160,7 @@ def _tomorrow_action_html(view: dict[str, Any]) -> str:
     target_row_label = "观察对象" if action.get("can_participate") is False else "参与对象"
     target = action.get("primary_target") if action.get("can_participate") is not False else action.get("observation_target")
     rows = [
-        ["明日仓位", action.get("position_state") or "待确认"],
+        ["明日新仓", action.get("position_state") or "待确认"],
         ["是否参与", _yes_no(action.get("can_participate"))],
         [target_row_label, _target_label(target) or "无"],
         ["参与窗口", action.get("participation_window") or "待确认"],

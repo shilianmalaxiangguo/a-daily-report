@@ -601,6 +601,9 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
         synthesis = result["afternoon_risk_synthesis"]
         self.assertEqual(synthesis["candidate_range"], "13:45-14:10")
         self.assertTrue(synthesis["formal_windows_unchanged"])
+        self.assertFalse(synthesis["human_attention_required"])
+        self.assertFalse(synthesis["intraday_action_allowed"])
+        self.assertEqual(synthesis["notification_policy"], "silent")
         self.assertEqual(
             set(synthesis["active_at_observation_start_case_ids"]), all_case_ids
         )
@@ -649,6 +652,27 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
             downward_branch["research_handling"],
             "observation_only_risk_reduction_or_exit_candidate",
         )
+        self.assertEqual(downward_branch["attention_handling"], "no_intraday_action")
+
+        window_synthesis = result["window_synthesis"]
+        self.assertEqual(
+            window_synthesis["opening"],
+            "opening_observation_not_curve_identification",
+        )
+        self.assertEqual(
+            window_synthesis["morning_diagnostic"],
+            "early_pressure_diagnosis_not_afternoon_shock_prediction",
+        )
+        self.assertEqual(
+            window_synthesis["late_handling"],
+            "overnight_risk_and_tail_state_not_early_exit",
+        )
+        attention_policy = window_synthesis["attention_policy"]
+        self.assertEqual(
+            attention_policy["routine_human_viewing_windows"],
+            ["T+1 09:30-09:35", "T+2 14:30-14:55"],
+        )
+        self.assertFalse(attention_policy["automatic_notification_available"])
 
     def test_afternoon_review_keeps_cross_lunch_event_and_cutoffs_are_causal(self):
         monotonic_bars = copy.deepcopy(
@@ -693,9 +717,9 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
             "2026-05-21 上证指数",
             "09:30-09:35",
             "09:45-10:10",
-            "09:45-09:50 前哨 / 09:50-10:10 正式窗口拆解",
-            "前哨观察",
-            "主执行",
+            "09:45-09:50 T0前哨样本 / 09:50-10:10 T0早盘样本",
+            "T0前哨样本",
+            "T0早盘样本",
             "14:30-14:55",
             "有限时刻幂律",
             "临界对数",
@@ -716,16 +740,21 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
             "候选后价格同向延续",
             "事后验收，不回填当时判断",
             "下降段前后速度（bp/分钟）",
-            "MARKET LANGUAGE RESEARCH · REVISION 4",
+            "MARKET LANGUAGE RESEARCH · REVISION 5",
             "11:30 / 13:01",
-            "日报落地：一个只读研究产物，两种时间钟",
+            "日报落地：只读研究目标，尚未改写正式动作链",
             "保护样本：先证明它会克制，再讨论是否有用",
             "market_language_translation.v1",
-            "09:45-09:50 前哨 + 09:50-10:10 正式",
-            "13:45-14:10 只是待验证候选",
-            "减风险或退出候选",
-            "继续持有",
-            "等 14:30-14:55 再处理",
+            "09:45-09:50 T0前哨样本 + 09:50-10:10 T0早盘样本",
+            "本节三张案例图都只使用压力发生日 T0 的一分钟事实",
+            "不能当成 T+1 买入或 T+2 卖出的回测",
+            "它不是 T+1 的 B2 执行记录",
+            "13:45-14:10 只作日终/replay 研究区间",
+            "固定主动查看只安排在 T+1 09:30-09:35 与 T+2 14:30-14:55",
+            "目前不会自动提醒",
+            "未收到明确提示时 B2 不执行",
+            "不要求持续盯盘",
+            "不产生临时动作",
             "尾盘突袭涨停",
             "消息驱动",
             "快速修复",
@@ -745,9 +774,13 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
         self.assertNotIn("为什么暂看 14:10", html)
         self.assertNotIn("14:00/14:05 会漏掉长电", html)
         self.assertNotIn("早盘窗口不可能预知午后鸭蛋弧", html)
+        self.assertNotIn("13:45-14:10 午后风险复核", html)
+        self.assertNotIn(">主执行<", html)
         self.assertIn("不能确认卖方账户身份", html)
         self.assertIn('class="window-scout"', html)
-        self.assertIn("黄色是 09:45-09:50 前哨观察", html)
+        self.assertIn("黄色是 09:45-09:50 T0 前哨样本", html)
+        self.assertNotIn("浅红是 T+1 09:30-09:35 人工处理", html)
+        self.assertNotIn("浅绿是 T+2 14:30-14:55 人工处理", html)
         self.assertGreaterEqual(html.count("<svg"), 7)
         self.assertEqual(html.count("<svg"), html.count("</svg>"))
         self.assertGreaterEqual(html.count('class="chart-legend-label"'), 24)

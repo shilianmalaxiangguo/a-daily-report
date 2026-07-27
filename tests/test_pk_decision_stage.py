@@ -266,7 +266,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(panel_fields["account_attention_load"], "无持仓负担")
         self.assertEqual(panel_fields["holding_priority_action"], "无旧仓时只等参与窗口")
 
-    def test_candidate_quality_scorecard_keeps_inferred_old_path_separate_from_empty_position(self):
+    def test_candidate_quality_scorecard_treats_previous_target_as_simulated_old_position(self):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
@@ -293,10 +293,10 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         panel_fields = result["exports"]["candidate_quality_panel_fields"]
-        self.assertEqual(panel_fields["account_attention_load"], "前日报计划对象待成交确认")
-        self.assertEqual(panel_fields["holding_priority_action"], "未确认成交前不视为B1；新机会按自身资格判断")
+        self.assertEqual(panel_fields["account_attention_load"], "旧仓需复核")
+        self.assertEqual(panel_fields["holding_priority_action"], "旧仓与新机会分开处理")
 
-    def test_candidate_quality_scorecard_repairs_cached_inferred_position_fields(self):
+    def test_candidate_quality_scorecard_keeps_cached_simulated_old_position_fields(self):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
@@ -329,9 +329,9 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         panel_fields = result["exports"]["candidate_quality_panel_fields"]
-        self.assertEqual(panel_fields["market_emotion_label"], "🟠 0%不参与；先确认成交事实")
-        self.assertEqual(panel_fields["account_attention_load"], "前日报计划对象待成交确认")
-        self.assertEqual(panel_fields["holding_priority_action"], "未确认成交前不视为B1；新机会按自身资格判断")
+        self.assertEqual(panel_fields["market_emotion_label"], "🟠 只处理旧仓")
+        self.assertEqual(panel_fields["account_attention_load"], "默认1x旧仓需复核")
+        self.assertEqual(panel_fields["holding_priority_action"], "旧仓按旧路径处理；新机会按自身资格判断")
 
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(
@@ -790,7 +790,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("不新增参与", rendered)
         self.assertNotIn("禁止任何买入", rendered)
 
-    def test_action_plan_context_rewrites_inferred_previous_plan_verdict(self):
+    def test_action_plan_context_treats_inherited_previous_target_as_simulated_old_position(self):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
@@ -816,8 +816,10 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["exports"]["position_section_lines"])
-        self.assertIn("明日裁决**: 🟠 0%不参与；先确认成交事实", rendered)
-        self.assertNotIn("明日裁决**: 🟠 只处理旧仓", rendered)
+        self.assertIn("明日裁决**: 🟠 只处理旧仓", rendered)
+        self.assertIn("已有旧仓：持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓", rendered)
+        self.assertIn("0%新仓；只处理旧仓，不新增参与", rendered)
+        self.assertNotIn("待成交确认", rendered)
 
     def test_action_plan_context_keeps_existing_position_when_no_new_target(self):
         result = build_pk_decision_action_plan_context_node(
@@ -862,7 +864,32 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertNotIn("- **现在到底是什么状态**: 空仓", rendered)
         self.assertNotIn("- **明天仓位放多少**: 0%（保持空仓）", rendered)
 
-    def test_action_plan_context_does_not_render_inferred_plan_as_existing_position(self):
+    def test_action_plan_context_keeps_unknown_position_pending(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "has_personal_positions": False,
+                "position_context_provided": False,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["position_section_lines"])
+
+        self.assertIn("- **现在到底是什么状态**: 持仓未输入，待确认", rendered)
+        self.assertIn("- **明天仓位放多少**: 0%新仓；账户仓位待确认", rendered)
+        self.assertIn("先核对实际持仓", rendered)
+        self.assertNotIn("保持空仓", rendered)
+
+    def test_action_plan_context_renders_inherited_target_as_simulated_old_position(self):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
@@ -899,10 +926,12 @@ class PkDecisionStageTest(unittest.TestCase):
             + exports["closing_lines"]
         )
 
-        self.assertNotIn("已有旧仓", rendered)
-        self.assertNotIn("持有长电科技", rendered)
+        self.assertIn("已有旧仓：持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓", rendered)
+        self.assertIn("0%新仓；只处理旧仓，不新增参与", rendered)
+        self.assertIn("先看旧仓竞价表态", rendered)
+        self.assertNotIn("待成交确认", rendered)
 
-    def test_action_plan_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
+    def test_action_plan_context_keeps_conviction_candidate_as_observation_without_t0_plan(self):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
@@ -949,10 +978,10 @@ class PkDecisionStageTest(unittest.TestCase):
         )
         self.assertIn("极度看好", rendered)
         self.assertIn("09:50-10:10观察价60.50", rendered)
-        self.assertIn("B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1", rendered)
-        self.assertIn("结果进入复盘和下一份日报判断", rendered)
+        self.assertIn("明天没有可买对象", rendered)
+        self.assertIn("保持空仓，不新增参与", rendered)
+        self.assertNotIn("B1先买参与权", rendered)
         self.assertNotIn("才评估50%条件执行", rendered)
-        self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)
 
     def test_action_plan_context_does_not_execute_candidate_with_incomplete_trace(self):

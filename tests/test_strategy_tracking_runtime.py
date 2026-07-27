@@ -281,6 +281,53 @@ def _strategy_performance_book_probe(data, target_date, plan_context, market_zho
 
         self.assertEqual(result, ("bar", "2026-04-23", "context", "replay"))
 
+    def test_strategy_plan_context_persists_explicit_tomorrow_empty_only(self):
+        strategy_tracking_runtime = self._load_runtime_module()
+        helpers = {
+            "_safe_float": lambda value: float(value or 0),
+            "_round_or_none": lambda value, digits=2: None if value is None else round(float(value), digits),
+            "_resolve_candidate_contract_prices": lambda *args, **kwargs: {},
+            "_is_one_word_limit_bar": lambda **kwargs: False,
+            "_build_trade_price_focus": lambda *args, **kwargs: {},
+            "_build_candidate_exit_rules": lambda *args, **kwargs: {},
+            "normalize_stock_code": lambda value: str(value or ""),
+            "is_tomorrow_empty_account_action": lambda value: bool(
+                isinstance(value, dict) and value.get("action") == "empty"
+            ),
+            "resolve_tomorrow_account_action": lambda value: value.get("tomorrow_account_action", {}),
+            "STRATEGY_HOLDING_DAYS_MIN": 3,
+            "STRATEGY_HOLDING_DAYS_MAX": 5,
+            "DEFENSIVE_EXIT_RULE_TEXT": "退出",
+            "PROFIT_EXIT_RULE_TEXT": "止盈",
+        }
+        base_args = (
+            "2026-07-21",
+            {"indices": {"上证指数": {"close": 3500, "change_pct": 0.5}}},
+            {},
+            {"can_new_entry": False},
+            {},
+            "0%不参与",
+            "无新仓",
+        )
+
+        without_empty = strategy_tracking_runtime.build_strategy_plan_context(
+            *base_args,
+            factor_snapshot={"selection": {"target_position_pct": 0}},
+            helpers=helpers,
+        )
+        with_empty_data = dict(base_args[1])
+        with_empty_data["tomorrow_account_action"] = {"action": "empty", "source": "explicit_cli"}
+        with_empty = strategy_tracking_runtime.build_strategy_plan_context(
+            base_args[0],
+            with_empty_data,
+            *base_args[2:],
+            factor_snapshot={"selection": {"target_position_pct": 0}},
+            helpers=helpers,
+        )
+
+        self.assertFalse(without_empty["tomorrow_account_empty"])
+        self.assertTrue(with_empty["tomorrow_account_empty"])
+
 
     def test_strategy_tracking_runtime_summary_includes_monitoring_pools(self):
         runtime = self._load_runtime_module()

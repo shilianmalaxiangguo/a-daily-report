@@ -53,11 +53,10 @@ __pycache__/
 
 # Local agent/session artifacts
 /.playwright-mcp/
-/.superpowers/
-/.superpowers/**
+/.brainstorming/
+/.brainstorming/**
 /.serena/
 /.serena/**
-/.agents/skills/superpowers
 
 # Daily report artifacts accidentally generated at the repository root
 /20??-??-??_明日标的选股淘汰赛.html

@@ -206,7 +206,52 @@ class PkDecisionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn(f"- **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后立刻按失效价和单笔-5%底线处理风险", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertNotIn("明日真正入场仍需09:50-10:10窗口", rendered)
+
+    def test_render_pk_single_signal_candidate_keeps_b1_only_for_half_position(self):
+        lines = render_pk_decision_section(
+            {
+                "trade_gate_open": True,
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
+                "pk_candidates": [
+                    {
+                        "name": "军工一号",
+                        "code": "000001",
+                        "win_rate": 0.62,
+                        "r_reward_ratio": 2.4,
+                        "ev": 1.86,
+                        "position_pct": 50,
+                        "signal": SimpleNamespace(signal_type="breakout", entry_price=10.0, stop_loss=9.5),
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
+
+    def test_render_pk_single_signal_candidate_uses_two_b_for_full_position(self):
+        lines = render_pk_decision_section(
+            {
+                "trade_gate_open": True,
+                "position_decision": {"target_position_pct": 100, "signal_grade": "100"},
+                "pk_candidates": [
+                    {
+                        "name": "军工一号",
+                        "code": "000001",
+                        "win_rate": 0.62,
+                        "r_reward_ratio": 2.4,
+                        "ev": 1.86,
+                        "position_pct": 100,
+                        "signal": SimpleNamespace(signal_type="breakout", entry_price=10.0, stop_loss=9.5),
+                    }
+                ],
+            }
+        )
+
+        self.assertIn("B2只在确认后补到2x/100%", "\n".join(lines))
 
 
 if __name__ == "__main__":

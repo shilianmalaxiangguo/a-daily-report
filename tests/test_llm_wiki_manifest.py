@@ -72,6 +72,39 @@ class LlmWikiManifestTest(unittest.TestCase):
                 for condition in entry["fact_conditions"]["must_any"]
             )
         )
+        new_high_entry = next(
+            entry
+            for entry in manifest["entries"]
+            if entry["knowledge_id"] == "market.new-high-breadth-contraction"
+        )
+        self.assertEqual(
+            new_high_entry["source_ref"]["path"],
+            "wiki/交易思想/创新高扩散、核心独强与补跌.md",
+        )
+        self.assertEqual(new_high_entry["source_ref"]["metadata_status"], "complete")
+        self.assertEqual(new_high_entry["decision_scope"], "explanation_only")
+        live_structure_entry = next(
+            entry
+            for entry in manifest["entries"]
+            if entry["knowledge_id"] == "market.historical-prior-live-structure"
+        )
+        self.assertEqual(
+            live_structure_entry["source_ref"]["path"],
+            "wiki/交易思想/历史先验、实时结构与可用窗口.md",
+        )
+        self.assertEqual(live_structure_entry["source_ref"]["metadata_status"], "complete")
+        self.assertEqual(live_structure_entry["decision_scope"], "explanation_only")
+        self.assertEqual(
+            {
+                condition["path"]
+                for condition in live_structure_entry["fact_conditions"]["must_any"]
+            },
+            {
+                "market.market_form",
+                "market.breadth",
+                "market.turnover_distribution",
+            },
+        )
         self.assertEqual(manifest["schema_version"], "knowledge_manifest.v1")
         self.assertEqual(len(manifest["manifest_hash"]), 64)
 

@@ -112,8 +112,8 @@ new-entry result is 0%.
 {
     "schema_version": "old_position_plan.v1",
     "holding": {"code": "str", "name": "str", "position_pct": "int | None"},
-    "account_exposure_mode": "1x | 2x | single_full_slot | dual_full_slot | unknown",
-    "position_sizing_rule": "full_or_empty | half_roll | mixed | unknown",
+    "account_exposure_mode": "0x | 1x | 2x | unknown",
+    "position_sizing_rule": "position_tier | unknown",
     "trade_role": "old_position | tplus2_exit | failed_buy | unknown",
     "risk_reward_assessment": "favorable | neutral | unfavorable | incomplete",
     "relative_strength_basis": "str",
@@ -122,7 +122,47 @@ new-entry result is 0%.
     "tail_exit_allowed": "bool",
     "tail_exit_condition": "str",
     "action": "hold | reduce | exit | wait_for_repair",
-    "evidence_sources": ["str"]
+    "evidence_sources": ["str"],
+    "decision_class": "failed | review_at_10_10 | normal | incomplete",
+    "primary_action_window": "09:50-10:10 | 14:30-14:55 | none",
+    "review_conditions": ["str"],
+    "closing_target_position_pct": "int | None"
+}
+```
+
+#### `position_tier_exposure.v2`
+
+```python
+{
+    "schema_version": "position_tier_exposure.v2",
+    "position_fact_status": "confirmed | pending_confirmation | none | unknown",
+    "old_position_pct": "0 | 50 | 100 | None",
+    "old_position_x": "0 | 1 | 2 | None",
+    "planned_new_entry_pct": "0 | 50 | 100",
+    "planned_new_entry_x": "0 | 1 | 2",
+    "new_entry_pct": "0 | 50 | 100",
+    "new_entry_x": "0 | 1 | 2",
+    "same_stock_target": "bool",
+    "same_stock_t": "bool",
+    "possible_intraday_overlap": "bool",
+    "max_runtime_exposure_pct": "0 | 50 | 100 | None",
+    "max_runtime_exposure_x": "0 | 1 | 2 | None",
+    # Legacy booleans remain read-compatible but do not own the ratio.
+    "old_position_1x": "bool",
+    "new_entry_1x": "bool",
+    "possible_intraday_overlap_2x": "bool",
+    "policy": "str",
+    "legacy": {"source_schema_version": "full_or_empty_exposure.v1 | None"},
+}
+```
+
+#### `tomorrow_account_action.v1`
+
+```python
+{
+    "schema_version": "tomorrow_account_action.v1",
+    "action": "empty",
+    "source": "explicit_cli | explicit_input | historical_snapshot | str",
 }
 ```
 
@@ -226,12 +266,59 @@ new-entry result is 0%.
   risk-reward assessment, rebound exit zone, invalidation lines, whether
   tail-session exit is still allowed, and the evidence source used for that
   judgment.
-- When the user says `1x` or `2x`, do not convert that into two 50% positions
-  by default. In the user's full-or-empty model, `1x` means one full-position
-  signal must be chosen, while `2x` means two full-position signals are carried
-  concurrently or two independent full-position accounts run in parallel. Use
-  half-position wording only when the user or the selected strategy explicitly
-  says half-roll / 50% / base-position.
+- The user-facing account action surface must render five independent rows:
+  `明日新仓`, `旧仓事实`, `旧仓判断`, `旧仓动作`, and `收盘目标仓位`.
+  `明日新仓 0%` does not prove current account exposure is 0x.
+- `明日新仓 0%` and `明日标的为空` mean no new participation only. They
+  do not create an account-zero instruction and do not override an independently
+  confirmed old-position plan. Current empty-position input describes the
+  current account fact only; unknown position input keeps exposure and closing
+  target pending confirmation.
+- Explicit `明日空仓` is the next-day account-zero instruction. It requires no
+  new purchase, selling every sellable old position in the opening call auction,
+  no same-day T, and account exposure 0 after execution. An unfilled remainder
+  stays in the earliest-exit path and must not be described as already empty.
+  This explicit instruction overrides the normal `failed`, `review_at_10_10`,
+  and `normal` old-position timing rules.
+- `source=explicit_cli` belongs only to the command invocation that received
+  `--tomorrow-empty`. A later invocation without that option must remove cached
+  copies from the root, position decision, final resolution, market snapshot,
+  and execution context. Non-CLI historical/replay sources remain valid, and a
+  derived `capital_priority=tomorrow_empty` may remain only beside a valid
+  preserved instruction.
+- `position_fact_status=confirmed` always counts the old position in account
+  exposure. `pending_confirmation` remains 0x until a trade fact confirms B1;
+  `none` may render 0x; `unknown` renders both exposure and closing target as
+  pending confirmation.
+- Non-empty position narrative alone is not a confirmed holding fact. Confirm
+  only from an explicit position flag, positive actual `position` /
+  `position_pct`, a structured old-position plan, or direct holding language.
+  Ambiguous notes such as exposure pending review or an unproven prior plan
+  remain `unknown` and must not create an old-position action.
+- Confirmed old positions use `decision_class`: `failed` exits during
+  `09:50-10:10`; `review_at_10_10` checks stock acceptance, relative index
+  strength, and sector-wide acceptance once and may defer only when all three
+  pass; `normal` uses `14:30-14:55` only when an explicit T+2/tail plan exists;
+  `incomplete` must not invent a precise exit time.
+- Normalize every structured `old_position_plan.v1` at the account-action
+  boundary. Cached `action`, `primary_action_window`, `tail_exit_allowed`,
+  `review_conditions`, and `closing_target_position_pct` values must not
+  override `decision_class`; legacy rows may derive the class only from the
+  explicit roles `failed_buy`, `wait_for_repair`, or `tplus2_exit`.
+- `13:45-14:10` remains an end-of-day/replay research range. It must not become
+  a new manual action window through old-position handling.
+- Position sizing has exactly three tiers: `0 = 0%`, `1x = 50% / B1`, and
+  `2x = 100% / B1+B2`. A confirmed B1 is already 1x; B2 may raise the total to
+  2x only after confirmation. Two concurrent 1x legs consume 2x / 100% total,
+  never 200% exposure.
+- New planned-position producers emit only `0`, `50`, or `100`. Actual lot-size
+  fills in the `40%-60%` band may be classified as 1x account exposure, but the
+  visible plan remains `1x/50%`; do not emit `1x/40%` or `1x/60%` plans.
+- In `position_tier_exposure.v2`, `planned_new_entry_pct/x` owns the target's
+  total planned tier, while `new_entry_pct/x` owns the current incremental buy
+  after subtracting an existing same-stock tier or available account capacity.
+  A same-stock 1x holding plus a planned 1x target therefore has current new
+  entry 0; a planned 2x target has current new entry 1x and that increment is B2.
 - Tail-session exit is allowed only while the holding has not triggered its
   invalidation lines and has not shown sustained relative weakness. If minute
   comparison evidence shows the holding staying materially weaker than the
@@ -262,47 +349,47 @@ new-entry result is 0%.
   previous-report plan does not prove a prior day's holding. Acceptance must
   reject any definite stock identity rendered against an unknown history fact.
 - A same-date report's "tomorrow target" row describes the next trading day's
-  plan, not that report day's account fact. To reconstruct account day `D`, read
-  the row/date cell that explicitly describes `D`, or a same-date old-position
-  fact such as `旧仓处理 | 持有...`; do not scan the row label's stock name and
-  treat it as `D`'s holding.
-- A previous report's tomorrow target may be rendered as a source note for the
-  next report, but it is still not a holding fact by itself. The current report
-  may write old-position handling only when explicit position input, same-date
-  old-position text, or a date-specific account row confirms the holding.
-- Explicit position input has the highest priority for Td. When it is absent,
-  the renderer must restore the current account identity from PostgreSQL
-  `personal_position_context.existing_position_summary`; it must not discard
-  that identity merely because the transient `positions` argument is empty.
-- A PostgreSQL position summary marked `inferred_from_previous_report=true` is
-  a pending account path, not confirmed execution. Td must keep the stock
-  identity, and Te may keep it only in the account-description text as a record
-  to verify. Te's execution-target cell must come exclusively from the current
-  report's final execution object: use `无` when that object is empty, or the
-  distinct resolved stock when one exists. Do not promote the pending account
-  path into a confirmed holding or a next-day execution target.
-- A pending account path must store `has_position=false` and
-  `has_pending_position=true`, with actual `position=0` and `position_pct=0`.
-  Its internal `default_position_pct` may remain nonzero only as a scenario
-  parameter, but account exposure is 0x until a成交 fact confirms B1. It must
-  not trigger old-position priority, same-stock T, or 1x/2x exposure.
-- A pending account path's semantic role must be `前日报计划待成交确认`, never
-  `旧仓处理`. In `two_layer_decision_payload.next_day_action`, the corresponding
-  handling text must be `只核实成交记录；未确认成交前按0x`; confirmed holdings keep
-  the normal old-position handling text.
-- Every structured copy marked `inferred_from_previous_report=true` or
-  `position_source=previous_report_target_default_1x` must be normalized before
-  rendering. This includes the personal position summary and the copies under
-  `final_target_resolution`, `market_research_snapshot`, and
-  `execution_stage_context`.
-- Normalization must also invalidate or repair cached derived fields that were
-  computed while the inferred plan still looked confirmed. Candidate quality
-  panels, conclusion support, action-plan context, and strategy-report rows must
-  not retain old-position, same-stock T, B1, or 1x wording after the source
-  record becomes pending. The position-strategy report renders that row as 0x.
-- When an unconfirmed plan moves into Ta/Tb/Tc history, keep it as
-  `计划待成交确认`; do not convert it to `历史持仓`, `可能形成B1旧仓`, or a confirmed
-  historical target. Only a date-specific成交/持仓 fact may promote it.
+  simulated fill, not that report day's account fact. To reconstruct account day
+  `D`, use the previous report's tomorrow target as a confirmed 50% / 1x old
+  position, or read the row/date cell that explicitly describes `D`. Do not copy
+  a target backward into the report day that selected it.
+- A tomorrow target from the preceding report is mandatory in the simulated
+  account on the next trading day. Normalize it to `confirmed`, actual 50% / 1x,
+  and include it in `old_position_plan.v1`; no independent fill record is needed.
+- Explicit position input has the highest priority for Td, including explicit
+  empty input. When explicit input is absent, an inherited simulated position
+  survives a transient empty `positions` argument.
+- A report with no new tomorrow target does not clear an existing simulated old
+  position. Continue the account path to the most recent unfinished inherited
+  target; stop only on an explicit current-empty fact, an executed tomorrow-empty
+  instruction, or an explicit exit fact.
+- Markdown compatibility fallback resolves same-date report variants in this
+  order: explicit `明日账户结果=明日空仓`, a valid tomorrow target, then a
+  report-day current-empty or exit fact. A report-day empty fact ends an older
+  inherited position, but it must not suppress a valid target selected for the
+  next trading day.
+- A PostgreSQL position summary marked `inferred_from_previous_report=true` or
+  `position_source=previous_report_target_default_1x` is an inherited simulated
+  old position. Normalize every structured copy to `has_position=true`,
+  `has_pending_position=false`, actual `position=50`, `position_pct=50`,
+  `default_position_pct=50`, and role `旧仓处理` before rendering.
+  This includes personal context and copies under final resolution, market
+  snapshot, and execution context.
+- Normalization must repair cached candidate panels, conclusion support,
+  action-plan context, exposure, and strategy rows so they consistently show
+  confirmed 1x old-position handling. The inherited position participates in
+  opportunity comparison, same-stock T, sell actions, and 1x/2x exposure.
+- `pending_confirmation` is reserved for explicitly external pending trades such
+  as `external_trade_pending`. Those records remain 0x and only verify the trade
+  record; they do not receive simulated-fill treatment.
+- A personal or root position summary with `has_pending_position=true` or
+  `position_source=external_trade_pending` blocks previous-report target
+  injection even if `position_context_provided` is stale or false. Explicit
+  empty summaries likewise block inherited-position injection.
+- When Ta/Tb/Tc history contains an independently confirmed old position,
+  inherited simulated old position, or explicit external pending record,
+  preserve its correct historical category. Keep genuinely unknown dates
+  unknown and never backfill them from the current report.
 - Ta/Tb/Tc reconstruction is PostgreSQL-first. Markdown report artifacts are a
   compatibility fallback only when PostgreSQL has no usable account fact and
   the runtime is not PostgreSQL-only. PostgreSQL-only runs must not use rendered
@@ -371,7 +458,15 @@ new-entry result is 0%.
 | Historical replay uses a current-only data source | Stop using that source for the historical field; record the missing field |
 | Performance metric has no price source date | Keep metric null and record missing `price_source_date` |
 | Current holding exists but 0% result only says no new entry | Treat the report as incomplete until `old_position_plan.v1` explains the holding action |
-| User mentions 1x / 2x but the report renders A and B as 50% each | Treat as an account-model error; preserve full-or-empty semantics unless half-roll is explicitly selected |
+| `旧仓事实=持仓未输入` but exposure or closing target is 0x/0% | Stop with `unknown_position_exposure_zero` |
+| `旧仓事实=已确认持有...` but no independent old-position action exists | Stop with `confirmed_old_position_action_missing` |
+| Explicitly external pending trade has a sell/exit action before confirmation | Stop with `pending_position_sell_action_conflict` |
+| Explicitly external pending summary is present while a previous report has a target | Preserve the pending 0x summary; do not inject the previous target as a confirmed 1x position |
+| Markdown says the report day is empty and also names a valid tomorrow target | Keep the report day empty; use the target as the next trading day's confirmed simulated 1x / 50% position |
+| Markdown explicitly says `明日账户结果=明日空仓` but still contains a stale target | The explicit tomorrow-empty instruction wins and ends inheritance |
+| `旧仓判断=已经失败` but the action omits `09:50-10:10` or an explicit exit instruction | Stop with `morning_exit_window_missing` |
+| Structured old-position plan says `failed` but keeps hold/tail fields, or says T+2 exit but keeps a morning/hold action | Normalize all dependent fields from the decision class before runtime or rendering |
+| User mentions 1x / 2x but the report maps 1x to 100% or 2x to 200% | Treat as a position-tier error; preserve `1x = 50%` and `2x = 100%` across every surface |
 | Tail-session exit remains allowed after prior low / support breaks or relative weakness persists | Treat the old-position action as stale; render rebound exit or invalidation exit instead |
 | Mainline score exists without evidence labels | Keep score out of the user-facing report until labels are available |
 | Statistics text claims 60/120 days but coverage is shorter | Render the true coverage or mark the long window as a target only |
@@ -393,11 +488,13 @@ new-entry result is 0%.
 | Cancellation trigger is confirmed but 3-day/5-day return facts are missing | Settle the cancellation condition from the next-day invalidation facts and keep later performance fields out of this accuracy denominator |
 | Ta/Tb/Tc has a known historical path in a prior report or position-strategy artifact, but the current day-order table renders it as empty | Treat the report as invalid until the historical path is restored in the day-order row |
 | Td is no holding while Te has a new target | Keep Td as the report-day account fact and Te as the next-day plan; do not copy Te backward into Td or Ta/Tb/Tc |
-| Pending previous-report plan exists while the current final object is empty | Keep the pending stock in Td and the Te account-description text, set the Te execution target to `无`, and render Bear Te as `无` |
-| Pending previous-report plan exists while the current final object is another stock | Keep the pending stock as account context and set Markdown/Bear Te execution target to the distinct final stock |
+| Inherited simulated old position exists while the current final object is empty | Keep the confirmed 1x stock in Td and old-position actions, set the Te new-entry target to `无`, and render Bear Te with no new target |
+| Inherited simulated old position exists while the current final object is another stock | Keep the old stock as confirmed 1x account context and set Markdown/Bear Te execution target to the distinct final stock |
 | Markdown or Bear Te execution target differs from the final execution object | Stop generation with the stable day-order target-conflict finding |
-| Pending summary has `has_position=false` but `position=100` | Preserve 100 only as `default_position_pct`; persist actual position fields as 0 |
-| Bear sees `确认已成交才视为B1` inside a 0% pending-verification Te row | Render `只核实` / `空仓执行`, not `参与权` / `确认权` |
+| External pending summary has `has_position=false` but `position=100` | Preserve 100 only as `default_position_pct`; persist actual position fields as 0 |
+| Bear sees `确认已成交才视为B1` inside an external pending-verification Te row | Render `只核实` / `空仓执行`, not `参与权` / `确认权` |
+| A run without `--tomorrow-empty` loads `source=explicit_cli` from cached root or nested data | Remove that command-scoped instruction and any unsupported `tomorrow_empty` priority before report construction |
+| A historical/replay instruction has a non-CLI source | Preserve the instruction and its matching priority; do not treat every nested copy as command cache |
 
 ### 5. Good / Base / Bad Cases
 
@@ -413,7 +510,14 @@ new-entry result is 0%.
 | Good empty-final appendix | final object empty, process candidate keeps price/sector evidence | All action cells say observation/process review; no current object or participation-style action appears |
 | Good process-candidate follow-up | process candidate limit-up next day while report position was 0% | Process bucket records a hit; execution bucket stays 0 |
 | Good holding plus 0% result | User holds 太极实业, final new-entry result is 0%, minute comparison shows sustained relative weakness | Report says no new entry and separately gives old-position risk-reward, rebound exit, invalidation exit, and tail-session permission |
-| Good 1x / 2x rendering | User says their model is full-or-empty and discusses 1x / 2x | Report describes 1x as full-position choose-one and 2x as concurrent full-position exposure, not A/B at 50% each |
+| Good simulated inheritance | Previous report named 长电科技 as tomorrow target | Next trading day has confirmed old-position 1x / 50%, old-position actions, and no pending wording |
+| Good external pending record | `external_trade_pending` names 长电科技 without confirmation | `明日新仓 0%`, pending fact, 0x exposure, confirmation-only action, no sell action |
+| Good empty report day plus target | Previous report says current old position is empty and names 长电科技 as tomorrow target | Current report day stays empty; next trading day inherits 长电科技 as confirmed simulated 1x / 50% |
+| Good historical empty instruction | Replay data carries `source=historical_snapshot` without a new CLI option | Preserve the historical next-day account-zero instruction |
+| Bad command-cache carryover | A later run omits `--tomorrow-empty` but reuses cached `source=explicit_cli` | Remove the cached instruction before building account actions |
+| Good review-at-10:10 old position | Old position evidence is mixed and all three acceptance facts are available | Review once in `09:50-10:10`; defer to `14:30-14:55` only when all three pass |
+| Bad unknown exposure | Position input is missing but the account surface says 0x | Acceptance returns `unknown_position_exposure_zero` |
+| Good 1x / 2x rendering | User defines 0 / 1x / 2x position tiers | Report describes 1x as 50% / B1 and 2x as 100% / B1+B2, with no 200% interpretation |
 | Bad fake precision | report shows 0.00% or exact metric without source date | metric removed or marked missing |
 | Bad holding plus no-trade wording | User holds a stock, report only says "no new entry" | Report is incomplete because the old-position action is missing |
 | Bad language-only judgment | strong wording exists but no fields | no performance credit until fieldized |
@@ -432,8 +536,22 @@ When implementation changes this contract, add or update tests that assert:
 - missing fields remain visible instead of becoming fake numeric values,
 - reports with user holdings and 0% new-entry output render `old_position_plan.v1`
   rather than only saying no new entry,
-- 1x / 2x account wording preserves the user's full-or-empty model and does
-  not rewrite it as two 50% slots unless half-roll is explicitly selected,
+- account/stock/two-layer/Bear surfaces preserve the same five account-action
+  rows while `selection_workflow`, `new_entry_target`, position percentage, and
+  B1/B2 remain unchanged,
+- the four position-action contradictions return stable acceptance codes:
+  `unknown_position_exposure_zero`, `confirmed_old_position_action_missing`,
+  `pending_position_sell_action_conflict`, and `morning_exit_window_missing`,
+- legacy `old_position_plan.v1` records gain the new decision/window fields only
+  from explicit `failed_buy`, `wait_for_repair`, or `tplus2_exit` evidence,
+- ambiguous non-empty position summaries remain `unknown` and do not create an
+  `old_position_plan.v1`, while direct holding and pending-trade wording retain
+  their confirmed and pending classifications,
+- structured plans with conflicting cached action/window/tail fields are
+  normalized to the complete `failed`, `review_at_10_10`, `normal`, or
+  `incomplete` contract before crossing into runtime and renderers,
+- 1x / 2x account wording preserves the three-tier contract: 1x is 50% / B1,
+  2x is 100% / B1+B2, and the account total never exceeds 2x / 100%,
 - old-position rendering moves away from tail-session default when minute
   comparison evidence shows sustained relative weakness, lower rebound highs,
   or a break of prior low / planned support,
@@ -446,12 +564,31 @@ When implementation changes this contract, add or update tests that assert:
 - `tests.test_daily_report_render` covers final Markdown sanitation for old frozen text where a 0% report still contains stale process-candidate participation wording,
 - `tests.test_next_day_attribution` covers process-candidate hits staying out of execution hit counts,
 - 60/120-day wording is not rendered until coverage supports it.
-- inferred previous-report plans stay in Td/Te account context but do not become
-  the Te execution target when the final object is empty,
-- Markdown and Bear reject the old inferred-target output and accept a distinct
-  current final target in Te.
-- PostgreSQL read/write round trips keep pending actual exposure at 0x while
-  retaining the scenario position separately.
+- inherited previous-report targets stay in Td/Te as confirmed old positions but
+  do not become a new Te execution target when the current final object is empty,
+- Markdown and Bear preserve the inherited 1x old-position identity and accept a
+  distinct current final target in Te.
+- PostgreSQL read/write round trips keep inherited simulated exposure at actual
+  50% / 1x; explicitly external pending records remain actual 0x.
+- command-entry injection tests prove external pending and explicit-empty
+  summaries cannot be overwritten by a previous-report target, including when
+  `position_context_provided=false`.
+- Markdown fallback tests cover report-day empty plus a valid tomorrow target,
+  no-target current-empty termination, and explicit tomorrow-empty overriding a
+  stale target.
+- command-entry tests cover both cached `source=explicit_cli` removal without a
+  current `--tomorrow-empty` option and preservation of non-CLI historical
+  instructions across root, position-decision, and final-resolution copies.
+- Bear date-intent tests cover explicitly external pending Te cells separately
+  from inherited simulated old-position B1 text; only the external record remains
+  pending and cannot create a participation intent.
+- Bear date-intent tests also cover historical `持仓未输入` beside an explicit
+  Te participation or empty-account instruction; historical uncertainty cannot
+  replace the Te cell's own intent.
+- When Markdown explicitly renders `明日空仓`, acceptance must read the Bear
+  `明日账户建议` table itself and require the same no-purchase, opening-auction
+  exit, no-T, closing-0%, and unfilled-remainder wording. Matching text in a
+  later Wiki or appendix section cannot satisfy this check.
 
 For a report behavior change, also run a replay sample and the report acceptance audit against the generated replay markdown.
 
@@ -472,6 +609,68 @@ The report stores a 50% planned participation record with a 09:50-10:10 window, 
 ```
 
 Why correct: the decision can be replayed, reviewed, and measured without changing the original trading context.
+
+#### Wrong: infer the account from the new-entry result
+
+```text
+明日新仓 0% -> 账户风险暴露 0x -> 所有旧仓默认上午卖出
+```
+
+#### Correct: resolve the two decisions independently
+
+```text
+明日新仓 0%；旧仓事实=已确认持有；旧仓判断=待10:10复核；
+三层承接全部成立才保留到14:30-14:55，否则09:50-10:10退出。
+```
+
+Why correct: new-entry qualification and old-position survival use different
+facts. Keeping them separate prevents a weak market or a 0% candidate result
+from erasing a still-valid holding, while preserving an explicit exit path for
+a failed holding.
+
+#### Wrong: reuse a command-scoped empty instruction
+
+```text
+Yesterday's cached source=explicit_cli -> today's run without --tomorrow-empty
+still performs the account-zero action.
+```
+
+#### Correct: respect action provenance
+
+```text
+No current --tomorrow-empty -> remove source=explicit_cli copies; preserve a
+source-dated historical/replay instruction and its matching derived priority.
+```
+
+#### Wrong: let report-day empty erase the next-day target
+
+```text
+旧仓事实=已确认无旧仓 + 明日执行对象=长电科技 -> 次日仍按空仓处理
+```
+
+#### Correct: keep report day and next day separate
+
+```text
+报告日旧仓为空；同日报告选出的长电科技仍在下一交易日形成确认的模拟1x旧仓。
+只有显式明日账户结果=明日空仓，才压过残留明日目标。
+```
+
+#### Wrong: trust conflicting cached plan fields
+
+```text
+decision_class=failed + action=hold + primary_action_window=14:30-14:55
+```
+
+#### Correct: normalize the complete dependent field set
+
+```text
+decision_class=failed + action=exit + primary_action_window=09:50-10:10
++ tail_exit_allowed=false + closing_target_position_pct=0
+```
+
+Why correct: `decision_class` owns the old-position decision. Letting stale
+dependent fields survive would make the same plan mean different things in
+runtime, Markdown, Bear HTML, and acceptance.
 
 #### Wrong
 
@@ -790,6 +989,23 @@ price-action fields when source facts exist:
         "quant_still_present_evidence": ["str"],
         "quant_exit_evidence": ["str"],
     },
+    "local_trend_sector_proof": {
+        "direction": "str | None",
+        "complete": "bool",
+        "cross_day_continuity": "bool",
+        "divergence_acceptance": "bool",
+        "internal_expansion": "bool",
+        "competition_comparison": "bool",
+        "evidence_gaps": ["str"],
+    },
+    "market_participation_limit": {
+        "max_position_pct": "0 | 50 | 100",
+        "broad_market_confirmation": "bool",
+        "systemic_risk": "bool",
+        "facts_complete": "bool",
+        "b2_allowed": "bool",
+        "reason": "str",
+    },
     "emotion_line_layer": {
         "enabled": "bool",
         "leader": {"code": "str | None", "name": "str | None"},
@@ -843,6 +1059,8 @@ price-action fields when source facts exist:
         "position_pct": 0 | 50 | 100,
         "action_text": "str",
         "failure_conditions": ["str"],
+        "b1_only": "bool",
+        "b2_allowed": "bool",
     },
     "missing_fields": ["str"],
 }
@@ -861,6 +1079,24 @@ must not silently substitute a live quote or old candidate memory.
 - `sector_layer.selected_direction` and `sector_path_selected` must be resolved
   before a new-entry leader can be resolved. The lower layer must prove that it
   accepted the higher-layer fund choice.
+- The six-layer derivation is an evidence order, not a requirement that every
+  layer be broadly bullish at the same time. Market and market-trend facts set
+  the participation ceiling; they do not replace the sector proof.
+- A local trend sector is complete only when the same direction has cross-day
+  continuity, acceptance after divergence, internal expansion, and an explicit
+  comparison with competing directions. A stock role, source-pool label, hot
+  rank, or single strong session cannot substitute for any missing element.
+- When systemic risk is absent but broad market confirmation is still missing,
+  one complete local trend sector may receive at most 50% / B1. This is a
+  participation right only: set `final.b1_only=True`,
+  `final.b2_allowed=False`, and keep B2 unavailable.
+- A 100% / B1+B2 plan requires both a complete matching local trend sector and
+  broad market or profit-effect confirmation. Set `final.b2_allowed=True` only
+  when `market_participation_limit.max_position_pct == 100`.
+- Systemic risk, incomplete critical facts, incomplete local trend-sector
+  proof, or a candidate outside the proven direction forces new participation
+  to 0%. Preserve old-position facts and actions independently; clearing the
+  new-entry object must not erase old-position handling or process evidence.
 - A single limit-up, T-board, one-line limit-up, hot-rank row, theme label, or
   old leader memory may explain process evidence only. It cannot create
   `new_entry_qualified=True` without sector spread and price acceptance.
@@ -894,6 +1130,11 @@ must not silently substitute a live quote or old candidate memory.
 |---|---|
 | Index rises while advancing names are weak and turnover is concentrated in a few paths | Record narrow-pool attack / bifurcation; do not render broad participation improvement |
 | Sector turnover share expands, sector width spreads, core diverges then holds, and back rows still accept | Set `sector_path_selected=True` and record `quant_still_present_evidence` |
+| Market is weak, systemic risk is absent, and one local trend sector proves all four required elements | Cap new participation at 50% / B1; `b1_only=True`, `b2_allowed=False` |
+| The same local trend sector is complete and broad market / profit-effect confirmation is also present | Allow the original plan up to 100% / B1+B2; `b2_allowed=True` |
+| Local trend-sector proof lacks cross-day continuity, divergence acceptance, internal expansion, or competing-direction comparison | Set new entry to 0% and list each missing proof element |
+| Candidate does not match the direction named by the complete local trend-sector proof | Set new entry to 0%; retain the stock only as process or risk evidence |
+| New-entry proof fails while an old position exists | Clear only the new-entry object and incremental position; preserve old-position facts, actions, and closing-position handling |
 | Sector turnover share falls, back rows fail, and the core falls back below same-date VWAP or key moving average | Record `quant_exit_evidence`; block or downgrade new-entry participation |
 | Single stock has limit-up, T-board, or one-line limit-up without sector spread and back-row acceptance | Keep it as process evidence or observation; `new_entry_qualified=False` |
 | Sector spreads first, then a capacity core holds while the flexible carrier makes new highs | Allow leader derivation, then continue through price action and account execution |
@@ -911,6 +1152,8 @@ must not silently substitute a live quote or old candidate memory.
 | Case | Input | Expected Output |
 |---|---|---|
 | Good sector-first leader | Sector expands, back rows accept, capacity core holds, price confirms | Candidate enters final comparison with 50% or 100% only if account conditions also pass |
+| Good weak-market B1 | Broad confirmation is absent, but one direction has complete local proof and the stock matches it | Final position is capped at 50%; B2 remains unavailable |
+| Good broad-confirmation B2 | Local proof is complete, the stock matches, and broad market confirmation exists | A valid original 100% plan may remain 100% |
 | Good split-market warning | Index is red, but breadth is weak and turnover concentrates in one or two paths | Report shows split-market context and keeps non-selected paths as observation |
 | Base hot extreme | Theme surges but follow-through and pullback facts are pending | Report records heat and waits for confirmation; final action remains 0% if no qualified target exists |
 | Base cold extreme | Panic appears but selling pressure has not faded | Report records cold context without treating fear as opportunity |
@@ -926,6 +1169,13 @@ When implementation changes this scenario, add or update tests that assert:
   narrow-pool attack without broad participation upgrade.
 - `tests.test_selection_workflow` covers sector turnover expansion plus back-row
   acceptance setting `sector_path_selected=True`.
+- `tests.test_selection_workflow` covers weak-market complete local proof
+  capping a 100% plan at 50% / B1, broad confirmation allowing B2, every missing
+  proof element returning to 0%, systemic risk returning to 0%, and candidate
+  direction mismatch returning to 0%.
+- `tests.test_report_runtime` covers the same complete proof reaching all
+  runtime contexts, and covers failed proof clearing the new-entry object while
+  preserving old-position facts and actions.
 - `tests.test_selection_workflow` covers single limit-up / T-board / one-line
   limit-up remaining process evidence when sector spread is absent.
 - `tests.test_selection_workflow` covers quant exit evidence blocking new-entry
@@ -1050,6 +1300,9 @@ The comparison output keeps the report-level contract:
 - When a candidate source has only name/code or a stale sector such as `未归类`, enrich display fields from `stock_full_info[code]` in the same snapshot. Use `close` as the observation/current price and `industry` / `所属行业` as the display line when candidate sector is missing.
 - Enrichment must fill missing price facts; it must not create a positive participation result. Missing MA5, MA10, VWAP, invalidation, or risk-reward still caps the row at observation/no new participation.
 - When the extra target is in the same line as the selected target and has no explicit role, label it as a same-line comparison candidate rather than a new core.
+- The `old_position` payload preserves account-fact fields (`has_position`,
+  `has_pending_position`, `position`, `position_pct`, source, provenance, and
+  summary) so simulated 1x status survives the comparison boundary.
 
 ### 4. Validation & Error Matrix
 
@@ -1898,6 +2151,111 @@ T0输出0%不参与；T+1/T+2事实只批改预案是否保守、是否不可买
 
 Why correct: the report learns from hindsight without letting hindsight create
 the original decision.
+
+## New-High Breadth Structure Evidence Contract
+
+### 1. Scope / Trigger
+
+Apply this contract when changing the new-high snapshot projection, the
+`创新高趋势反馈` section, the Bear new-high chart payload, or the corresponding
+LLM Wiki route. The feature is evidence-only: it explains market breadth and
+must not create or rewrite a candidate, final object, position, B1/B2, or exit
+action.
+
+### 2. Signatures
+
+- `build_new_high_breadth_thresholds() -> dict[str, Any]` returns
+  `new_high_breadth_thresholds.v1`, including the five levels and four Bear
+  reference lines.
+- `classify_new_high_breadth_level(all_a_share_pct, new_high_count=None)`
+  returns the absolute-level code, label, range, reason, and rank.
+- `build_new_high_structure_signal(snapshot, target_date="")` consumes only
+  the frozen `new_high_feedback` fields and returns absolute level, direction,
+  source comparability, sector coverage, structure summary, counter-evidence,
+  and next-window review text.
+
+### 3. Contracts
+
+- Exact upward boundaries are `>=5% 极致扩散`, `>=2% 有效扩散`,
+  `>=1% 扩散偏冷`, `>=0.2% 极低扩散`, and `<0.2% 扩散断层`.
+- `new_high_count < 10` overrides the percentage level and is always
+  `扩散断层`; the level still remains evidence rather than a trading action.
+- Absolute level and change direction are separate. `2.3% -> 0.8%` is a
+  contraction example; `0.4% -> 0.8%` is a low-level repair example.
+- Precise cross-day speed and peak retention require matching per-day source
+  and source date. Otherwise render `事实不足` and keep only structural
+  observation wording.
+- Every persisted trend row must round-trip its `source`, `source_date`, and
+  `query_date`. The current ranking returned by an endpoint with no target-date
+  parameter cannot be relabeled as an older report day's new-high fact.
+- Aggregate duplicate sector rows by sector name before calculating coverage.
+  If aggregated coverage exceeds the current new-high count, sector facts are
+  insufficient and cannot support clustering, fragmentation, or dominance.
+- The trend table column is `板块分布前列`. A ranked or tied sector list is not
+  a `主导板块` conclusion.
+- Bear JavaScript reads all four reference lines from the Python payload; it
+  must not retain a second hard-coded threshold set.
+- The LLM Wiki route uses `decision_scope=explanation_only` and must preserve
+  the formal decision fields unchanged.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Percentage is exactly 5 / 2 / 1 / 0.2 | Classify into the higher level |
+| New-high count is 9 while percentage is above 0.2 | Use `扩散断层` |
+| Source or source date is not comparable | Hide precise speed/retention; render `事实不足` |
+| Duplicate sector rows stay within current total | Aggregate before sector-share calculations |
+| Aggregated sector coverage exceeds current total | Disable sector conclusions and render `事实不足` |
+| Six stocks are spread across six tied sectors | Describe fragmentation; do not call the first sector dominant |
+| Bear payload lacks threshold lines | Render no reference lines rather than restoring JavaScript constants |
+| Wiki route matches the breadth fact | Explain only; keep final action unchanged |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good contraction | `2.3% -> 0.8%`, both count and share fall | `极低扩散 + 扩散收缩` |
+| Good repair | `0.4% -> 0.8%`, both count and share rise below the prior peak | `极低扩散 + 低位修复` |
+| Base incomplete history | Current row exists, prior source metadata does not | Absolute level plus `事实不足`; no precise speed |
+| Bad false dominance | Six tied one-stock sectors, table headed `主导板块` | Rename to `板块分布前列`; keep dominance unclaimed |
+| Bad decision leak | Single-digit breadth directly changes tomorrow position | Reject; breadth remains evidence-only |
+
+### 6. Tests Required
+
+- `tests.test_new_high_structure_signal` covers exact boundaries, single-digit
+  override, contraction versus repair, duplicate-sector aggregation, coverage
+  overflow, target-date mismatch, and source insufficiency.
+- `tests.test_market_overview_builder` covers four-line placement, the neutral
+  sector-column label, five-level trend rows, and absence of false dominance.
+- `tests.test_daily_report_markdown_html` covers Python-provided reference
+  lines, tooltip count/level fields, and narrow-screen containment.
+- `tests.test_llm_wiki_context`, `tests.test_llm_wiki_router`,
+  `tests.test_llm_wiki_manifest`, and `tests.test_llm_wiki_lint` cover the Wiki
+  source, trigger terms, provenance, and decision isolation.
+- A generated target report must pass `report_acceptance_audit.py`, and its
+  formal object, position, execution nature, B1/B2, and exit action must remain
+  unchanged.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+2026-07-13: 半导体是创新高主导板块，所以半导体周期已经确认背离。
+```
+
+Why wrong: the visible sample has six new highs across six sectors. A tied
+ranking does not prove sector dominance or a confirmed transmission path.
+
+#### Correct
+
+```text
+2026-07-13: 6只 / 0.12%，进入扩散断层；板块分散且未成群，作为后续核心与指数风险传导的复核线索。
+```
+
+Why correct: it preserves the early-warning value while separating confirmed
+facts, structural interpretation, and the later replay result.
 
 ## Full Attack Roadmap
 

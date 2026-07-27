@@ -200,6 +200,79 @@ class MarketActivityInferTest(unittest.TestCase):
         self.assertIn("fund_flow", scores["半导体"]["strength_dimensions"])
         self.assertIn("limit_up", scores["半导体"]["strength_dimensions"])
 
+    def test_quant_signal_log_marks_empty_resonance_as_computed_when_inputs_were_evaluated(self):
+        bundle = getattr(_infer_module, "build_market_activity_quant_signal_bundle", None)
+        self.assertIsNotNone(bundle, "build_market_activity_quant_signal_bundle should be defined")
+
+        result = bundle(
+            {
+                "stocks_with_history": [
+                    {
+                        "code": "000001",
+                        "name": "机器人一号",
+                        "turnover": 20.0,
+                        "sector": "机器人",
+                        "hist_turnover": [5.0, 6.0, 7.0, 8.0, 10.0],
+                    }
+                ],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "sector_ai_analysis": {"mapping": {}},
+                "zt_pool_by_sector": {"机器人": [{"code": "000001"}]},
+                "sector_fund_flow": {"inflow": [{"name": "银行", "zljlr": 70.0, "zdf": 1.2}]},
+                "zt_pool": [{"code": "000001"}],
+                "calendar": [],
+            },
+            analyze_volume_anomaly=lambda stocks, _context: [],
+            analyze_lhb=lambda rows, _context: [],
+            calculate_resonance=lambda sectors_data: {},
+            generate_trade_signals=lambda payload: [],
+            timer=_TimerStub(),
+            emit=lambda *_args, **_kwargs: None,
+        )
+
+        quant_log = next(log for log in result["module_logs"] if log["step"] == "infer.quant_signals")
+        self.assertEqual(quant_log["details"]["resonance_count"], 0)
+        self.assertEqual(quant_log["details"]["resonance_input_count"], 1)
+        self.assertIs(quant_log["details"]["resonance_computed"], True)
+
+    def test_quant_signal_log_rejects_unusable_resonance_result(self):
+        bundle = getattr(_infer_module, "build_market_activity_quant_signal_bundle", None)
+        self.assertIsNotNone(bundle, "build_market_activity_quant_signal_bundle should be defined")
+
+        result = bundle(
+            {
+                "stocks_with_history": [
+                    {
+                        "code": "000001",
+                        "name": "机器人一号",
+                        "turnover": 20.0,
+                        "sector": "机器人",
+                        "hist_turnover": [5.0, 6.0, 7.0, 8.0, 10.0],
+                    }
+                ],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "sector_ai_analysis": {"mapping": {}},
+                "zt_pool_by_sector": {"机器人": [{"code": "000001"}]},
+                "sector_fund_flow": {"inflow": [{"name": "银行", "zljlr": 70.0, "zdf": 1.2}]},
+                "zt_pool": [{"code": "000001"}],
+                "calendar": [],
+            },
+            analyze_volume_anomaly=lambda stocks, _context: [],
+            analyze_lhb=lambda rows, _context: [],
+            calculate_resonance=lambda sectors_data: None,
+            generate_trade_signals=lambda payload: [],
+            timer=_TimerStub(),
+            emit=lambda *_args, **_kwargs: None,
+        )
+
+        quant_log = next(log for log in result["module_logs"] if log["step"] == "infer.quant_signals")
+        self.assertEqual(result["results"]["resonance_scores"], {})
+        self.assertEqual(quant_log["details"]["resonance_count"], 0)
+        self.assertEqual(quant_log["details"]["resonance_input_count"], 1)
+        self.assertIs(quant_log["details"]["resonance_computed"], False)
+
     def test_build_market_activity_quant_signal_bundle_backfills_price_change_from_candidate_history(self):
         bundle = getattr(_infer_module, "build_market_activity_quant_signal_bundle", None)
         self.assertIsNotNone(bundle, "build_market_activity_quant_signal_bundle should be defined")

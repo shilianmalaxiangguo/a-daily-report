@@ -1,13 +1,21 @@
 from report.surface_wording import sanitize_user_visible_text
-from report.execution_wording import PREMARKET_50_EXECUTION_TEXT, PREMARKET_50_TRIGGER_TEXT
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    PREMARKET_FULL_EXECUTION_TEXT,
+    PREMARKET_FULL_TRIGGER_TEXT,
+)
+from report.conclusion_support import resolve_target_position_pct
 from report.position_context import (
     existing_position_summary_from_context,
-    is_inferred_previous_report_position,
+    normalize_inferred_previous_target_records,
+    position_fact_status,
 )
 from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import blocked_current_observation_keys
 from report.trading_time_window_contract import normalize_trading_time_text
+from report.position_tier_contract import normalize_planned_position_tier_pct
 
 
 def _format_closed_gate_buy_limit_text(position_level, final_gate):
@@ -17,21 +25,23 @@ def _format_closed_gate_buy_limit_text(position_level, final_gate):
     return "保持空仓，不新增参与"
 
 
-def _format_position_display(position_level):
-    text = str(position_level or "").strip()
-    if text == "0%不参与" or "空仓" in text:
-        return "0%不参与"
-    if "防守" in text:
-        return "0%不参与"
-    if text == "50%条件执行" or "50%" in text or "进攻" in text:
+def _format_position_display(position_pct):
+    try:
+        position_pct = normalize_planned_position_tier_pct(position_pct)
+    except (TypeError, ValueError):
+        position_pct = 0
+    if position_pct == 100:
+        return "100%核心进攻"
+    if position_pct == 50:
         return "50%条件执行"
-    return text or "0%不参与"
+    return "0%不参与"
 
 
 def _existing_position_summary_text(context):
-    summary = existing_position_summary_from_context(context)
-    if is_inferred_previous_report_position(summary) or not summary.get("has_position"):
+    summary = dict(existing_position_summary_from_context(context))
+    if position_fact_status(summary, context_provided=True) != "confirmed":
         return ""
+    normalize_inferred_previous_target_records(summary)
     return str(summary.get("summary") or "").strip()
 
 
@@ -256,6 +266,7 @@ ACTION_PLAN_CONTEXT_EXPORT_KEYS = (
     "closing_lines",
     "alert_rows",
     "action_plan_context_diagnostics",
+    "position_decision",
 )
 
 
@@ -309,6 +320,8 @@ def _clear_current_object_payload_for_empty_final(payload):
 
 def _sanitize_action_plan_context_payload(payload, context=None):
     payload = dict(payload or {})
+    if "position_decision" not in payload and isinstance((context or {}).get("position_decision"), dict):
+        payload["position_decision"] = dict(context.get("position_decision") or {})
     if _final_target_empty_without_current_observation(context or {}):
         payload = _clear_current_object_payload_for_empty_final(payload)
     sanitized = {}
@@ -316,7 +329,7 @@ def _sanitize_action_plan_context_payload(payload, context=None):
         if key not in payload:
             continue
         value = payload.get(key)
-        if key == "action_plan_context_diagnostics":
+        if key in {"action_plan_context_diagnostics", "position_decision"}:
             sanitized[key] = dict(value or {})
         elif key == "alert_rows":
             sanitized[key] = list(value or [])
@@ -327,11 +340,13 @@ def _sanitize_action_plan_context_payload(payload, context=None):
 
 def build_action_plan_context_payload(context):
     context = context or {}
-    inferred_previous_plan = is_inferred_previous_report_position(
-        existing_position_summary_from_context(context)
+    existing_position_summary = existing_position_summary_from_context(context)
+    pending_external_trade = (
+        position_fact_status(existing_position_summary, context_provided=True)
+        == "pending_confirmation"
     )
     existing_payload = context.get("action_plan_context_payload")
-    if existing_payload is not None and not inferred_previous_plan:
+    if existing_payload is not None and not pending_external_trade:
         return _sanitize_action_plan_context_payload(existing_payload, context=context)
 
     trade_gate_open = context.get("trade_gate_open", False)
@@ -342,11 +357,16 @@ def build_action_plan_context_payload(context):
     step0_prediction = str(context.get("step0_prediction", "") or "").strip()
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
-    if inferred_previous_plan and "只处理旧仓" in step0_prediction_cn:
+    if pending_external_trade and "只处理旧仓" in step0_prediction_cn:
         step0_prediction_cn = "🟠 0%不参与；先确认成交事实"
-    has_personal_positions = bool(context.get("has_personal_positions", False)) and not inferred_previous_plan
+    has_personal_positions = bool(context.get("has_personal_positions", False)) and not pending_external_trade
     existing_position_text = _existing_position_summary_text(context)
     has_existing_position_context = bool(existing_position_text)
+    position_context_unknown = (
+        context.get("position_context_provided") is False
+        and not has_existing_position_context
+        and not pending_external_trade
+    )
     final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
     if final_empty_without_current_observation:
         best_stock = None
@@ -390,7 +410,24 @@ def build_action_plan_context_payload(context):
         None,
     )
     old_position_first = bool(final_gate.get("should_reduce") and has_personal_positions)
-    can_ten_confirm_upgrade = (not old_position_first) and bool(final_gate.get("allow_attack_50_ready") or ten_confirm_upgrade_candidate)
+    target_position_pct = resolve_target_position_pct(context)
+    if target_position_pct is None:
+        target_position_pct = 0
+    position_execution_text = (
+        PREMARKET_FULL_EXECUTION_TEXT
+        if target_position_pct == 100
+        else PREMARKET_50_EXECUTION_TEXT
+    )
+    position_trigger_text = (
+        PREMARKET_FULL_TRIGGER_TEXT
+        if target_position_pct == 100
+        else PREMARKET_50_TRIGGER_TEXT
+    )
+    can_ten_confirm_upgrade = (
+        target_position_pct >= 50
+        and not old_position_first
+        and bool(final_gate.get("allow_attack_50_ready") or ten_confirm_upgrade_candidate)
+    )
     observation_anchor = display_observation_candidates[0] if display_observation_candidates else watch_anchor
     quality_backup_anchor = watch_anchor if best_stock else observation_anchor
     scorecard_context = dict(
@@ -414,7 +451,7 @@ def build_action_plan_context_payload(context):
     )
 
     action_rows = []
-    if best_stock:
+    if best_stock and target_position_pct > 0:
         if "signal" in best_stock:
             signal = best_stock["signal"]
             minute_plan = best_stock.get("minute_plan") or {}
@@ -488,7 +525,7 @@ def build_action_plan_context_payload(context):
                 "action": "⏳ 确认后执行预案",
                 "name": candidate.get("name"),
                 "code": candidate.get("code"),
-                "trigger": f"{confirm_text}，且板块承接不塌，{PREMARKET_50_TRIGGER_TEXT}",
+                "trigger": f"{confirm_text}，且板块承接不塌，{position_trigger_text}",
                 "risk_window": (price_focus or {}).get("key_zone_display", "-"),
             }
         )
@@ -571,18 +608,34 @@ def build_action_plan_context_payload(context):
         append_observation_price_focus_note(backup_observation_lines, price_focus, prefix="  ")
 
     position_section_lines = [
-        f"- **进攻仓位三态**: {_format_position_display(position_level)}",
+        f"- **进攻仓位三态**: {_format_position_display(target_position_pct)}",
         f"- **明日裁决**: {step0_prediction_cn}",
         f"- **怎么执行**: {normalize_trading_time_text(get_execution_framework_text())}",
     ]
-    position_display = _format_position_display(position_level)
+    position_display = _format_position_display(target_position_pct)
     if position_display == "0%不参与":
-        if has_existing_position_context:
+        if pending_external_trade:
+            position_section_lines.extend(
+                [
+                    "- **现在到底是什么状态**: 外部交易待核实，实际仓位按0x记录",
+                    "- **明天仓位放多少**: 0%新仓；未确认成交前不视为B1",
+                    "- **明天具体怎么做**: 只核实成交记录；未确认不卖、不新增B2",
+                ]
+            )
+        elif has_existing_position_context:
             position_section_lines.extend(
                 [
                     f"- **现在到底是什么状态**: 已有旧仓：{existing_position_text or '按持仓预案处理'}",
                     "- **明天仓位放多少**: 0%新仓；只处理旧仓，不新增参与",
                     "- **明天具体怎么做**: 先按持仓预案处理旧仓；不因外部消息脉冲临时加仓",
+                ]
+            )
+        elif position_context_unknown:
+            position_section_lines.extend(
+                [
+                    "- **现在到底是什么状态**: 持仓未输入，待确认",
+                    "- **明天仓位放多少**: 0%新仓；账户仓位待确认",
+                    "- **明天具体怎么做**: 先核对实际持仓；不从明日新仓0%反推旧仓卖出或持有动作",
                 ]
             )
         elif final_empty_without_current_observation:
@@ -637,23 +690,23 @@ def build_action_plan_context_payload(context):
             )
         elif step0_prediction == "NEUTRAL":
             position_section_lines.extend(
-	                [
+                [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
-                    f"- **明天具体怎么做**: {PREMARKET_50_TRIGGER_TEXT}；不追涨",
-	                ]
+                    f"- **明天仓位放多少**: {position_execution_text}",
+                    f"- **明天具体怎么做**: {position_trigger_text}；不追涨",
+                ]
             )
         else:
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
-                    f"- **明天具体怎么做**: {PREMARKET_50_TRIGGER_TEXT}",
+                    f"- **明天仓位放多少**: {position_execution_text}",
+                    f"- **明天具体怎么做**: {position_trigger_text}",
                 ]
             )
 
     pre_market_lines = []
-    if best_stock:
+    if best_stock and target_position_pct > 0:
         if "signal" in best_stock:
             signal = best_stock["signal"]
             minute_plan = best_stock.get("minute_plan") or {}
@@ -708,7 +761,7 @@ def build_action_plan_context_payload(context):
         opening_lines.extend(
             [
                 "- 只观察主攻线承接和过程样本反馈，不把竞价强弱转成新增参与",
-                "- 若竞价表态和开盘承接同时成立，也只记为过程证据；不新增参与",
+                "- 若竞价表态和开盘承接同时成立，确认后也只保留观察；也只记为过程证据；不新增参与",
             ]
         )
     else:
@@ -718,13 +771,13 @@ def build_action_plan_context_payload(context):
                 "- 若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%",
             ]
         )
-    if trade_gate_open and best_stock:
+    if trade_gate_open and best_stock and target_position_pct > 0:
         first_hour_lines = [
             "- 竞价/开盘前几分钟未触发时，只等09:50-10:10窗口内条件成立",
             "- 直接高开离计划过远且没有回封/承接方案 → 放弃，等新的买点",
         ]
         intraday_lines = [
-            f"- 竞价表态、开盘承接、打板/回封或09:50-10:10窗口任一路径命中，且大盘不崩 → {PREMARKET_50_TRIGGER_TEXT}",
+            f"- 竞价表态、开盘承接、打板/回封或09:50-10:10窗口任一路径命中，且大盘不崩 → {position_trigger_text}",
             "- 买入后按失效价和单笔-5%底线处理风险；若失效价过深，则直接用单笔-5%底线",
             "- 跌破执行止损线 → 无条件止损",
         ]
@@ -771,9 +824,9 @@ def build_action_plan_context_payload(context):
                     "- 失效价失守或日内明显转弱，执行减仓/止损",
                     "- 观察标的全天未形成更强确认，继续等待，不替换旧仓处理计划",
                 ]
-            elif inferred_previous_plan:
+            elif pending_external_trade:
                 first_hour_lines = [
-                    "- 当前保持0%不参与，本时段只核实前日报计划是否成交",
+                    "- 当前保持0%不参与，本时段只核实外部交易是否成立",
                     "- 未确认成交继续空仓，不把待确认对象写成B1",
                 ]
                 intraday_lines = [
@@ -793,12 +846,12 @@ def build_action_plan_context_payload(context):
                 ]
 
     closing_lines = ["- 未新增参与的保持观望"]
-    if trade_gate_open and best_stock:
+    if trade_gate_open and best_stock and target_position_pct > 0:
         closing_lines.append("- 已买入的确认风险线是否需要上移")
     elif has_existing_position_context:
         closing_lines.append("- 旧仓按持仓预案确认是否继续留到下一交易日")
-    elif inferred_previous_plan:
-        closing_lines.append("- 收盘后只核实前日报计划成交事实，未确认仍按0x记录")
+    elif pending_external_trade:
+        closing_lines.append("- 收盘后只核实外部交易事实，未确认仍按0x记录")
     else:
         closing_lines.append("- 若你有旧仓，确认风险线是否需要上移")
 
@@ -858,6 +911,7 @@ def build_action_plan_context_payload(context):
             best_stock=best_stock,
             watch_anchor=watch_anchor,
         ),
+        "position_decision": dict(context.get("position_decision") or {}),
         **scorecard_payload,
     }
     return payload

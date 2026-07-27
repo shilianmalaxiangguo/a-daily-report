@@ -65,6 +65,22 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         strategy_save_patcher.start()
         self.addCleanup(strategy_save_patcher.stop)
 
+        strategy_calendar_build_patcher = patch.object(
+            daily_report_entry_demo,
+            "_build_tomorrow_action_calendar_for_bear",
+            return_value={
+                "schema": "tomorrow_action_calendar.v1",
+                "mode": "frozen",
+                "requested_count": 25,
+                "record_count": 0,
+                "status": "source_incomplete",
+                "records": [],
+                "summary": {},
+            },
+        )
+        strategy_calendar_build_patcher.start()
+        self.addCleanup(strategy_calendar_build_patcher.stop)
+
     def test_position_timeline_is_inserted_after_heading_and_reading_map(self):
         markdown = "# 2026-07-02 a股市场分析\n\n## 阅读地图\n| 顺序 | 模块 | 用途 |\n|---:|---|---|\n| 1 | 日报裁决总览 | 先看动作 |\n\n## 日报裁决总览\n正文\n"
         timeline = "| 轨道 | 标的 | 2026-07-02 |\n|------|------|------|\n| Ta旧仓 | 太极实业(600667) | 旧路径复核 |"
@@ -164,6 +180,186 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
         }
 
+    def test_build_t0_market_breadth_keeps_latest_25_dates_and_historical_nulls(self):
+        class FactService:
+            def __init__(self):
+                self.index_query = None
+                self.breadth_dates = []
+                self.new_high_query_count = 0
+
+            def query_index_daily_bars(self, index_code, end_date, *, window_days):
+                self.index_query = (index_code, end_date, window_days)
+                rows = [
+                    {
+                        "trade_date": f"2026-06-{day:02d}",
+                        "close": 99 + day,
+                    }
+                    for day in range(1, 27)
+                ]
+                rows.append({"trade_date": "2026-06-27", "close": 127})
+                return list(reversed(rows))
+
+            def query_market_breadth_counts(self, trade_date):
+                self.breadth_dates.append(trade_date)
+                if trade_date == "2026-06-10":
+                    return {
+                        "trade_date": trade_date,
+                        "source_date": "2026-06-09",
+                        "up_count": 3100,
+                        "down_count": 1900,
+                    }
+                return {
+                    "trade_date": trade_date,
+                    "source_date": trade_date,
+                    "up_count": 3000,
+                    "down_count": 2000,
+                }
+
+            def query_new_high_feedback_series(self, end_date, *, window_days):
+                self.new_high_query_count += 1
+                rows = [
+                    {
+                        "trade_date": f"2026-06-{day:02d}",
+                        "all_a_share_pct": day / 10,
+                    }
+                    for day in range(2, 27)
+                ]
+                rows[9]["source_date"] = "2026-06-10"
+                rows.append({"trade_date": "2026-06-27", "all_a_share_pct": 9.9})
+                return rows
+
+        service = FactService()
+
+        payload = daily_report_entry_demo._build_t0_market_breadth_for_bear(
+            "2026-06-26",
+            service=service,
+        )
+
+        self.assertEqual(service.index_query, ("sh000985", "2026-06-26", 26))
+        self.assertEqual(service.new_high_query_count, 1)
+        self.assertEqual(len(payload["items"]), 25)
+        self.assertEqual(payload["items"][0]["date"], "2026-06-02")
+        self.assertEqual(payload["items"][-1]["date"], "2026-06-26")
+        self.assertEqual(payload["items"][0]["all_a_change_pct"], 1.0)
+        self.assertEqual(service.breadth_dates, [item["date"] for item in payload["items"]])
+        self.assertNotIn("2026-06-27", [item["date"] for item in payload["items"]])
+        items_by_date = {item["date"]: item for item in payload["items"]}
+        self.assertIsNone(items_by_date["2026-06-10"]["up_count"])
+        self.assertIsNone(items_by_date["2026-06-10"]["down_count"])
+        self.assertIsNone(items_by_date["2026-06-11"]["new_high_share_pct"])
+
+    def test_build_t0_market_breadth_prefers_report_new_high_history(self):
+        class FactService:
+            def __init__(self):
+                self.new_high_query_count = 0
+
+            def query_index_daily_bars(self, index_code, end_date, *, window_days):
+                return [
+                    {"trade_date": "2026-07-21", "close": 100},
+                    {"trade_date": "2026-07-22", "close": 99},
+                ]
+
+            def query_market_breadth_counts(self, trade_date):
+                return {
+                    "trade_date": trade_date,
+                    "source_date": trade_date,
+                    "up_count": 1530,
+                    "down_count": 3876,
+                }
+
+            def query_new_high_feedback_series(self, end_date, *, window_days):
+                self.new_high_query_count += 1
+                return [
+                    {
+                        "trade_date": "2026-07-22",
+                        "all_a_share_pct": 0.28,
+                    }
+                ]
+
+        service = FactService()
+        report_rows = [
+            {
+                "trade_date": "2026-07-22",
+                "all_a_share_pct": 0.10,
+            }
+        ]
+
+        payload = daily_report_entry_demo._build_t0_market_breadth_for_bear(
+            "2026-07-22",
+            service=service,
+            new_high_rows=report_rows,
+            limit=1,
+        )
+
+        self.assertEqual(service.new_high_query_count, 0)
+        self.assertEqual(payload["items"][0]["new_high_share_pct"], 0.10)
+
+    def test_t0_market_breadth_rendering_keeps_formal_decisions_unchanged(self):
+        class FactService:
+            def query_index_daily_bars(self, index_code, end_date, *, window_days):
+                return [
+                    {"trade_date": "2026-07-21", "close": 100},
+                    {"trade_date": "2026-07-22", "close": 99},
+                ]
+
+            def query_market_breadth_counts(self, trade_date):
+                return {
+                    "trade_date": trade_date,
+                    "source_date": trade_date,
+                    "up_count": 1530,
+                    "down_count": 3876,
+                }
+
+        data = {
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "final": {"position_pct": 50},
+            },
+            "final_target_resolution": {
+                "new_entry_target": {"code": "603986", "name": "兆易创新"},
+                "position_pct": 50,
+                "execution_nature": "50%条件执行",
+            },
+            "two_layer_decision_payload": {
+                "next_day_action": {
+                    "execution_object": {"code": "603986", "name": "兆易创新"},
+                    "position_pct": 50,
+                    "execution_nature": "50%条件执行",
+                    "b1_action": "B1先买参与权",
+                    "b2_action": "确认后才补B2",
+                    "exit_action": "失效条件出现则退出",
+                }
+            },
+            "new_high_feedback": {
+                "trend_rows": [
+                    {"trade_date": "2026-07-22", "all_a_share_pct": 0.10},
+                ]
+            },
+        }
+        before = copy.deepcopy(data)
+
+        chart = daily_report_entry_demo._build_t0_market_breadth_for_bear(
+            "2026-07-22",
+            service=FactService(),
+            new_high_rows=data["new_high_feedback"]["trend_rows"],
+            limit=1,
+        )
+        html = daily_report_entry_demo._render_daily_report_html_for_acceptance(
+            "2026-07-22",
+            "# 日报\n\n### 1. 指数与市场底色\n\n| 项目 | 结论 |\n|---|---|\n| 市场 | 防守 |",
+            output_path=Path("/tmp/2026-07-22_A股日报_完整版_replay.html"),
+            t0_market_breadth=chart,
+        )
+
+        self.assertIn('data-bear-chart="t0_market_breadth"', html)
+        self.assertEqual(data, before)
+        self.assertEqual(data["selection_workflow"], before["selection_workflow"])
+        self.assertEqual(data["final_target_resolution"], before["final_target_resolution"])
+        self.assertEqual(
+            data["two_layer_decision_payload"]["next_day_action"],
+            before["two_layer_decision_payload"]["next_day_action"],
+        )
+
     def test_postgres_only_validates_bear_html_before_postgres_fact_sync(self):
         order = []
 
@@ -195,6 +391,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -210,7 +407,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html) as html_mock:
             daily_report_entry_demo.main()
 
-        self.assertEqual(order, ["bear_render", "sync", "runtime_artifacts", "markdown", "chanlun", "html"])
+        self.assertEqual(
+            order,
+            ["bear_render", "sync", "bear_render", "runtime_artifacts", "markdown", "chanlun", "html"],
+        )
         self.assertEqual(html_mock.call_count, 1)
         self.assertEqual(html_mock.call_args.args[0], "2026-06-05")
         self.assertEqual(html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
@@ -227,6 +427,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -323,6 +524,50 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertIn("市场脊梁", html)
         self.assertIn("中证500", html)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.82%</span></td>', html)
+
+    def test_saved_replay_markdown_html_includes_t0_market_breadth_chart(self):
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-06-05_A股日报_完整版_replay.md"
+            full_path.write_text(
+                "\n".join(
+                    [
+                        "# 2026-06-05 A股日报",
+                        "",
+                        "## 二、市场基底",
+                        "",
+                        "### 1. 指数与市场底色",
+                        "",
+                        "| 项目 | 结论 |",
+                        "|------|------|",
+                        "| 原始事实 | 保留 |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            breadth = {
+                "items": [
+                    {
+                        "date": "2026-06-05",
+                        "up_count": 3200,
+                        "down_count": 1800,
+                        "all_a_change_pct": 0.82,
+                        "new_high_share_pct": 1.64,
+                    }
+                ]
+            }
+
+            path = daily_report_entry_demo._try_save_daily_report_html_from_saved_markdown(
+                "2026-06-05",
+                run_mode=daily_report_entry_demo.LEDGER_MODE_REPLAY,
+                saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+                t0_market_breadth=breadth,
+            )
+            html = path.read_text(encoding="utf-8")
+            payload = _embedded_json_payload(html, "bear-chart-payload")
+
+        self.assertEqual(path, full_path.with_suffix(".html"))
+        self.assertEqual(html.count('data-bear-chart="t0_market_breadth"'), 1)
+        self.assertEqual(payload["t0_market_breadth"]["items"], breadth["items"])
 
     def test_sync_position_timeline_into_saved_markdown(self):
         timeline = "\n".join(
@@ -523,7 +768,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             strategy,
         )
 
-    def test_inject_previous_report_target_as_pending_position_context(self):
+    def test_inject_previous_report_target_as_simulated_default_old_position(self):
         data = {}
         with TemporaryDirectory() as tempdir:
             reports_root = Path(tempdir)
@@ -538,25 +783,161 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                 reports_root=reports_root,
             )
 
-        self.assertFalse(summary["has_position"])
-        self.assertTrue(summary["has_pending_position"])
-        self.assertEqual(summary["role"], "前日报计划待成交确认")
+        self.assertTrue(summary["has_position"])
+        self.assertFalse(summary["has_pending_position"])
+        self.assertEqual(summary["role"], "旧仓处理")
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
-        self.assertIn("前日报计划推定，待成交确认", summary["summary"])
-        self.assertIn("未确认成交前不视为B1，不新增B2", summary["summary"])
-        self.assertNotIn("持有", summary["summary"])
-        self.assertNotIn("100%仓位", summary["summary"])
-        self.assertNotIn("新开仓0手", summary["summary"])
-        self.assertEqual(summary["position"], 0.0)
-        self.assertEqual(summary["position_pct"], 0.0)
-        self.assertEqual(summary["default_position_pct"], 100.0)
+        self.assertIn("上一份日报明日标的默认1x旧仓", summary["summary"])
+        self.assertEqual(summary["holding_note"], "上一份日报明日标的默认1x旧仓")
+        self.assertEqual(summary["position"], 50.0)
+        self.assertEqual(summary["position_pct"], 50.0)
+        self.assertEqual(summary["default_position_pct"], 50.0)
         self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
         self.assertEqual(summary["source_report_date"], "2026-06-26")
         self.assertTrue(data["position_context_provided"])
         self.assertEqual(data["personal_position_context"]["existing_position_summary"], summary)
 
-    def test_inferred_previous_report_target_marks_pending_account_path_without_manual_input(self):
+    def test_inject_previous_report_target_replaces_unprovided_unknown_summary(self):
+        unknown_summary = {
+            "has_position": False,
+            "has_pending_position": False,
+            "summary": "持仓未输入",
+        }
+        data = {
+            "position_context_provided": False,
+            "personal_position_context": {
+                "existing_position_summary": dict(unknown_summary),
+            },
+            "existing_position_summary": dict(unknown_summary),
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "_read_previous_report_target_for_entry",
+            return_value={
+                "name": "长电科技",
+                "code": "600584",
+                "source_report_date": "2026-07-09",
+            },
+        ):
+            summary = daily_report_entry_demo._inject_previous_report_target_as_existing_position(
+                data,
+                "2026-07-15",
+            )
+
+        self.assertTrue(summary["has_position"])
+        self.assertFalse(summary["has_pending_position"])
+        self.assertEqual(summary["name"], "长电科技")
+        self.assertEqual(summary["position_pct"], 50.0)
+        self.assertEqual(summary["default_position_pct"], 50.0)
+        self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
+        self.assertTrue(data["position_context_provided"])
+        self.assertEqual(
+            data["personal_position_context"]["existing_position_summary"],
+            summary,
+        )
+
+    def test_inject_previous_report_explicit_empty_as_confirmed_empty_position(self):
+        unknown_summary = {
+            "has_position": False,
+            "has_pending_position": False,
+            "summary": "持仓未输入",
+        }
+        data = {
+            "position_context_provided": False,
+            "personal_position_context": {
+                "existing_position_summary": dict(unknown_summary),
+            },
+            "existing_position_summary": dict(unknown_summary),
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "_read_previous_report_target_for_entry",
+            return_value={
+                "source_report_date": "2026-07-15",
+                "previous_report_no_target": True,
+                "previous_position_ended": True,
+            },
+        ):
+            summary = daily_report_entry_demo._inject_previous_report_target_as_existing_position(
+                data,
+                "2026-07-16",
+            )
+
+        self.assertFalse(summary["has_position"])
+        self.assertFalse(summary["has_pending_position"])
+        self.assertEqual(summary["position_source"], "previous_report_explicit_empty")
+        self.assertEqual(summary["source_report_date"], "2026-07-15")
+        self.assertTrue(data["position_context_provided"])
+        self.assertEqual(data["existing_position_summary"], summary)
+        self.assertEqual(
+            data["personal_position_context"]["existing_position_summary"],
+            summary,
+        )
+
+    def test_inject_previous_report_unresolved_no_target_keeps_position_unknown(self):
+        data = {"position_context_provided": False}
+
+        with patch.object(
+            daily_report_entry_demo,
+            "_read_previous_report_target_for_entry",
+            return_value={
+                "source_report_date": "2026-07-15",
+                "previous_report_no_target": True,
+            },
+        ):
+            summary = daily_report_entry_demo._inject_previous_report_target_as_existing_position(
+                data,
+                "2026-07-16",
+            )
+
+        self.assertEqual(summary, {})
+        self.assertFalse(data["position_context_provided"])
+        self.assertNotIn("existing_position_summary", data)
+
+    def test_inject_previous_report_preserves_external_trade_pending(self):
+        pending_summary = {
+            "has_position": False,
+            "has_pending_position": True,
+            "summary": "外部交易待核实",
+            "position": 0.0,
+            "position_pct": 0.0,
+            "position_source": "external_trade_pending",
+        }
+        data = {
+            "position_context_provided": False,
+            "personal_position_context": {
+                "existing_position_summary": dict(pending_summary),
+            },
+            "existing_position_summary": dict(pending_summary),
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "_read_previous_report_target_for_entry",
+            return_value={
+                "name": "长电科技",
+                "code": "600584",
+                "source_report_date": "2026-07-15",
+            },
+        ) as read_previous:
+            summary = daily_report_entry_demo._inject_previous_report_target_as_existing_position(
+                data,
+                "2026-07-16",
+            )
+
+        self.assertEqual(summary, {})
+        read_previous.assert_not_called()
+        self.assertEqual(
+            data["personal_position_context"]["existing_position_summary"],
+            pending_summary,
+        )
+        self.assertEqual(data["existing_position_summary"], pending_summary)
+        self.assertFalse(data["position_context_provided"])
+
+    def test_previous_report_target_becomes_simulated_old_position_without_trade_confirmation(self):
         data = self._valid_data()
         report_output_calls = []
         strategy_calls = []
@@ -567,7 +948,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         def capture_strategy(*args, **kwargs):
             strategy_calls.append((args, kwargs))
-            return "| 轨道 | 标的 | 2026-06-29（周一） |\n|------|------|------|\n| Td今日 | 太极实业(600667) | 前日报计划推定，待成交确认 |"
+            return "| 轨道 | 标的 | 2026-06-29（周一） |\n|------|------|------|\n| Td今日 | 太极实业(600667) | 上一份日报明日标的默认1x旧仓 |"
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-29", "--replay"]), \
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
@@ -594,24 +975,27 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             daily_report_entry_demo.main()
 
         self.assertEqual(len(report_output_calls), 1)
-        self.assertFalse(report_output_calls[0]["has_personal_positions"])
+        self.assertTrue(report_output_calls[0]["has_personal_positions"])
         self.assertTrue(data["position_context_provided"])
         summary = data["personal_position_context"]["existing_position_summary"]
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
         self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
-        inferred_position = strategy_calls[0][0][2][0]
-        self.assertTrue(inferred_position["inferred_from_previous_report"])
-        self.assertFalse(inferred_position["has_position"])
-        self.assertTrue(inferred_position["has_pending_position"])
-        self.assertEqual(inferred_position["role"], "前日报计划待成交确认")
-        self.assertEqual(inferred_position["position"], 0.0)
-        self.assertEqual(inferred_position["position_pct"], 0.0)
-        self.assertEqual(inferred_position["default_position_pct"], 100.0)
-        self.assertEqual(inferred_position["position_source"], "previous_report_target_default_1x")
-        self.assertEqual(inferred_position["source_report_date"], "2026-06-26")
+        self.assertTrue(summary["has_position"])
+        self.assertFalse(summary["has_pending_position"])
+        self.assertEqual(summary["position"], 50.0)
+        self.assertEqual(summary["position_pct"], 50.0)
+        self.assertEqual(summary["default_position_pct"], 50.0)
+        strategy_positions = strategy_calls[0][0][2]
+        self.assertEqual(len(strategy_positions), 1)
+        self.assertTrue(strategy_positions[0]["has_position"])
+        self.assertFalse(strategy_positions[0]["has_pending_position"])
+        self.assertEqual(strategy_positions[0]["position"], 50.0)
+        self.assertEqual(strategy_positions[0]["position_pct"], 50.0)
+        self.assertEqual(strategy_positions[0]["default_position_pct"], 50.0)
+        self.assertEqual(strategy_positions[0]["role"], "旧仓处理")
 
-    def test_postgres_only_does_not_infer_position_from_previous_report_markdown(self):
+    def test_postgres_only_resolves_previous_target_through_postgres_history(self):
         data = self._valid_data()
         data.pop("personal_position_context", None)
         data.pop("existing_position_summary", None)
@@ -638,7 +1022,11 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             exit_code = daily_report_entry_demo.main()
 
         self.assertEqual(exit_code, 0)
-        inject_mock.assert_not_called()
+        inject_mock.assert_called_once_with(
+            data,
+            "2026-07-10",
+            prefer_postgres_history=True,
+        )
         self.assertNotIn("personal_position_context", data)
 
     def test_postgres_only_missing_history_stops_before_sync_or_artifact_save(self):
@@ -694,15 +1082,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         ):
             self.assertEqual(
                 record["summary"],
-                "前日报计划推定，待成交确认：长电科技(600584)；上一份日报目标来源=2026-07-09；未确认成交前不视为B1，不新增B2",
+                "持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓；上一份日报目标来源=2026-07-09",
             )
-            self.assertFalse(record["has_position"])
-            self.assertTrue(record["has_pending_position"])
-            self.assertEqual(record["position"], 0.0)
-            self.assertEqual(record["position_pct"], 0.0)
-            self.assertEqual(record["default_position_pct"], 100.0)
-            self.assertEqual(record["role"], "前日报计划待成交确认")
-            self.assertNotIn("持有", record["summary"])
+            self.assertTrue(record["has_position"])
+            self.assertFalse(record["has_pending_position"])
+            self.assertEqual(record["position"], 50.0)
+            self.assertEqual(record["position_pct"], 50.0)
+            self.assertEqual(record["default_position_pct"], 50.0)
+            self.assertEqual(record["role"], "旧仓处理")
+            self.assertEqual(record["holding_note"], "上一份日报明日标的默认1x旧仓")
 
     def test_normalize_inferred_previous_target_records_repairs_marker_only_legacy_record(self):
         record = {
@@ -720,13 +1108,13 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         self.assertEqual(normalized, 1)
         self.assertTrue(record["inferred_from_previous_report"])
-        self.assertTrue(record["has_pending_position"])
-        self.assertFalse(record["has_position"])
-        self.assertEqual(record["position"], 0.0)
-        self.assertEqual(record["position_pct"], 0.0)
-        self.assertEqual(record["default_position_pct"], 100.0)
-        self.assertEqual(record["role"], "前日报计划待成交确认")
-        self.assertIn("前日报计划推定，待成交确认", record["summary"])
+        self.assertFalse(record["has_pending_position"])
+        self.assertTrue(record["has_position"])
+        self.assertEqual(record["position"], 50.0)
+        self.assertEqual(record["position_pct"], 50.0)
+        self.assertEqual(record["default_position_pct"], 50.0)
+        self.assertEqual(record["role"], "旧仓处理")
+        self.assertEqual(record["holding_note"], "上一份日报明日标的默认1x旧仓")
 
     def test_normalize_inferred_previous_target_records_handles_shared_reference_cycle(self):
         pending = {
@@ -743,9 +1131,11 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         normalized = daily_report_entry_demo._normalize_inferred_previous_target_records(data)
 
         self.assertEqual(normalized, 1)
-        self.assertFalse(pending["has_position"])
-        self.assertTrue(pending["has_pending_position"])
-        self.assertEqual(pending["position"], 0.0)
+        self.assertTrue(pending["has_position"])
+        self.assertFalse(pending["has_pending_position"])
+        self.assertEqual(pending["position"], 50.0)
+        self.assertEqual(pending["position_pct"], 50.0)
+        self.assertEqual(pending["default_position_pct"], 50.0)
 
     def test_normalize_inferred_previous_target_records_keeps_confirmed_position_unchanged(self):
         record = {
@@ -764,7 +1154,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(normalized, 0)
         self.assertEqual(record, expected)
 
-    def test_postgres_write_boundaries_normalize_pending_position_exposure(self):
+    def test_postgres_write_boundaries_normalize_inherited_position_exposure(self):
         captured = []
 
         class FakeService:
@@ -831,34 +1221,100 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual([item[0] for item in captured], ["save", "import"])
         for data in [loaded, *(item[2] for item in captured)]:
             summary = data["personal_position_context"]["existing_position_summary"]
-            self.assertFalse(summary["has_position"])
-            self.assertTrue(summary["has_pending_position"])
-            self.assertEqual(summary["position"], 0.0)
-            self.assertEqual(summary["position_pct"], 0.0)
-            self.assertEqual(summary["default_position_pct"], 100.0)
+            self.assertTrue(summary["has_position"])
+            self.assertFalse(summary["has_pending_position"])
+            self.assertEqual(summary["position"], 50.0)
+            self.assertEqual(summary["position_pct"], 50.0)
+            self.assertEqual(summary["default_position_pct"], 50.0)
             position_decision = data["position_decision"]
             self.assertEqual(position_decision["target_position_pct"], 0)
             self.assertEqual(position_decision["final_action"], "0%不参与")
             resolution = data["final_target_resolution"]
             self.assertEqual(resolution["new_entry_target"], {})
-            self.assertEqual(resolution["display_target"], {})
-            self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "wait")
-            self.assertFalse(resolution["account_exposure_plan"]["old_position_1x"])
-            self.assertEqual(resolution["account_exposure_plan"]["max_runtime_exposure_x"], 0)
+            self.assertEqual(resolution["existing_position_target"]["code"], "600584")
+            self.assertTrue(resolution["account_exposure_plan"]["old_position_1x"])
+            self.assertEqual(resolution["account_exposure_plan"]["max_runtime_exposure_x"], 1)
             for resolution_copy in (
                 data["final_target_resolution"],
                 data["execution_stage_context"]["final_target_resolution"],
                 data["market_research_snapshot"]["final_target_resolution"],
             ):
-                pending = resolution_copy["existing_position_target"]
-                self.assertFalse(pending["has_position"])
-                self.assertTrue(pending["has_pending_position"])
-                self.assertEqual(pending["role"], "前日报计划待成交确认")
-                self.assertEqual(pending["position"], 0.0)
-                self.assertEqual(pending["position_pct"], 0.0)
+                inherited = resolution_copy["existing_position_target"]
+                self.assertTrue(inherited["has_position"])
+                self.assertFalse(inherited["has_pending_position"])
+                self.assertEqual(inherited["role"], "旧仓处理")
+                self.assertEqual(inherited["position"], 50.0)
+                self.assertEqual(inherited["position_pct"], 50.0)
+                self.assertEqual(inherited["default_position_pct"], 50.0)
+
+    def test_stale_cleanup_preserves_historical_tomorrow_empty_directive(self):
+        directive = {
+            "schema_version": "tomorrow_account_action.v1",
+            "action": "empty",
+            "source": "historical_snapshot",
+        }
+        data = {
+            "position_decision": {
+                "tomorrow_account_action": dict(directive),
+                "capital_priority_decision": {"capital_priority": "tomorrow_empty"},
+            },
+            "final_target_resolution": {
+                "tomorrow_account_action": dict(directive),
+                "capital_priority_decision": {"capital_priority": "tomorrow_empty"},
+            },
+        }
+
+        daily_report_entry_demo._clear_stale_tomorrow_empty_resolution_copies(data)
+
+        for container in (data["position_decision"], data["final_target_resolution"]):
+            self.assertEqual(container["tomorrow_account_action"], directive)
+            self.assertEqual(
+                container["capital_priority_decision"]["capital_priority"],
+                "tomorrow_empty",
+            )
+
+    def test_cached_cli_cleanup_includes_position_decision(self):
+        data = {
+            "position_decision": {
+                "tomorrow_account_action": {
+                    "schema_version": "tomorrow_account_action.v1",
+                    "action": "empty",
+                    "source": "explicit_cli",
+                },
+                "capital_priority_decision": {"capital_priority": "tomorrow_empty"},
+            }
+        }
+
+        daily_report_entry_demo._clear_cached_explicit_cli_tomorrow_account_action(data)
+
+        self.assertNotIn("tomorrow_account_action", data["position_decision"])
+        self.assertNotIn("capital_priority_decision", data["position_decision"])
 
     def test_explicit_empty_position_skips_previous_report_target_inference(self):
         data = self._valid_data()
+        stale_tomorrow_empty_resolution = {
+            "tomorrow_account_action": {
+                "schema_version": "tomorrow_account_action.v1",
+                "action": "empty",
+                "source": "explicit_cli",
+            },
+            "capital_priority_decision": {"capital_priority": "tomorrow_empty"},
+        }
+        data["tomorrow_account_action"] = dict(
+            stale_tomorrow_empty_resolution["tomorrow_account_action"]
+        )
+        data["final_target_resolution"] = {
+            key: (dict(value) if isinstance(value, dict) else value)
+            for key, value in stale_tomorrow_empty_resolution.items()
+        }
+        data.setdefault("execution_stage_context", {})["final_target_resolution"] = {
+            key: (dict(value) if isinstance(value, dict) else value)
+            for key, value in stale_tomorrow_empty_resolution.items()
+        }
+        data.setdefault("market_research_snapshot", {})["final_target_resolution"] = {
+            key: (dict(value) if isinstance(value, dict) else value)
+            for key, value in stale_tomorrow_empty_resolution.items()
+        }
         data["personal_position_context"] = {
             "existing_position_summary": {
                 "has_position": True,
@@ -910,6 +1366,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             data["personal_position_context"]["existing_position_summary"]["position_source"],
             "explicit_empty_input",
         )
+        self.assertNotIn("tomorrow_account_action", data)
+        for container in (
+            data,
+            data["execution_stage_context"],
+            data["market_research_snapshot"],
+        ):
+            resolution = container["final_target_resolution"]
+            self.assertNotIn("tomorrow_account_action", resolution)
+            self.assertNotIn("capital_priority_decision", resolution)
         self.assertEqual(strategy_calls[0][0][2], [])
         self.assertIsNotNone(strategy_calls[0][1]["output_root"])
 
@@ -918,6 +1383,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         data = self._valid_data()
         wiki_context = _complete_wiki_context("2026-06-05")
         wiki_trace = wiki_context["knowledge_trace"]
+        cached_cli_action = {
+            "schema_version": "tomorrow_account_action.v1",
+            "action": "empty",
+            "source": "explicit_cli",
+        }
+        data["tomorrow_account_action"] = dict(cached_cli_action)
+        data["position_decision"] = {
+            "tomorrow_account_action": dict(cached_cli_action),
+            "capital_priority_decision": {"capital_priority": "tomorrow_empty"},
+        }
 
         def build_outputs(*args, **kwargs):
             order.append("build")
@@ -980,10 +1455,23 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ["build", "audit", "sync", "runtime_artifacts", "markdown", "chanlun", "html", "snapshot"],
+            [
+                "build",
+                "audit",
+                "sync",
+                "audit",
+                "runtime_artifacts",
+                "markdown",
+                "chanlun",
+                "html",
+                "snapshot",
+            ],
         )
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
         self.assertFalse(build_mock.call_args.kwargs["persist_decision_ledger"])
+        self.assertNotIn("tomorrow_account_action", data)
+        self.assertNotIn("tomorrow_account_action", data["position_decision"])
+        self.assertNotIn("capital_priority_decision", data["position_decision"])
         snapshot_mock.assert_called_once_with(
             data,
             "2026-06-05",
@@ -1152,6 +1640,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -1216,6 +1705,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -1276,6 +1766,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -1299,6 +1790,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
@@ -1570,6 +2062,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
              patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \

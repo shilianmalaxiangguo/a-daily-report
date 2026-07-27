@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from report.position_tier_contract import (
+    normalize_planned_position_tier_pct,
+    planned_position_tier_cap_pct,
+)
+
 
 SCHEMA_VERSION = "selection_workflow.v1"
 DERIVATION_CONTRACT = "sector_first_strict.v1"
@@ -182,6 +187,35 @@ def _clean_list(value):
     return rows
 
 
+def _first_non_empty(*values):
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _explicit_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = clean_text(value).lower()
+    if text in {"1", "true", "yes", "y", "confirmed", "complete", "完整", "成立", "已确认"}:
+        return True
+    if text in {"0", "false", "no", "n", "failed", "missing", "incomplete", "不足", "缺失", "未确认", "不成立"}:
+        return False
+    return None
+
+
+def _source_value(sources, *keys):
+    for source in sources:
+        source = _as_dict(source)
+        for key in keys:
+            if key in source and source.get(key) not in (None, "", [], {}):
+                return source.get(key)
+    return None
+
+
 def _safe_float(value):
     try:
         if value in (None, ""):
@@ -249,8 +283,9 @@ def _candidate_contract_text(candidate, *, include_quote=True):
     quote = _as_dict(candidate.get("same_day_quote"))
     planned = _as_dict(candidate.get("planned_participation"))
     script = _as_dict(candidate.get("participation_script"))
+    reversal_plan = _as_dict(candidate.get("limit_down_reversal_plan"))
     parts = []
-    sources = [candidate, nested, planned, script]
+    sources = [candidate, nested, planned, script, reversal_plan]
     if include_quote:
         sources.insert(2, quote)
     for source in sources:
@@ -269,7 +304,12 @@ def _candidate_has_confirmation_window(candidate):
     text = _candidate_contract_text(candidate, include_quote=False)
     if any(marker in text for marker in EXECUTION_WINDOW_MARKERS):
         return True
-    for source in (_as_dict(candidate), _as_dict(candidate.get("planned_participation")), _as_dict(candidate.get("participation_script"))):
+    for source in (
+        _as_dict(candidate),
+        _as_dict(candidate.get("planned_participation")),
+        _as_dict(candidate.get("participation_script")),
+        _as_dict(candidate.get("limit_down_reversal_plan")),
+    ):
         for key in ("participation_window", "buy_window", "execution_window", "window"):
             value = clean_visible_text(source.get(key))
             if any(marker in value for marker in EXECUTION_WINDOW_MARKERS):
@@ -281,7 +321,12 @@ def _candidate_has_invalid_condition(candidate):
     text = _candidate_contract_text(candidate, include_quote=False)
     if any(marker in text for marker in ("作废", "取消", "失效", "认错线", "跌破", "站不回", "封死", "打不开")):
         return True
-    for source in (_as_dict(candidate), _as_dict(candidate.get("planned_participation")), _as_dict(candidate.get("participation_script"))):
+    for source in (
+        _as_dict(candidate),
+        _as_dict(candidate.get("planned_participation")),
+        _as_dict(candidate.get("participation_script")),
+        _as_dict(candidate.get("limit_down_reversal_plan")),
+    ):
         for key in ("cancellation", "cancellation_conditions", "invalid_price", "stop_price"):
             if source.get(key) not in (None, "", []):
                 return True
@@ -309,12 +354,72 @@ def _candidate_has_explicit_limit_down_reversal_plan(candidate):
     )
 
 
+def _candidate_limit_down_reversal_plan_payload(candidate):
+    candidate = _as_dict(candidate)
+    if not _candidate_has_explicit_limit_down_reversal_plan(candidate):
+        return {}
+    payload = {
+        "status": "complete",
+        "contract_text": _candidate_contract_text(candidate, include_quote=False),
+    }
+    sources = (
+        candidate,
+        _as_dict(candidate.get("anchor_reversal")),
+        _as_dict(candidate.get("planned_participation")),
+        _as_dict(candidate.get("participation_script")),
+    )
+    for key in (
+        "execution_eligibility",
+        "participation_window",
+        "buy_window",
+        "execution_window",
+        "window",
+        "cancellation",
+        "cancellation_conditions",
+        "invalid_price",
+        "stop_price",
+        "fallback_state",
+    ):
+        value = next((source.get(key) for source in sources if source.get(key) not in (None, "", [])), None)
+        if value not in (None, "", []):
+            payload[key] = value
+    return payload
+
+
+def candidate_limit_down_risk_review_reason(candidate):
+    reason = _candidate_limit_down_block_reason(candidate)
+    if not reason:
+        candidate = _as_dict(candidate)
+        price_action = _as_dict(candidate.get("brooks_price_action_judge"))
+        generated_risk_texts = [
+            clean_visible_text(candidate.get("price_action_block_reason")),
+            clean_visible_text(candidate.get("risk_evidence")),
+            clean_visible_text(price_action.get("verdict")),
+            clean_visible_text(price_action.get("participation_effect")),
+        ]
+        explicit_limit_down_text = next(
+            (
+                text
+                for text in generated_risk_texts
+                if "跌停" in text and not _is_negated_limit_down_text(text)
+            ),
+            "",
+        )
+        if explicit_limit_down_text:
+            reason = (
+                explicit_limit_down_text
+                if "同日" in explicit_limit_down_text
+                else "同日状态为跌停"
+            )
+    if not reason or _candidate_has_explicit_limit_down_reversal_plan(candidate):
+        return ""
+    return reason
+
+
 def _candidate_blocks_new_entry_by_price(candidate):
     reason = _candidate_limit_down_block_reason(candidate)
     if reason:
-        if _candidate_has_explicit_limit_down_reversal_plan(candidate):
-            return ""
-        return reason
+        return candidate_limit_down_risk_review_reason(candidate)
     price_action = _brooks_price_action_judge(candidate)
     if price_action.get("status") in {"risk_first", "price_rejected"}:
         return clean_visible_text(
@@ -379,6 +484,65 @@ def _normalize_quote_date(value):
     if len(digits) >= 8:
         return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
     return text
+
+
+def _mapping_dates(value, *keys):
+    value = _as_dict(value)
+    dates = []
+    for key in keys:
+        normalized = _normalize_quote_date(value.get(key))
+        if normalized and normalized not in dates:
+            dates.append(normalized)
+    return dates
+
+
+def _nested_source_date(value, key):
+    source_dates = _as_dict(_as_dict(value).get("source_dates"))
+    return _normalize_quote_date(source_dates.get(key))
+
+
+def _sector_source_date(data, context, snapshot, supplied=None):
+    for source in (_as_dict(supplied), _as_dict(context), _as_dict(snapshot)):
+        nested = _nested_source_date(source, "sector_source_date")
+        if nested:
+            return nested
+        dates = _mapping_dates(
+            source,
+            "sector_source_date",
+            "trade_date",
+            "source_date",
+            "target_date",
+            "date",
+        )
+        if dates:
+            return dates[0]
+    return _nested_source_date(data, "sector_source_date")
+
+
+def _selection_source_dates(target_date, data, context, snapshot, local_trend_sector_proof):
+    target_date = _normalize_quote_date(target_date)
+    snapshot_date = _nested_source_date(snapshot, "snapshot_date")
+    if not snapshot_date:
+        dates = _mapping_dates(snapshot, "snapshot_date", "target_date", "trade_date", "source_date", "date")
+        snapshot_date = dates[0] if dates else ""
+    price_source_date = ""
+    for source in (_as_dict(context), _as_dict(snapshot), _as_dict(data)):
+        price_source_date = _nested_source_date(source, "price_source_date")
+        if price_source_date:
+            break
+        dates = _mapping_dates(source, "price_source_date")
+        if dates:
+            price_source_date = dates[0]
+            break
+    return {
+        "report_date": target_date or None,
+        "snapshot_date": snapshot_date or None,
+        "sector_source_date": _normalize_quote_date(
+            _as_dict(local_trend_sector_proof).get("source_date")
+        )
+        or None,
+        "price_source_date": price_source_date or None,
+    }
 
 
 def _quote_row_matches_target_date(row, target_date="", *, require_date=False):
@@ -711,14 +875,9 @@ def _position_pct(position_decision=None):
         raw = position_decision.get("target_position_pct")
         if raw is None:
             raw = position_decision.get("position_pct")
-        pct = int(float(str(raw or 0).replace("%", "").strip() or 0))
+        return normalize_planned_position_tier_pct(raw)
     except (TypeError, ValueError):
-        pct = 0
-    if pct >= 100:
-        return 100
-    if pct >= 50:
-        return 50
-    return 0
+        return 0
 
 
 def _node(
@@ -918,11 +1077,329 @@ def _candidate_driver_tags(candidate):
     return tags
 
 
-def _sector_anchor_keys(context):
+def _sector_name(value):
+    if isinstance(value, dict):
+        value = (
+            value.get("sector")
+            or value.get("sector_name")
+            or value.get("selected_direction")
+            or value.get("direction")
+            or value.get("name")
+        )
+    return clean_visible_text(value)
+
+
+def _sector_names_match(left, right):
+    left = _sector_name(left)
+    right = _sector_name(right)
+    if not left or not right:
+        return False
+    return left == right or (len(left) >= 2 and len(right) >= 2 and (left in right or right in left))
+
+
+def _sector_trend_row(context, direction=""):
+    rows = [item for item in _as_list(_as_dict(context).get("sector_trend_snapshot")) if isinstance(item, dict)]
+    if direction:
+        matched = next((item for item in rows if _sector_names_match(item, direction)), None)
+        if matched:
+            return matched
+    return rows[0] if len(rows) == 1 else {}
+
+
+def _mainline_summary(*sources):
+    for source in sources:
+        source = _as_dict(source)
+        summary = source.get("mainline_turnover_summary")
+        if isinstance(summary, dict) and summary:
+            return summary
+    return {}
+
+
+def _state_snapshot(*sources):
+    for source in sources:
+        source = _as_dict(source)
+        for key in ("market_state_snapshot", "state_machine_snapshot", "state_machine"):
+            snapshot = source.get(key)
+            if isinstance(snapshot, dict) and snapshot:
+                return snapshot
+    return {}
+
+
+def _market_participation_limit(data, context, snapshot, *, missing_fields=None):
+    sources = (_as_dict(context), _as_dict(snapshot), _as_dict(data))
+    state = _state_snapshot(*sources)
+    summary = _mainline_summary(*sources)
+    attack = _as_dict(summary.get("mainline_attack_evidence_summary"))
+    structure = _source_value(sources, "market_structure_judgement")
+    structure = _as_dict(structure)
+    market_state = clean_visible_text(
+        _first_non_empty(
+            state.get("market_state"),
+            state.get("pulse_stage"),
+            state.get("operation_state"),
+            _as_dict(context.get("market_state_snapshot")).get("market_state"),
+        ),
+        "市场状态待确认",
+    )
+    execution_bias = clean_text(
+        _first_non_empty(state.get("execution_bias"), context.get("execution_bias"), snapshot.get("execution_bias"))
+    )
+    pulse_stage = clean_visible_text(_first_non_empty(state.get("pulse_stage"), context.get("pulse_stage")))
+    operation_state = clean_visible_text(_first_non_empty(state.get("operation_state"), context.get("operation_state")))
+    attack_state = clean_text(attack.get("attack_state"))
+    tomorrow_rhythm = clean_visible_text(structure.get("tomorrow_rhythm"))
+    systemic_text = " / ".join(
+        part
+        for part in (
+            market_state,
+            pulse_stage,
+            operation_state,
+            execution_bias,
+            tomorrow_rhythm,
+            clean_visible_text(_source_value(sources, "systemic_risk", "systemic_risk_level")),
+        )
+        if part
+    )
+    explicit_systemic = _explicit_bool(_source_value(sources, "systemic_risk_active", "systemic_risk_confirmed"))
+    systemic_risk = explicit_systemic is True or _text_has_any(
+        systemic_text,
+        ("踩踏", "恐慌", "系统性风险", "风险释放未止", "市场同步走弱"),
+    )
+    explicit_broad_confirmation = _explicit_bool(
+        _source_value(
+            sources,
+            "broad_market_confirmation",
+            "market_trend_confirmed",
+            "profit_effect_broad_confirmed",
+        )
+    )
+    broad_confirmation = bool(
+        not systemic_risk
+        and (
+            explicit_broad_confirmation is True
+            or (
+                explicit_broad_confirmation is not False
+                and attack_state == "confirmed_attack"
+                and execution_bias not in {"avoid", "defense", "watch_only"}
+                and pulse_stage not in {"退潮", "踩踏", "恐慌"}
+                and operation_state != "撤退态"
+            )
+        )
+    )
+    weak_market = bool(
+        execution_bias in {"avoid", "defense", "watch_only"}
+        or pulse_stage in {"退潮", "冰点", "高位分歧"}
+        or operation_state in {"撤退态", "观察态"}
+        or attack_state in {"candidate_attack", "chaotic_rotation", "no_attack"}
+        or tomorrow_rhythm in {"低频聚焦", "观察聚焦"}
+        or _text_has_any(market_state, ("收缩", "防守", "退潮", "撤退", "混沌", "偏弱"))
+    )
+    facts_incomplete = bool(missing_fields)
+    if facts_incomplete:
+        max_position_pct = 0
+        reason = "关键事实不完整，不取得新参与资格"
+        risk = "先补齐市场、板块和执行事实"
+    elif systemic_risk:
+        max_position_pct = 0
+        reason = "系统性风险仍在释放，局部强势不用于扩大参与"
+        risk = "单股或单板块不能反向证明市场风险已经解除"
+    elif broad_confirmation:
+        max_position_pct = 100
+        reason = "市场趋势和赚钱效应已形成更广泛确认"
+        risk = "B2仍只在个股价格与账户条件确认后执行"
+    else:
+        max_position_pct = 50
+        reason = "市场未形成广泛确认，完整局部趋势最多取得B1参与权"
+        risk = "没有局部趋势完整证明时仍回到0%不参与"
+    return {
+        "max_position_pct": max_position_pct,
+        "market_state": market_state,
+        "attack_state": attack_state or "待确认",
+        "weak_market": weak_market,
+        "broad_market_confirmation": broad_confirmation,
+        "systemic_risk": systemic_risk,
+        "facts_complete": not facts_incomplete,
+        "b2_allowed": max_position_pct == 100,
+        "reason": reason,
+        "risk": risk,
+    }
+
+
+def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
+    sources = (_as_dict(context), _as_dict(snapshot), _as_dict(data))
+    supplied = _source_value(sources, "local_trend_sector_proof")
+    supplied = _as_dict(supplied)
+    source_date = _sector_source_date(data, context, snapshot, supplied)
+    normalized_target_date = _normalize_quote_date(target_date)
+    source_date_matches_target = not bool(
+        normalized_target_date and source_date and source_date != normalized_target_date
+    )
+    summary = _mainline_summary(*sources)
+    attack = _as_dict(summary.get("mainline_attack_evidence_summary"))
+    overtake = _as_dict(summary.get("overtake_window_summary"))
+    direction = _sector_name(
+        _first_non_empty(
+            supplied.get("direction"),
+            supplied.get("selected_direction"),
+            attack.get("primary_line"),
+            summary.get("current_mainline"),
+            context.get("mainline_name"),
+        )
+    )
+    trend_row = _sector_trend_row(context, direction)
+    current_record = _as_dict(_source_value(sources, "current_mainline_history_record"))
+    recent_history = _source_value(sources, "recent_mainline_history")
+    recent_history = [item for item in _as_list(recent_history) if isinstance(item, dict)]
+    dated_direction_rows = [
+        item
+        for item in recent_history + ([current_record] if current_record else [])
+        if clean_text(item.get("date") or item.get("trade_date") or item.get("source_date"))
+        and any(
+            _sector_names_match(item.get(key), direction)
+            for key in ("primary_mainline", "leading_line", "mainline", "sector_name", "daily_attack_line")
+        )
+    ]
+    explicit_cross_day = _explicit_bool(
+        _first_non_empty(
+            supplied.get("cross_day_continuity"),
+            supplied.get("cross_day_continuous"),
+            supplied.get("continuity_confirmed"),
+        )
+    )
+    cross_day_continuity = explicit_cross_day if explicit_cross_day is not None else len(dated_direction_rows) >= 2
+    explicit_divergence = _explicit_bool(
+        _first_non_empty(
+            supplied.get("divergence_acceptance"),
+            supplied.get("divergence_accepted"),
+            supplied.get("acceptance_confirmed"),
+        )
+    )
+    acceptance_text = clean_visible_text(
+        _first_non_empty(
+            supplied.get("divergence_acceptance_text"),
+            supplied.get("acceptance_quality"),
+            context.get("backrow_acceptance"),
+            context.get("后排承接"),
+            _state_snapshot(*sources).get("acceptance_quality"),
+            overtake.get("own_stability"),
+        )
+    )
+    divergence_acceptance = (
+        explicit_divergence
+        if explicit_divergence is not None
+        else bool(acceptance_text and _text_has_any(acceptance_text, ("强承接", "分歧承接", "承接稳定", "没有塌", "仍承接")))
+    )
+    explicit_expansion = _explicit_bool(
+        _first_non_empty(
+            supplied.get("internal_expansion"),
+            supplied.get("sector_internal_expansion"),
+            supplied.get("breadth_expansion"),
+        )
+    )
+    trend_count = int(_safe_float(trend_row.get("trend_count")) or 0)
+    strong_count = int(_safe_float(trend_row.get("strong_count")) or 0)
+    expansion_text = clean_visible_text(
+        _first_non_empty(
+            supplied.get("internal_expansion_text"),
+            context.get("sector_turnover_expansion"),
+            context.get("板块成交扩散"),
+        )
+    )
+    internal_expansion = (
+        explicit_expansion
+        if explicit_expansion is not None
+        else bool(trend_count >= 2 and strong_count >= 2)
+        or _text_has_any(expansion_text, ("扩散", "抬升", "同步", "成群"))
+    )
+    explicit_competition = _explicit_bool(
+        _first_non_empty(
+            supplied.get("competition_comparison"),
+            supplied.get("competition_line_compared"),
+            supplied.get("rival_comparison_complete"),
+        )
+    )
+    competition_state = clean_visible_text(
+        _first_non_empty(
+            supplied.get("competition_state"),
+            supplied.get("competition_line_state"),
+            overtake.get("window_state"),
+            attack.get("relationship_hint"),
+        )
+    )
+    competition_comparison = (
+        explicit_competition
+        if explicit_competition is not None
+        else competition_state in {"open", "confirm_next", "单主线聚焦", "双主线竞争"}
+    )
+    evidence_gaps = []
+    if not direction:
+        evidence_gaps.append("资金选择方向")
+    if not cross_day_continuity:
+        evidence_gaps.append("跨日持续")
+    if not divergence_acceptance:
+        evidence_gaps.append("分歧承接")
+    if not internal_expansion:
+        evidence_gaps.append("内部扩散")
+    if not competition_comparison:
+        evidence_gaps.append("竞争方向对照")
+    if not source_date_matches_target:
+        evidence_gaps.append("板块事实日期")
+    return {
+        "direction": direction,
+        "complete": not evidence_gaps,
+        "source_date": source_date or None,
+        "source_date_matches_target": source_date_matches_target,
+        "cross_day_continuity": bool(cross_day_continuity),
+        "divergence_acceptance": bool(divergence_acceptance),
+        "internal_expansion": bool(internal_expansion),
+        "competition_comparison": bool(competition_comparison),
+        "competition_state": competition_state or "待确认",
+        "trend_count": trend_count,
+        "strong_count": strong_count,
+        "matching_candidates": [],
+        "evidence_gaps": evidence_gaps,
+    }
+
+
+def _candidate_matches_local_trend_proof(candidate, proof):
+    proof = _as_dict(proof)
+    if not proof.get("complete"):
+        return False
+    direction = _sector_name(proof.get("direction"))
+    candidate = _as_dict(candidate)
+    candidate_directions = [
+        _sector_name(candidate.get(key))
+        for key in ("sector", "sector_name", "mainline", "trade_narrative_sector")
+        if _sector_name(candidate.get(key))
+    ]
+    candidate_directions.extend(_candidate_driver_tags(candidate))
+    return bool(direction and any(_sector_names_match(item, direction) for item in candidate_directions))
+
+
+def _candidate_has_market_emotion_derivation(candidate, context):
+    candidate = _as_dict(candidate)
+    proof = _as_dict(_as_dict(context).get("market_emotion_line_proof"))
+    if _explicit_bool(proof.get("complete")) is not True:
+        return False
+    required = (
+        "scarcity_recognition",
+        "capacity_evidence",
+        "public_participation",
+        "divergence_acceptance",
+    )
+    if not all(_explicit_bool(proof.get(key)) is True for key in required):
+        return False
+    proof_leader = proof.get("leader") if isinstance(proof.get("leader"), dict) else {}
+    return bool(stock_key(proof_leader) and stock_key(proof_leader) == stock_key(candidate))
+
+
+def _sector_anchor_keys(context, *, direction=""):
     keys = set()
     context = _as_dict(context)
     for item in _as_list(context.get("sector_trend_snapshot")):
         if not isinstance(item, dict):
+            continue
+        if direction and not _sector_names_match(item, direction):
             continue
         for key in ("anchor_code", "anchor_name", "leader_code", "leader_name", "core_code", "core_name"):
             value = clean_visible_text(item.get(key))
@@ -935,40 +1412,34 @@ def _candidate_has_legacy_signal(candidate):
     return _text_has_any(_candidate_text_blob(candidate), LEGACY_SIGNAL_MARKERS)
 
 
-def _candidate_has_sector_derivation(source_key, candidate, context):
+def _candidate_has_sector_derivation(source_key, candidate, context, local_trend_sector_proof=None):
     candidate = _as_dict(candidate)
-    source_key = clean_text(source_key)
-    if "sector_derived_candidates" in source_key or "sector_leader_candidates" in source_key:
-        return True
-    if clean_visible_text(candidate.get("sector_derivation_evidence")):
-        return True
-    role = clean_visible_text(candidate.get("candidate_role") or candidate.get("core_identity"))
-    source_pools = [
-        clean_visible_text(item)
-        for item in (candidate.get("source_pools") or [])
-        if clean_visible_text(item)
-    ]
-    if role in {"板块锚", "主线核心", "core"}:
-        return True
-    if any(_text_has_any(pool, ("主线核心", "板块锚", "板块发酵", "市场选择", "容量核心")) for pool in source_pools):
-        return True
-    keys = _sector_anchor_keys(context)
+    proof = _as_dict(local_trend_sector_proof) or _as_dict(_as_dict(context).get("local_trend_sector_proof"))
+    if not _candidate_matches_local_trend_proof(candidate, proof):
+        return False
+    keys = _sector_anchor_keys(context, direction=proof.get("direction"))
     key = stock_key(candidate)
-    return bool(key and key in keys)
+    structured_candidate = _explicit_bool(candidate.get("local_trend_sector_match"))
+    return bool(
+        structured_candidate is True
+        or (key and key in keys)
+        or clean_text(source_key).find("sector_derived_candidates") >= 0
+        or clean_text(source_key).find("sector_leader_candidates") >= 0
+    )
 
 
-def _candidate_origin(source_key, candidate, context):
+def _candidate_origin(source_key, candidate, context, local_trend_sector_proof=None):
     if clean_text(source_key) == "selected_position_candidate":
         return "manual_observation"
-    if "market_emotion_candidates" in clean_text(source_key):
+    if "market_emotion_candidates" in clean_text(source_key) and _candidate_has_market_emotion_derivation(candidate, context):
         return "market_emotion_line"
-    if _candidate_has_sector_derivation(source_key, candidate, context):
+    if _candidate_has_sector_derivation(source_key, candidate, context, local_trend_sector_proof):
         return "sector_first"
     return "legacy_signal_only"
 
 
-def _candidate_entry_basis(source_key, candidate, context):
-    origin = _candidate_origin(source_key, candidate, context)
+def _candidate_entry_basis(source_key, candidate, context, local_trend_sector_proof=None):
+    origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
     if origin == "sector_first":
         return clean_visible_text(
             candidate.get("sector_derivation_evidence")
@@ -990,13 +1461,29 @@ def _candidate_entry_basis(source_key, candidate, context):
     return "未证明来自板块发酵和市场选择，不能作为新仓入口"
 
 
-def _candidate_new_entry_qualified(source_key, candidate, context):
+def _candidate_new_entry_qualified(source_key, candidate, context, local_trend_sector_proof=None):
     if _candidate_blocks_new_entry_by_price(candidate):
         return False
-    return _candidate_origin(source_key, candidate, context) in {"sector_first", "market_emotion_line"}
+    target_date = _normalize_quote_date(_as_dict(context).get("_selection_target_date"))
+    candidate_dates = _mapping_dates(
+        candidate,
+        "trade_date",
+        "source_date",
+        "target_date",
+        "date",
+    )
+    if target_date and candidate_dates and target_date not in candidate_dates:
+        return False
+    return _candidate_origin(source_key, candidate, context, local_trend_sector_proof) in {"sector_first", "market_emotion_line"}
 
 
-def _build_candidate_pool(execution_stage_context, final_stock, selected_position_candidate=None, quote_lookup=None):
+def _build_candidate_pool(
+    execution_stage_context,
+    final_stock,
+    selected_position_candidate=None,
+    quote_lookup=None,
+    local_trend_sector_proof=None,
+):
     context = _as_dict(execution_stage_context)
     final_key = stock_key(final_stock)
     pool = []
@@ -1007,16 +1494,19 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
         if not key or key in seen:
             continue
         seen.add(key)
-        candidate_origin = _candidate_origin(source_key, candidate, context)
-        new_entry_qualified = _candidate_new_entry_qualified(source_key, candidate, context)
+        candidate_origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
+        new_entry_qualified = _candidate_new_entry_qualified(source_key, candidate, context, local_trend_sector_proof)
+        local_trend_sector_match = _candidate_matches_local_trend_proof(candidate, local_trend_sector_proof)
         status = _candidate_status(candidate, final_key)
         eliminated_at = "N6" if status in {"降级观察", "不参与"} else ""
         brooks = _brooks_price_action_judge(candidate)
         price_block_reason = _candidate_blocks_new_entry_by_price(candidate)
+        limit_down_reversal_plan = _candidate_limit_down_reversal_plan_payload(candidate)
         limit_down_block_reason = _candidate_limit_down_block_reason(candidate)
-        if price_block_reason and status != "最终执行对象":
+        if price_block_reason:
+            status = "风险复核样本"
             eliminated_at = "N7"
-        if status == "最终执行对象":
+        elif status == "最终执行对象":
             eliminated_at = ""
         eliminated_reason = "" if status == "最终执行对象" else clean_text(
             (
@@ -1069,9 +1559,11 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
                 "first_seen_node": "N5",
                 "source_pools": source_pools,
                 "entered_reason": _entered_reason(source_key, candidate),
-                "entry_basis": _candidate_entry_basis(source_key, candidate, context),
+                "entry_basis": _candidate_entry_basis(source_key, candidate, context, local_trend_sector_proof),
                 "candidate_origin": candidate_origin,
                 "new_entry_qualified": new_entry_qualified,
+                "local_trend_sector_match": local_trend_sector_match,
+                "proven_direction": _sector_name(_as_dict(local_trend_sector_proof).get("direction")),
                 "mainline": clean_visible_text(candidate.get("mainline") or context.get("mainline_name")),
                 "sector": clean_visible_text(candidate.get("sector") or candidate.get("sector_name")),
                 "current_driver_tags": _candidate_driver_tags(candidate),
@@ -1079,6 +1571,7 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
                 "reversal_decision": _anchor_reversal_decision(candidate),
                 "leader_debate": _leader_debate(candidate),
                 "brooks_price_action_judge": brooks,
+                "limit_down_reversal_plan": limit_down_reversal_plan,
                 "common_selection_consistency": _common_selection_consistency(candidate),
                 "status": status,
                 "price_action_block_reason": price_block_reason,
@@ -1120,13 +1613,24 @@ def _selected_candidate_has_execution_evidence(candidate):
     return has_window and bool(clean_text(candidate.get("fallback_state") or planned.get("fallback_state")))
 
 
-def _candidate_can_be_final_execution_object(candidate, *, source_key="", context=None):
+def _candidate_can_be_final_execution_object(
+    candidate,
+    *,
+    source_key="",
+    context=None,
+    local_trend_sector_proof=None,
+):
     if _candidate_blocks_new_entry_by_price(candidate):
         return False
     return (
         _anchor_reversal_decision(candidate) == "可作为主对象"
         and _selected_candidate_has_execution_evidence(candidate)
-        and _candidate_new_entry_qualified(source_key, candidate, _as_dict(context))
+        and _candidate_new_entry_qualified(
+            source_key,
+            candidate,
+            _as_dict(context),
+            local_trend_sector_proof,
+        )
     )
 
 
@@ -1184,14 +1688,22 @@ def _candidate_can_be_front_observation_object(candidate, *, explicit_selected=F
     return False, reason_text or "未取得前台观察资格"
 
 
-def _pick_final_candidate(execution_stage_context, selected_position_candidate=None, position_decision=None, quote_lookup=None):
+def _pick_final_candidate(
+    execution_stage_context,
+    selected_position_candidate=None,
+    position_decision=None,
+    quote_lookup=None,
+    local_trend_sector_proof=None,
+):
     if _position_pct(position_decision) <= 0:
         return {}
     context = _as_dict(execution_stage_context)
     sources = _candidate_sources(context)
     if stock_key(selected_position_candidate):
+        selected_in_pool = False
         for source_key, candidate in sources:
             if _candidate_matches_selected(candidate, selected_position_candidate):
+                selected_in_pool = True
                 merged = dict(candidate)
                 merged.update(
                     {
@@ -1201,13 +1713,35 @@ def _pick_final_candidate(execution_stage_context, selected_position_candidate=N
                     }
                 )
                 merged = _candidate_with_quote(merged, quote_lookup)
-                if _candidate_can_be_final_execution_object(merged, source_key=source_key, context=context):
+                if _candidate_can_be_final_execution_object(
+                    merged,
+                    source_key=source_key,
+                    context=context,
+                    local_trend_sector_proof=local_trend_sector_proof,
+                ):
                     return stock_payload(merged)
-                return {}
+        if not selected_in_pool:
+            return {}
+        for source_key, candidate in sources:
+            if _candidate_matches_selected(candidate, selected_position_candidate):
+                continue
+            candidate = _candidate_with_quote(candidate, quote_lookup)
+            if _candidate_can_be_final_execution_object(
+                candidate,
+                source_key=source_key,
+                context=context,
+                local_trend_sector_proof=local_trend_sector_proof,
+            ):
+                return stock_payload(candidate)
         return {}
     for source_key, candidate in sources:
         candidate = _candidate_with_quote(candidate, quote_lookup)
-        if _candidate_can_be_final_execution_object(candidate, source_key=source_key, context=context):
+        if _candidate_can_be_final_execution_object(
+            candidate,
+            source_key=source_key,
+            context=context,
+            local_trend_sector_proof=local_trend_sector_proof,
+        ):
             return stock_payload(candidate)
     return {}
 
@@ -1233,9 +1767,13 @@ def _selected_candidate_conflicts(execution_stage_context, selected_position_can
 
 
 def _action_text(position_pct):
-    if position_pct >= 100:
+    try:
+        position_pct = normalize_planned_position_tier_pct(position_pct)
+    except (TypeError, ValueError):
+        position_pct = 0
+    if position_pct == 100:
         return "100%核心进攻"
-    if position_pct >= 50:
+    if position_pct == 50:
         return "50%条件执行"
     return "0%不参与"
 
@@ -1545,10 +2083,11 @@ def _apply_premarket_review_position(position_pct, review):
     if cap in (None, ""):
         return position_pct
     try:
-        cap_pct = int(float(str(cap).replace("%", "").strip() or 0))
+        position_pct = normalize_planned_position_tier_pct(position_pct)
+        cap_pct = planned_position_tier_cap_pct(cap)
     except (TypeError, ValueError):
-        return position_pct
-    return min(position_pct, max(cap_pct, 0))
+        return 0
+    return min(position_pct, cap_pct)
 
 
 def _premarket_review_judgement(review, action_text):
@@ -1590,10 +2129,11 @@ def build_selection_workflow(
     final_target_resolution=None,
 ):
     data = _as_dict(data)
-    context = _as_dict(execution_stage_context)
+    context = dict(_as_dict(execution_stage_context))
     snapshot = _as_dict(market_research_snapshot)
     target_date = clean_text(target_date or data.get("target_date") or snapshot.get("target_date"))
     source_date = clean_text(data.get("source_date") or snapshot.get("source_date") or target_date)
+    context["_selection_target_date"] = target_date
     quote_lookup = _build_quote_lookup(data, context, snapshot, target_date=target_date)
     if _quote_backfill_enabled(data, context, snapshot):
         quote_lookup = _backfill_quote_lookup(
@@ -1602,18 +2142,45 @@ def build_selection_workflow(
             execution_stage_context=context,
             selected_position_candidate=selected_position_candidate,
         )
+    missing_fields = _selection_workflow_missing_fields(data, context, snapshot)
+    local_trend_sector_proof = _local_trend_sector_proof(
+        data,
+        context,
+        snapshot,
+        target_date=target_date,
+    )
+    if local_trend_sector_proof.get("source_date_matches_target") is False:
+        missing_fields.append("板块事实日期")
+    market_participation_limit = _market_participation_limit(
+        data,
+        context,
+        snapshot,
+        missing_fields=missing_fields,
+    )
+    context["local_trend_sector_proof"] = local_trend_sector_proof
     final_stock = _pick_final_candidate(
         context,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         quote_lookup=quote_lookup,
+        local_trend_sector_proof=local_trend_sector_proof,
     )
-    missing_fields = _selection_workflow_missing_fields(data, context, snapshot)
     if missing_fields:
         final_stock = {}
-    base_position_pct = _position_pct(position_decision) if final_stock else 0
+    planned_position_pct = _position_pct(position_decision) if final_stock else 0
+    base_position_pct = min(planned_position_pct, market_participation_limit["max_position_pct"])
     base_execution_stock = final_stock if base_position_pct else {}
-    base_candidate_pool = _build_candidate_pool(context, base_execution_stock, selected_position_candidate)
+    base_candidate_pool = _build_candidate_pool(
+        context,
+        base_execution_stock,
+        selected_position_candidate,
+        local_trend_sector_proof=local_trend_sector_proof,
+    )
+    local_trend_sector_proof["matching_candidates"] = [
+        item.get("stock")
+        for item in base_candidate_pool
+        if item.get("local_trend_sector_match") and item.get("new_entry_qualified")
+    ]
     premarket_narrative_review = _build_premarket_narrative_review(
         data=data,
         context=context,
@@ -1632,7 +2199,13 @@ def build_selection_workflow(
     )
     position_pct = _apply_premarket_review_position(base_position_pct, premarket_narrative_review)
     execution_stock = final_stock if position_pct else {}
-    candidate_pool = _build_candidate_pool(context, execution_stock, selected_position_candidate, quote_lookup=quote_lookup)
+    candidate_pool = _build_candidate_pool(
+        context,
+        execution_stock,
+        selected_position_candidate,
+        quote_lookup=quote_lookup,
+        local_trend_sector_proof=local_trend_sector_proof,
+    )
     if premarket_narrative_review:
         final_key = stock_key(final_stock)
         for item in candidate_pool:
@@ -1651,13 +2224,16 @@ def build_selection_workflow(
         "volume_quality": clean_text(context.get("volume_quality") or context.get("成交量质量"), "待确认"),
         "risk_preference": clean_text(context.get("risk_preference") or context.get("风险偏好"), "待确认"),
         "allow_sector_diagnosis": not bool(missing_fields),
+        "market_participation_limit": market_participation_limit,
     }
     sector_layer = {
-        "selected_direction": mainline,
+        "selected_direction": local_trend_sector_proof.get("direction") or mainline,
+        "sector_path_selected": bool(local_trend_sector_proof.get("complete")),
         "sector_fermentation": clean_text(context.get("sector_fermentation") or context.get("板块发酵"), "待确认"),
         "sector_emotion": clean_text(context.get("sector_emotion") or context.get("板块情绪"), "待确认"),
         "turnover_expansion": clean_text(context.get("sector_turnover_expansion") or context.get("板块成交扩散"), "待确认"),
         "backrow_acceptance": clean_text(context.get("backrow_acceptance") or context.get("后排承接"), "待确认"),
+        "local_trend_sector_proof": local_trend_sector_proof,
     }
     leader_layer = {
         "leader_source": "板块发酵推导" if execution_stock and any(item.get("new_entry_qualified") for item in candidate_pool) else "待确认",
@@ -1685,11 +2261,18 @@ def build_selection_workflow(
         if _as_dict(item.get("common_selection_consistency")).get("status") == "待复核"
     )
 
-    n8_judgement = (
-        f"关键数据不完整，停止生成：{'、'.join(missing_fields)}"
-        if missing_fields
-        else _action_text(base_position_pct)
-    )
+    if missing_fields:
+        n8_judgement = f"关键数据不完整，停止生成：{'、'.join(missing_fields)}"
+    elif not local_trend_sector_proof.get("complete"):
+        n8_judgement = (
+            "0%不参与；局部趋势板块证据不足："
+            + "、".join(local_trend_sector_proof.get("evidence_gaps", []))
+        )
+    else:
+        n8_judgement = (
+            f"{_action_text(base_position_pct)}；市场参与上限"
+            f"{market_participation_limit['max_position_pct']}%"
+        )
     n8_source_node = "N8"
     adjusted_action_text = _action_text(position_pct)
     nodes = [
@@ -1737,6 +2320,9 @@ def build_selection_workflow(
             passes_forward={
                 "execution_object": execution_stock,
                 "base_position_pct": base_position_pct,
+                "planned_position_pct": planned_position_pct,
+                "market_participation_limit": market_participation_limit,
+                "local_trend_sector_proof": local_trend_sector_proof,
                 "position_pct": position_pct if not premarket_narrative_review else base_position_pct,
                 "data_completeness": data_completeness,
                 "premarket_narrative_review": premarket_narrative_review,
@@ -1774,20 +2360,62 @@ def build_selection_workflow(
         )
     )
     final_failure_conditions = list(missing_fields)
+    if not local_trend_sector_proof.get("complete"):
+        final_failure_conditions.extend(
+            f"局部趋势板块证明缺少{item}"
+            for item in local_trend_sector_proof.get("evidence_gaps", [])
+        )
+    if market_participation_limit.get("systemic_risk"):
+        final_failure_conditions.append(market_participation_limit.get("reason"))
+    candidate_direction_mismatch = bool(
+        local_trend_sector_proof.get("complete")
+        and candidate_pool
+        and not any(
+            item.get("new_entry_qualified")
+            and (
+                item.get("local_trend_sector_match")
+                or item.get("candidate_origin") == "market_emotion_line"
+            )
+            for item in candidate_pool
+        )
+    )
+    if candidate_direction_mismatch:
+        final_failure_conditions.append("个股与已证明方向不匹配")
     if premarket_narrative_review and position_pct <= 0 and base_position_pct > 0:
         final_failure_conditions.extend(_clean_list(premarket_narrative_review.get("cancel_conditions")))
         summary = _premarket_review_summary(premarket_narrative_review)
         if summary and summary not in final_failure_conditions:
             final_failure_conditions.append(summary)
     final_reason = _premarket_review_final_reason(premarket_narrative_review)
+    if not final_reason and missing_fields:
+        final_reason = "关键数据不完整，停止生成"
+    elif not final_reason and market_participation_limit.get("systemic_risk"):
+        final_reason = market_participation_limit.get("reason")
+    elif not final_reason and not local_trend_sector_proof.get("complete"):
+        final_reason = "局部趋势板块证据不足：" + "、".join(
+            local_trend_sector_proof.get("evidence_gaps", [])
+        )
+    elif not final_reason and candidate_direction_mismatch:
+        final_reason = "个股与已证明方向不匹配"
+    elif not final_reason:
+        final_reason = market_participation_limit.get("reason", "")
 
     return {
         "schema_version": SCHEMA_VERSION,
         "derivation_contract": DERIVATION_CONTRACT,
         "target_date": target_date,
         "source_date": source_date,
+        "source_dates": _selection_source_dates(
+            target_date,
+            data,
+            context,
+            snapshot,
+            local_trend_sector_proof,
+        ),
         "market_layer": market_layer,
+        "market_participation_limit": market_participation_limit,
         "sector_layer": sector_layer,
+        "local_trend_sector_proof": local_trend_sector_proof,
         "leader_layer": leader_layer,
         "data_completeness": data_completeness,
         "nodes": nodes,
@@ -1803,6 +2431,8 @@ def build_selection_workflow(
             "fail_action": "0%不参与",
             "premarket_narrative_review": premarket_narrative_review,
             "reason": final_reason,
+            "b1_only": position_pct == 50 and not market_participation_limit.get("b2_allowed"),
+            "b2_allowed": bool(position_pct and market_participation_limit.get("b2_allowed")),
         },
         "flowchart_payload": {
             "nodes": [{"id": node["node_id"], "label": node["node_name"], "judgement": node["judgement"]} for node in nodes],
@@ -1825,6 +2455,25 @@ def _mermaid_escape(value):
     return clean_text(value).replace('"', "'")
 
 
+def _mermaid_wrap(value, *, max_chars=22):
+    text = _mermaid_escape(value)
+    wrapped = []
+    for source_line in text.split("<br/>"):
+        remaining = source_line
+        while len(remaining) > max_chars:
+            boundaries = [
+                remaining.rfind(marker, 0, max_chars + 1) + len(marker)
+                for marker in ("；", "，", "。", "、", "：", ":", " ")
+            ]
+            split_at = max(boundaries)
+            if split_at < max_chars // 2:
+                split_at = max_chars
+            wrapped.append(remaining[:split_at])
+            remaining = remaining[split_at:]
+        wrapped.append(remaining)
+    return "<br/>".join(part for part in wrapped if part)
+
+
 def render_selection_workflow_mermaid(workflow):
     workflow = workflow if isinstance(workflow, dict) else {}
     lines = ["flowchart TD"]
@@ -1838,7 +2487,9 @@ def render_selection_workflow_mermaid(workflow):
         if not node_id:
             continue
         known_ids.add(node_id)
-        label = _mermaid_escape(f"{node_id} {node.get('node_name')}\\n{node.get('judgement')}")
+        node_title = _mermaid_escape(f"{node_id} {node.get('node_name')}")
+        judgement = _mermaid_wrap(node.get("judgement"))
+        label = f"{node_title}<br/>{judgement}"
         lines.append(f'  {node_id}["{label}"]')
         input_refs = [clean_text(item) for item in node.get("input_refs", []) or [] if clean_text(item)]
         if input_refs:
@@ -1853,7 +2504,7 @@ def render_selection_workflow_mermaid(workflow):
     final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     target = stock_label(final.get("execution_object"))
     pct = final.get("position_pct", 0)
-    final_label = _mermaid_escape(f"最终：{target}\\n仓位：{pct}%")
+    final_label = _mermaid_escape(f"最终：{target}<br/>仓位：{pct}%")
     lines.append(f'  FINAL["{final_label}"]')
     source_node = clean_text(final.get("source_node"))
     if source_node in known_ids:

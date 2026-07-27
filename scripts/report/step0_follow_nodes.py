@@ -1,5 +1,6 @@
 from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
-from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
+from report.conclusion_support import resolve_target_position_pct
+from report.execution_wording import execution_clause_for_position_pct
 
 
 def _full_row(label, current_evidence, derived_judgement, action_effect):
@@ -147,7 +148,8 @@ def build_step0_follow_reminder_node(context, node_meta=None, node_lookup=None):
     if _zero_participation_context(context):
         reminder = "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断。"
     else:
-        reminder = f"> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；买入后按失效价和单笔-5%底线处理风险。"
+        execution_clause = execution_clause_for_position_pct(resolve_target_position_pct(context))
+        reminder = f"> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{execution_clause}；买入后按失效价和单笔-5%底线处理风险。"
     return {
         "lines": [reminder],
         "exports": {},

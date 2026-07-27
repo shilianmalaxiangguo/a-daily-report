@@ -25,7 +25,7 @@ from replay.report_replay import (
     build_replay_snapshot_contract,
 )
 from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
-from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_context import build_llm_wiki_context, build_replay_llm_wiki_context
 from knowledge.llm_wiki_router import route_llm_wiki_knowledge_trace
 
 
@@ -37,6 +37,24 @@ def _frozen_llm_wiki_context(target_date):
                 "index_trend": "上涨",
                 "breadth": "上涨家数偏弱",
                 "turnover_distribution": "成交集中",
+            }
+        },
+        manifest=context["manifest"],
+        target_date=target_date,
+        query_date=target_date,
+    )
+    context["knowledge_hits"] = list(trace["hits"])
+    context["knowledge_trace"] = trace
+    return context
+
+
+def _frozen_historical_prior_wiki_context(target_date):
+    context = build_llm_wiki_context(target_date=target_date, query_date=target_date)
+    trace = route_llm_wiki_knowledge_trace(
+        {
+            "market": {
+                "market_form": "历史先验只限定范围，实时结构与模型分歧决定当前解释",
+                "breadth": "短促反弹不等于稳定修复，需要观察修复质量",
             }
         },
         manifest=context["manifest"],
@@ -425,6 +443,40 @@ def _replay_probe(target_date, refresh_sources=None):
                 for log in result["module_logs"]
             )
         )
+
+    def test_replay_reuses_frozen_historical_prior_hit_without_current_routing(self):
+        frozen_wiki = _frozen_historical_prior_wiki_context("2026-07-16")
+        frozen_trace = frozen_wiki["knowledge_trace"]
+        self.assertIn(
+            "market.historical-prior-live-structure",
+            {item["knowledge_id"] for item in frozen_trace["hits"]},
+        )
+        snapshot = {
+            "knowledge": {"llm_wiki": frozen_wiki},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        with patch(
+            "replay.report_replay.build_replay_llm_wiki_context",
+            wraps=build_replay_llm_wiki_context,
+        ) as replay_builder:
+            result = build_replay_snapshot_contract(
+                "2026-07-16",
+                refresh_sources=["noop"],
+                load_data_snapshot=lambda target_date: (snapshot, ""),
+                tencent_factory=lambda: _FakeTencentFinanceData([]),
+                get_major_indices_from_iwencai=lambda target_date="": [],
+                safe_float=lambda value: float(value or 0),
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+        replay_builder.assert_called_once()
+        replay_wiki = result["data"]["knowledge"]["llm_wiki"]
+        self.assertEqual(replay_wiki["artifact_origin"], "frozen_trace")
+        self.assertEqual(replay_wiki["knowledge_trace"], frozen_trace)
+        self.assertEqual(replay_wiki["knowledge_hits"], frozen_trace["hits"])
 
     def test_build_replay_snapshot_contract_rejects_frozen_wiki_trace_from_another_date(self):
         snapshot = {
@@ -1465,6 +1517,7 @@ def _replay_probe(target_date, refresh_sources=None):
             safe_float=lambda value: float(value or 0),
             print_fn=lambda *args, **kwargs: None,
             helpers={
+                "get_limit_pool_snapshot": lambda target_date: {},
                 "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
                 "mainline_turnover_summary_conflicts_with_current_record": lambda summary, current_record: (
                     "逆势攻击" in str((current_record or {}).get("rotation_label") or "")
@@ -2399,7 +2452,15 @@ def _replay_probe(target_date, refresh_sources=None):
             "turnover_data": {"total_turnover_yi": 0.0, "date": "2026-05-13"},
             "turnover_rank": [],
             "turnover_over_100b": [],
-            "market_stats": {"up_count": 2600, "down_count": 2100, "flat_count": 120, "stock_count": 4820},
+            "market_stats": {
+                "up_count": 2600,
+                "down_count": 2100,
+                "flat_count": 120,
+                "stock_count": 4820,
+                "zt_count": 0,
+                "dt_count": 0,
+                "trade_date": "2026-05-13",
+            },
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
             "csi1000_index": {
                 "name": "中证1000",
@@ -2429,6 +2490,8 @@ def _replay_probe(target_date, refresh_sources=None):
                 "中证1000": True,
                 "成交额排名": False,
                 "大盘涨跌统计": True,
+                "涨停池": True,
+                "跌停池": True,
                 "选股通盘中异动": True,
             },
             "step_status": {
@@ -3738,7 +3801,15 @@ def _replay_probe(target_date, refresh_sources=None):
             "indices": [{"code": "sh000001"}],
             "total_turnover": 32642.12,
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
-            "market_stats": {"up_count": 2600, "down_count": 2100, "flat_count": 120, "stock_count": 4820},
+            "market_stats": {
+                "up_count": 2600,
+                "down_count": 2100,
+                "flat_count": 120,
+                "stock_count": 4820,
+                "zt_count": 0,
+                "dt_count": 0,
+                "trade_date": "2026-05-13",
+            },
             "csi1000_index": {
                 "name": "中证1000",
                 "code": "000852",
@@ -3768,6 +3839,8 @@ def _replay_probe(target_date, refresh_sources=None):
                 "中证1000": True,
                 "成交额排名": True,
                 "大盘涨跌统计": True,
+                "涨停池": True,
+                "跌停池": True,
                 "选股通盘中异动": True,
             },
             "step_status": {
@@ -3960,7 +4033,7 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertTrue(any(log["step"] == "audit.report_outputs" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "save.report_outputs" for log in result["module_logs"]))
 
-    def test_replay_report_outputs_contract_normalizes_position_and_prepends_timeline(self):
+    def test_replay_report_outputs_contract_normalizes_simulated_position_and_prepends_timeline(self):
         replay_runtime = self._load_module()
         calls = []
         snapshot = {
@@ -3980,18 +4053,19 @@ def _replay_probe(target_date, refresh_sources=None):
         position_report_text = (
             "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
             "|------|------|----------|----------|-------------|------|\n"
-            "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
-            "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |\n\n"
+            "| Td | 2026-07-10（周五） | 报告日：旧仓进入复核：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-13（周一） | 只处理旧仓风险 | 长电科技(600584) | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |\n\n"
             "# 持仓策略"
         )
 
         def build_outputs(data, target_date, **kwargs):
             calls.append("build")
             summary = data["personal_position_context"]["existing_position_summary"]
-            self.assertFalse(summary["has_position"])
-            self.assertTrue(summary["has_pending_position"])
-            self.assertEqual(summary["position"], 0.0)
-            self.assertEqual(summary["position_pct"], 0.0)
+            self.assertTrue(summary["has_position"])
+            self.assertFalse(summary["has_pending_position"])
+            self.assertEqual(summary["position"], 50.0)
+            self.assertEqual(summary["position_pct"], 50.0)
+            self.assertEqual(summary["default_position_pct"], 50.0)
             return {REPORT_VARIANT_FULL: "# 完整版"}
 
         def audit_report(markdown, **kwargs):

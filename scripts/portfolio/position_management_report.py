@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from report.position_context import build_old_position_plan
+
 __all__ = [
     "analyze_position_management",
     "analyze_position_management_report",
@@ -590,6 +592,7 @@ def build_personal_position_context(data, positions):
     holding_summaries = []
     primary_close = ""
     primary_support = str(primary.get("support_band") or "").strip()
+    primary_identity = {}
     all_cleared = all(_is_cleared_position(position) for position in positions)
     for index, position in enumerate(positions):
         position = dict(position)
@@ -619,6 +622,7 @@ def build_personal_position_context(data, positions):
         holding_summaries.append(f"{prefix}{'，'.join(summary_parts)}")
         if index == 0:
             primary_close = close
+            primary_identity = {"name": str(name), "code": str(code)}
     independent_holding = _is_independent_position(primary)
     decision = "持仓继续独立评估，不因新机会自动处理"
     if all_cleared:
@@ -632,12 +636,32 @@ def build_personal_position_context(data, positions):
         decision = "先处理旧仓"
     suffix = f"；{decision}" if independent_holding else f"；{decision}；新开仓0手"
     summary = "；".join(holding_summaries) + suffix
+    existing_position_summary = {
+        "has_position": not all_cleared,
+        "has_pending_position": False,
+        "summary": summary,
+        **{key: value for key, value in primary_identity.items() if value},
+    }
+    for key in (
+        "position",
+        "position_pct",
+        "lots",
+        "shares",
+        "cost",
+        "position_kind",
+        "holding_note",
+        "trade_action",
+        "buy_lots",
+        "sell_lots",
+    ):
+        if primary.get(key) not in (None, ""):
+            existing_position_summary[key] = primary.get(key)
+    old_position_plan = build_old_position_plan(existing_position_summary, holding=primary)
+    if old_position_plan:
+        existing_position_summary["old_position_plan"] = old_position_plan
     return {
         "account_profile": {"capital_text": _format_account_profile(primary)},
-        "existing_position_summary": {
-            "has_position": True,
-            "summary": summary,
-        },
+        "existing_position_summary": existing_position_summary,
     }
 
 

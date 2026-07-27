@@ -69,7 +69,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertNotIn("stage_key", rendered)
         self.assertNotIn("Step 4.5", rendered)
 
-    def test_full_mode_does_not_render_inferred_plan_as_confirmed_old_position(self):
+    def test_full_mode_renders_inherited_previous_target_as_simulated_old_position(self):
         lines = build_legacy_final_conclusion_lines(
             {
                 "display_mvp_mode": False,
@@ -91,10 +91,11 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertNotIn("旧仓处理：持有太极实业(600667)", rendered)
-        self.assertNotIn("| 操作风格 | 旧仓处理 |", rendered)
-        self.assertNotIn("先处理旧仓：持有太极实业(600667)", rendered)
-        self.assertIn("| 操作风格 | 空仓 |", rendered)
+        self.assertIn("| 明日大盘预期 | 🟠 只处理旧仓；不新增参与 |", rendered)
+        self.assertIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertIn("| 明日策略 | 只处理旧仓：", rendered)
+        self.assertIn("旧仓处理：持有太极实业(600667)", rendered)
+        self.assertNotIn("待成交确认", rendered)
 
     def test_full_mode_keeps_new_target_actionable_with_inferred_default_old_position(self):
         context = {
@@ -150,6 +151,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertNotIn("| 操作风格 | 旧仓处理 |", rendered)
         self.assertNotIn("| 唯一动作 | 旧仓处理：持有太极实业", rendered)
         self.assertNotIn("先处理旧仓风险", rendered)
+        self.assertNotIn("已有1x", rendered)
 
     def test_mvp_mode_renders_buy_target_and_single_action(self):
         lines = build_legacy_final_conclusion_lines(
@@ -170,6 +172,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "front_structure_layer_text": "可以开仓，但只剩唯一动作",
                 "trade_gate_open": True,
                 "best_stock": {"name": "军工一号", "code": "000001", "r_reward_ratio": 2.4},
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
                 "watch_anchor": None,
                 "watch_anchor_type": "",
                 "front_follow_action_text": ACTION_TEXT,
@@ -180,7 +183,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 主看方向 | 军工 / 高端装备 |", rendered)
-        self.assertIn(f"| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发；{TWO_B_CONFIRMATION_CLAUSE} |", rendered)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertIn("| 操作风格 | 短线 |", rendered)
         self.assertIn("| 盈亏比约束 | 预估赚赔比 1:2.4", rendered)
@@ -283,8 +287,70 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         self.assertFalse(selected_target_is_attack_ready(context))
         self.assertEqual(build_focus_recap_text(context), "汇源通信(000586)：观察对象，先观察强弱与承接")
-        self.assertEqual(derive_trade_style(context), "空仓")
+        self.assertEqual(derive_trade_style(context), "0%不参与")
         self.assertIn("当前先守住回撤", derive_risk_guard_text(context))
+
+    def test_selected_target_stays_observation_for_non_tier_position_values(self):
+        for position_pct in (33, 75, None):
+            with self.subTest(position_pct=position_pct):
+                context = {
+                    "selected_position_candidate": {
+                        "name": "汇源通信",
+                        "code": "000586",
+                    },
+                    "position_decision": {
+                        "target_position_pct": position_pct,
+                    },
+                }
+
+                self.assertFalse(selected_target_is_attack_ready(context))
+                self.assertEqual(
+                    build_focus_recap_text(context),
+                    "汇源通信(000586)：观察对象，先观察强弱与承接",
+                )
+                self.assertEqual(derive_trade_style(context), "0%不参与")
+
+    def test_tradable_proxy_requires_a_structured_position_tier(self):
+        for proxy_position_pct in (33, 75, None):
+            with self.subTest(proxy_position_pct=proxy_position_pct):
+                proxy_target = {
+                    "name": "通信ETF",
+                    "code": "515880",
+                }
+                if proxy_position_pct is not None:
+                    proxy_target["target_position_pct"] = proxy_position_pct
+                context = {
+                    "final_target_resolution": {
+                        "display_target": proxy_target,
+                        "tradable_proxy_target": proxy_target,
+                        "capital_priority_decision": {
+                            "capital_priority": "tradable_proxy",
+                        },
+                    },
+                }
+
+                self.assertFalse(selected_target_is_attack_ready(context))
+                self.assertEqual(
+                    build_focus_recap_text(context),
+                    "通信ETF(515880)：观察对象，先观察强弱与承接",
+                )
+                self.assertEqual(derive_trade_style(context), "0%不参与")
+
+    def test_tradable_proxy_keeps_valid_position_decision_tier(self):
+        proxy_target = {"name": "通信ETF", "code": "515880"}
+        context = {
+            "position_decision": {"target_position_pct": 50},
+            "final_target_resolution": {
+                "display_target": proxy_target,
+                "tradable_proxy_target": proxy_target,
+                "capital_priority_decision": {
+                    "capital_priority": "tradable_proxy",
+                },
+            },
+        }
+
+        self.assertTrue(selected_target_is_attack_ready(context))
+        self.assertEqual(derive_trade_style(context), "条件进攻")
 
     def test_wait_resolution_without_watch_target_does_not_promote_downgraded_sample_in_final_conclusion(self):
         context = {
@@ -328,9 +394,9 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(build_legacy_final_conclusion_lines(context))
 
-        self.assertIn("| 今日关注标的 | 今天没有新增可信关注对象，明天先空仓观察 |", rendered)
+        self.assertIn("| 今日关注标的 | 今天没有新增可信关注对象，明天只观察、不新增参与 |", rendered)
         self.assertIn("| 明天观察池 | 4只 |", rendered)
-        self.assertIn("| 唯一动作 | 当前没有能下手的票，明日空仓观察 |", rendered)
+        self.assertIn("| 唯一动作 | 当前没有能下手的票，明日不新增参与 |", rendered)
         self.assertNotIn("大有能源(600403)：观察对象", rendered)
         self.assertNotIn("跨线重点观察谁", rendered)
 
@@ -351,6 +417,12 @@ class FinalConclusionRendererTest(unittest.TestCase):
             "position_decision": {
                 "target_position_pct": 100,
                 "participation_mode": "full_100",
+            },
+            "existing_position_summary": {
+                "has_position": True,
+                "name": "华电辽能",
+                "code": "600396",
+                "summary": "持有华电辽能(600396)，已有仓按原预案处理",
             },
             "final_target_resolution": {
                 "new_entry_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
@@ -373,8 +445,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(build_legacy_final_conclusion_lines(context))
         self.assertIn("| 今日关注标的 | 工业富联(601138)：观察对象，旧仓先处理 |", rendered)
         self.assertIn("| 明天观察池 | 工业富联(601138)：观察对象，旧仓先处理 |", rendered)
-        self.assertIn("| 明日买点预计算 | 空仓；不开新仓，只保留重点观察谁 |", rendered)
-        self.assertIn("| 唯一动作 | 工业富联(601138)；先观察强弱，不抢跑 |", rendered)
+        self.assertIn("| 明日买点预计算 | 旧仓处理；0%新仓；旧仓按持仓预案处理 |", rendered)
+        self.assertIn("| 唯一动作 | 旧仓处理：持有华电辽能(600396)，已有仓按原预案处理 |", rendered)
         self.assertIn("| 明日策略 | 只处理旧仓：继续研究市场，但不新增参与", rendered)
         self.assertNotIn("工业富联(601138)：明日目标标的", rendered)
         self.assertNotIn("只等明日目标标的在固定交易窗口内满足条件", rendered)
@@ -568,6 +640,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "front_structure_layer_text": "可以开仓，但只剩唯一动作",
                 "trade_gate_open": True,
                 "best_stock": {"name": "军工一号", "code": "000001"},
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
                 "front_follow_action_text": ACTION_TEXT,
                 "enabled_node_keys": ["header", "table_header", "mvp_target", "mvp_action"],
             }
@@ -576,7 +649,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 最终结论", rendered)
         self.assertIn("| 项目 | 明日指引 |", rendered)
-        self.assertIn(f"| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发；{TWO_B_CONFIRMATION_CLAUSE} |", rendered)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertNotIn("| 主看方向 |", rendered)
         self.assertNotIn("| 执行纪律 |", rendered)
@@ -589,14 +663,32 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "final_gate": {"can_new_entry": True},
                 "trade_gate_open": True,
                 "best_stock": {"name": "大唐发电", "code": "601991"},
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
             }
         )
 
         rendered = "\n".join(lines)
         self.assertIn("09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口", rendered)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertIn("不满足执行资格就回到0%", rendered)
         self.assertNotIn("明日前30分钟先确认环境", rendered)
         self.assertNotIn("买点一律" + "等60" + "分钟确认", rendered)
+
+    def test_final_conclusion_discipline_keeps_two_b_for_full_position_plan(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": False,
+                "step0_prediction": "CLEAR",
+                "final_gate": {"can_new_entry": True},
+                "trade_gate_open": True,
+                "best_stock": {"name": "大唐发电", "code": "601991"},
+                "position_decision": {"target_position_pct": 100, "signal_grade": "100"},
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn(TWO_B_CONFIRMATION_CLAUSE, rendered)
 
 
 if __name__ == "__main__":

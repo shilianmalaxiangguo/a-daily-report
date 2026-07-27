@@ -182,7 +182,7 @@ def _build_decisive_row(context, stage_meta=None):
         if watch_anchor_note:
             guidance = f"{guidance}；{watch_anchor_note}"
         return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), guidance)
-    return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), "当前没有能下手的票，明日空仓观察")
+    return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), "当前没有能下手的票，明日不新增参与")
 
 
 DEFAULT_ROW_BUILDERS = [

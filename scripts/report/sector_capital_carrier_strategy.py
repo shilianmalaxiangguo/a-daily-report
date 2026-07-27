@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from report.selection_workflow import candidate_limit_down_risk_review_reason
+
 
 SCHEMA_VERSION = "sector_capital_carrier_paper_strategy.v1"
 DATE_KEYS = ("trade_date", "source_date", "query_date", "date", "day")
@@ -458,6 +460,7 @@ def _add_stock_profile(profiles, row, *, source_type, source_label, fallback_sec
             "turnover": None,
             "hot_rank": None,
             "turnover_rank": None,
+            "price_risk_reasons": [],
         },
     )
     if code and not profile.get("code"):
@@ -484,6 +487,9 @@ def _add_stock_profile(profiles, row, *, source_type, source_label, fallback_sec
         profile["hot_rank"] = min(rank, profile["hot_rank"] or 999)
     if source_type == "turnover" and rank != 999:
         profile["turnover_rank"] = min(rank, profile["turnover_rank"] or 999)
+    price_risk_reason = candidate_limit_down_risk_review_reason(row)
+    if price_risk_reason and price_risk_reason not in profile["price_risk_reasons"]:
+        profile["price_risk_reasons"].append(price_risk_reason)
 
 
 def _build_stock_profiles(data):
@@ -594,6 +600,26 @@ def _profile_matches_sector(profile, sector_profile):
     return _terms_match_aliases(terms, sector_profile.get("aliases") or [])
 
 
+def _candidate_priority(profile, matched_sector, families):
+    return {
+        "sector_order": matched_sector.get("best_order", 999),
+        "family_count": len(families),
+        "hot_rank": profile.get("hot_rank") or 999,
+        "turnover_rank": profile.get("turnover_rank") or 999,
+    }
+
+
+def _candidate_priority_key(item):
+    priority = item["priority"]
+    return (
+        priority["sector_order"],
+        -priority["family_count"],
+        priority["hot_rank"],
+        priority["turnover_rank"],
+        item["stock_label"],
+    )
+
+
 def build_sector_capital_carrier_strategy(trade_date, data):
     data = data if isinstance(data, dict) else {}
     data, source_date_mismatches = _same_day_filtered_data(data, trade_date)
@@ -602,6 +628,7 @@ def build_sector_capital_carrier_strategy(trade_date, data):
     stock_profiles = _build_stock_profiles(data)
     candidate_rows = []
     eliminated_rows = []
+    risk_review_rows = []
     for profile in stock_profiles:
         matched_sector = next((sector for sector in selected_sectors if _profile_matches_sector(profile, sector)), None)
         label = _stock_label(profile)
@@ -622,6 +649,33 @@ def build_sector_capital_carrier_strategy(trade_date, data):
                     "reason": "只有涨停/连板证据，不能作为板块资金载体起点",
                 }
             )
+            continue
+        priority = _candidate_priority(profile, matched_sector, families)
+        price_risk_reason = next(iter(profile.get("price_risk_reasons") or []), "")
+        if price_risk_reason:
+            risk_reason = (
+                f"{price_risk_reason}；热榜、成交容量和板块资金记录只说明市场仍在集中交易，"
+                "不能证明价格已被资金接受；只作风险复核，不进入明日对象"
+            )
+            risk_row = {
+                "stock": {
+                    "name": profile.get("name"),
+                    "code": profile.get("code"),
+                    "sector": profile.get("sector") or matched_sector["name"],
+                },
+                "stock_label": label,
+                "sector": matched_sector["name"],
+                "source_pools": sorted(profile.get("source_types") or []),
+                "source_labels": profile.get("source_labels") or [],
+                "evidence_families": families,
+                "status": "风险复核样本",
+                "reason": risk_reason,
+                "price_risk_reason": price_risk_reason,
+                "candidate_origin": "sector_capital_carrier_v1",
+                "priority": priority,
+            }
+            risk_review_rows.append(risk_row)
+            eliminated_rows.append(dict(risk_row))
             continue
         roles = _candidate_role(profile)
         reason = (
@@ -646,24 +700,18 @@ def build_sector_capital_carrier_strategy(trade_date, data):
                 "reason": reason,
                 "status": "纸面候选",
                 "candidate_origin": "sector_capital_carrier_v1",
-                "priority": {
-                    "sector_order": matched_sector.get("best_order", 999),
-                    "family_count": len(families),
-                    "hot_rank": profile.get("hot_rank") or 999,
-                    "turnover_rank": profile.get("turnover_rank") or 999,
-                },
+                "priority": priority,
             }
         )
-    candidate_rows.sort(
-        key=lambda item: (
-            item["priority"]["sector_order"],
-            -item["priority"]["family_count"],
-            item["priority"]["hot_rank"],
-            item["priority"]["turnover_rank"],
-            item["stock_label"],
-        )
+    candidate_rows.sort(key=_candidate_priority_key)
+    risk_review_rows.sort(key=_candidate_priority_key)
+    leading_price_risk = (
+        risk_review_rows[0]
+        if risk_review_rows
+        and (not candidate_rows or _candidate_priority_key(risk_review_rows[0]) < _candidate_priority_key(candidate_rows[0]))
+        else {}
     )
-    primary = candidate_rows[0] if candidate_rows else {}
+    primary = candidate_rows[0] if candidate_rows and not leading_price_risk else {}
     if primary and len(primary.get("evidence_families") or []) >= 2:
         action = "paper_participate"
         action_label = "板块资金载体主样本"
@@ -675,7 +723,19 @@ def build_sector_capital_carrier_strategy(trade_date, data):
     else:
         action = "paper_skip"
         action_label = "纸面不参与"
-        action_reason = "没有从已选板块中恢复出资金载体"
+        action_reason = (
+            "首位资金载体价格已被否定，备选样本不自动递补；只作风险复核"
+            if leading_price_risk
+            else "跌停/接近跌停样本只作风险复核，没有恢复出价格得到资金接受的载体"
+            if risk_review_rows
+            else "没有从已选板块中恢复出资金载体"
+        )
+    action_stage_candidates = candidate_rows[1:8] if primary else candidate_rows[:8]
+    backup_reason = (
+        "首位资金载体价格已被否定，备选样本不自动递补"
+        if leading_price_risk
+        else "作为备选样本保留，不抢主样本位置"
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "trade_date": _clean(trade_date),
@@ -687,6 +747,7 @@ def build_sector_capital_carrier_strategy(trade_date, data):
         "source_date_mismatches": source_date_mismatches,
         "paper_candidates": candidate_rows[:8],
         "primary_candidate": primary,
+        "risk_review_candidates": risk_review_rows[:20],
         "eliminated_candidates": eliminated_rows[:60],
         "stages": [
             {
@@ -708,12 +769,12 @@ def build_sector_capital_carrier_strategy(trade_date, data):
             {
                 "title": "纸面动作",
                 "input_count": len(candidate_rows),
-                "eliminated_count": max(len(candidate_rows) - 1, 0),
+                "eliminated_count": max(len(candidate_rows) - 1, 0) if primary else len(candidate_rows),
                 "survivor_count": 1 if primary else 0,
                 "survivors": [{"label": primary.get("stock_label", ""), "reason": action_reason}] if primary else [],
                 "eliminated": [
-                    {"label": item["stock_label"], "reason": "作为备选样本保留，不抢主样本位置"}
-                    for item in candidate_rows[1:8]
+                    {"label": item["stock_label"], "reason": backup_reason}
+                    for item in action_stage_candidates
                 ],
             },
         ],

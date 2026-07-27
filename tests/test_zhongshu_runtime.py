@@ -26,6 +26,38 @@ def _raise_skill_version_low(*args, **kwargs):
 
 
 class ZhongshuRuntimeTest(unittest.TestCase):
+    def test_tushare_index_loader_rejects_a_window_that_ends_before_target_date(self):
+        bars = [
+            {
+                "date": "2026-07-23",
+                "open": 3868.09,
+                "high": 3878.83,
+                "low": 3851.70,
+                "close": 3876.78,
+                "volume": 1,
+                "amount": 1,
+            },
+            {
+                "date": "2026-07-22",
+                "open": 3839.67,
+                "high": 3884.44,
+                "low": 3839.67,
+                "close": 3864.60,
+                "volume": 1,
+                "amount": 1,
+            },
+        ]
+
+        with patch.object(zhongshu_runtime, "fetch_tushare_daily_price_bars", return_value=bars):
+            frame, source = zhongshu_runtime._load_tushare_index_dataframe(
+                "sh.000001",
+                250,
+                target_date="2026-07-24",
+            )
+
+        self.assertIsNone(frame)
+        self.assertEqual(source, "tushare.index_daily")
+
     def test_iwencai_index_dataframe_sends_current_skillhub_headers(self):
         captured = {}
 
@@ -272,6 +304,57 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["data_source"], "fast_index_runtime")
         self.assertEqual(result["signal"]["comparison_result"], "突破")
+
+    def test_analyze_market_zhongshu_skips_stale_fast_index_for_target_date_iwencai(self):
+        stale_bars = [
+            {"date": "2026-07-22", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1, "amount": 0},
+            {"date": "2026-07-23", "open": 100, "high": 104, "low": 96, "close": 101, "volume": 1, "amount": 0},
+        ]
+        target_bars = pd.DataFrame(
+            [
+                {"date": "2026-07-22", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1, "amount": 0},
+                {"date": "2026-07-23", "open": 100, "high": 104, "low": 96, "close": 101, "volume": 1, "amount": 0},
+                {"date": "2026-07-24", "open": 101, "high": 103, "low": 97, "close": 98, "volume": 1, "amount": 0},
+            ]
+        )
+
+        with patch.dict(sys.modules, {"akshare": SimpleNamespace()}), \
+             patch.object(zhongshu_runtime, "fetch_tushare_daily_price_bars", return_value=[], create=True), \
+             patch.object(zhongshu_runtime, "fetch_daily_price_bars", return_value=stale_bars), \
+             patch.object(
+                 zhongshu_runtime,
+                 "_load_iwencai_index_dataframe",
+                 return_value=(target_bars, "同花顺问财API"),
+             ) as iwencai_mock:
+            result = analyze_market_zhongshu(
+                index_code="sh000001",
+                target_date="2026-07-24",
+                use_chanlun_confirmation=False,
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+        iwencai_mock.assert_called_once()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data_source"], "同花顺问财API")
+        self.assertEqual(result["today_date"], "2026-07-24")
+
+    def test_analyze_market_zhongshu_rejects_injected_data_without_target_date(self):
+        frame = pd.DataFrame(
+            [
+                {"date": "2026-07-22", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1},
+                {"date": "2026-07-23", "open": 100, "high": 104, "low": 96, "close": 101, "volume": 1},
+            ]
+        )
+
+        result = analyze_market_zhongshu(
+            target_date="2026-07-24",
+            fetch_dataframe=lambda **kwargs: (frame, "test_feed"),
+            use_chanlun_confirmation=False,
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertFalse(result["success"])
+        self.assertIn("2026-07-24", result["error"])
 
     def test_analyze_market_zhongshu_reports_skill_version_low_when_fast_index_is_unavailable(self):
         logs = []

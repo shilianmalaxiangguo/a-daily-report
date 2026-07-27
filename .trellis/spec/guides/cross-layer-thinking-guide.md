@@ -165,6 +165,44 @@ the strategy report, the main Markdown report, companion HTML, and the
 acceptance audit. Treat those as one cross-layer path, not separate display
 surfaces.
 
+### Tomorrow-Action Calendar Return Path
+
+When the Bear calendar turns report-day targets into account returns, verify the
+whole path rather than checking the HTML number in isolation:
+
+```text
+PostgreSQL final decision
+  -> next two actual trading dates
+  -> 1x/50% leg per target per day
+  -> stock and Shanghai same-day open-to-close returns
+  -> weighted daily account return
+  -> independently compounded account and Shanghai totals
+  -> Bear cell and summary
+```
+
+- Request one report before the visible 25-row window so its second-day leg can
+  reach the first visible execution date.
+- Keep report-plan classification separate from account holdings: no-new-entry
+  can coexist with a prior target's second-day leg; then show the target plus a
+  no-new-entry plan note. If no active leg remains, show account `空仓` while
+  retaining the plan classification. Explicit tomorrow-empty clears all legs.
+- Do not let calendar layout gaps masquerade as empty accounts: classify each
+  weekday gap as a known holiday, sample-outside date, or in-range data gap;
+  only the last one is a source-quality problem, and none is a performance
+  record.
+- Keep trading-date evidence separate from price completeness. A daily-bar row
+  with missing prices still proves the date; it does not justify shifting the
+  action to the next date.
+- Require every active leg and the Shanghai benchmark to have finite,
+  non-conflicting same-day open and close values before the day enters any
+  average or cumulative total.
+- Distinguish target-plan count from account-holding count in the payload and
+  UI. These counts intentionally overlap on carry days and answer different
+  questions.
+- Compound daily account and Shanghai returns independently over the same valid
+  dates, then subtract the two cumulative percentages. Never compound or sum
+  excess percentages directly.
+
 ### Checklist: After Modifying A Historical Report Table
 
 - [ ] Identify the owning historical artifact, not just the current report row
@@ -177,23 +215,25 @@ surfaces.
   unprotected
 - [ ] If the renderer receives `positions=[]`, verify whether PostgreSQL already
   restored `personal_position_context.existing_position_summary`
-- [ ] Distinguish a confirmed position from a previous-report plan: inferred
-  records keep identity but use `has_position=false`, pending status,
-  `position=0`, `position_pct=0`, and 0x exposure until成交 confirmation;
-  preserve any nonzero scenario only in `default_position_pct`
-- [ ] Check semantic fields as well as booleans: an inferred plan uses role
-  `前日报计划待成交确认`, and its two-layer next-day action says
-  `只核实成交记录；未确认成交前按0x`, never old-position handling
+- [ ] Treat a previous report's tomorrow target as a mandatory simulated fill on
+  the next trading day; use actual `position=50`, `default_position_pct=50`,
+  confirmed 1x/50% exposure, and an old-position plan
+- [ ] Explicit position input wins, including explicit empty input. A report
+  with no new tomorrow target does not clear the most recent unfinished old
+  position; stop only on explicit empty, executed tomorrow-empty, or exit facts
+- [ ] Check semantic fields as well as booleans: inherited simulated positions
+  use role `旧仓处理`, enter the old-position plan, and may create sell or
+  same-stock T actions according to their own evidence
 - [ ] Trace every duplicated inferred record under personal context, market
   snapshot, execution context, and final resolution; normalize all copies
-- [ ] If a restore or compatibility path creates an inferred record after bulk
-  normalization already ran, set the pending role/flags and 0x fields on
+- [ ] If a restore or compatibility path creates an inherited record after bulk
+  normalization already ran, set confirmed role/flags and actual 50% / 1x on
   construction or run normalization again before rendering or persistence
 - [ ] Repair cached candidate panels, conclusions, action plans, and strategy
-  rows that were derived before normalization; confirm the pending plan is 0x
+  rows that were derived before normalization; confirm the old position stays 1x
 - [ ] Verify the generator reads that artifact when reconstructing older days
-- [ ] Verify Ta/Tb/Tc keep an unconfirmed historical plan pending instead of
-  silently promoting it to a historical B1 position
+- [ ] Verify Ta/Tb/Tc preserve known inherited old-position paths while leaving
+  genuinely unknown dates unknown
 - [ ] Keep an unknown Ta/Tb/Tc account fact as `持仓未输入`; never backfill it
   from the current report's confirmed holding or pending plan, and reject any
   definite stock identity on that row
@@ -202,10 +242,15 @@ surfaces.
 - [ ] Verify command entry, standalone replay, and AgentRunner all check before
   writing the judgment ledger or report files
 - [ ] Verify Markdown and companion HTML render the same day/object identity
+- [ ] For an explicit tomorrow-empty instruction, verify the companion HTML
+  account-action table preserves every required action instead of searching the
+  whole HTML document, where a later Wiki or appendix can hide a missing row
 - [ ] Verify negative/pending wording is parsed before bare B1/B2 badge tokens,
   so a 0% verification row cannot look like participation
-- [ ] For inferred plans, verify identity and provenance wording together; the
-  correct code with confirmed-holding wording is still a failure
+- [ ] For inherited simulated positions, verify identity, source report date,
+  confirmed wording, actual 50% / 1x, and old-position actions together
+- [ ] For `external_trade_pending`, separately verify pending wording, actual 0x,
+  and absence of old-position actions
 - [ ] Keep Chanlun HTML and Bear HTML as separate acceptance inputs so one
   companion does not accidentally satisfy or invalidate the other's checks
 - [ ] Add an acceptance-audit regression that compares the rendered row with
@@ -230,11 +275,35 @@ summary for rendering, insert the table before acceptance, compare Td and Bear
 HTML with the same source fact, and preserve the finding code in the run error.
 
 **Real-world example**: The same 2026-07-10 PostgreSQL record carried
-`inferred_from_previous_report=true`, yet final resolution promoted it to an
-old-position 1x and the report simultaneously said `待成交确认` and `持有100%`.
-Fix: keep the pending identity, set confirmed position false, calculate 0x until
-成交 confirmation, preserve that pending status across Ta/Tb/Tc, and make
-acceptance reject code-correct but provenance-wrong output.
+`inferred_from_previous_report=true`, but different report layers disagreed
+between pending 0x and confirmed 1x. In this simulated account, a prior report's
+tomorrow target is a mandatory next-day fill. Fix: normalize all copies to
+confirmed actual 50% / 1x, include old-position handling, and let only explicit
+empty or exit facts end the inherited position.
+
+### Failure Pattern: Simulated Target Incorrectly Kept Pending
+
+- Root cause categories: cross-layer contract, propagation failure, and implicit
+  assumption. The source `previous_report_target_default_1x` describes a
+  mandatory simulated next-day fill, not an external pending order.
+- Normalize at every load/build boundary before deriving account actions. A
+  previous-report target has actual 50% / 1x and confirmed status on the next
+  trading day.
+- Treat narrative presence and account-fact confirmation as separate fields. A
+  non-empty summary such as "exposure pending review" or "yesterday's plan"
+  remains unknown unless an explicit flag, positive actual position, structured
+  old-position plan, or direct holding wording proves the position.
+- Renderers, opportunity comparison, final conclusions, same-stock T, and sell
+  actions must branch on `position_fact_status`, not stock identity, a non-empty
+  summary, or stale `has_position=true` alone.
+- Explicit empty input wins over every inherited record. A no-target report does
+  not terminate the old position; an explicit current-empty fact, executed
+  tomorrow-empty instruction, or exit fact does.
+- Regression coverage must include: a legacy zeroed inherited record, inherited
+  1x plus a different new target, inherited 1x plus the same new target, no new
+  target, explicit empty input, `external_trade_pending`, and an independently
+  confirmed holding. Verify Markdown, Bear HTML, replay normalization,
+  acceptance, and persisted PostgreSQL fields together.
 
 ---
 

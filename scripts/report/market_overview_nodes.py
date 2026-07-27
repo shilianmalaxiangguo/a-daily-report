@@ -1,5 +1,9 @@
 from pathlib import Path
 
+from domains.market_activity.new_high_structure import (
+    build_new_high_structure_signal,
+    classify_new_high_breadth_level,
+)
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
 from domains.market_state.two_market_turnover.node_registry import build_two_market_turnover_node_specs
 from domains.market_state.two_market_turnover.node_runtime import run_two_market_turnover_nodes
@@ -35,6 +39,128 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _first_non_empty(mapping, *keys):
+    mapping = mapping or {}
+    for key in keys:
+        value = mapping.get(key) if isinstance(mapping, dict) else None
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _resolve_total_turnover(market_data):
+    market_data = market_data or {}
+    turnover_data = market_data.get("turnover_data") or {}
+    market_stats = market_data.get("market_stats") or {}
+    return _safe_float(
+        _first_non_empty(
+            market_data,
+            "total_turnover",
+            "market_turnover_yi",
+            "market_amount_yi",
+            "amount_yi",
+            "turnover",
+        )
+        or _first_non_empty(
+            turnover_data,
+            "total_turnover_yi",
+            "total_turnover",
+            "market_turnover_yi",
+            "market_amount_yi",
+            "amount_yi",
+            "turnover",
+        )
+        or _first_non_empty(
+            market_stats,
+            "total_turnover_yi",
+            "market_turnover_yi",
+            "market_amount_yi",
+            "amount_yi",
+        ),
+        0.0,
+    )
+
+
+def _resolve_breadth_counts(market_data):
+    market_data = market_data or {}
+    market_stats = market_data.get("market_stats") or {}
+    up_count = _safe_float(
+        _first_non_empty(
+            market_stats,
+            "up_count",
+            "上涨家数",
+            "rise_count",
+        )
+        or _first_non_empty(
+            market_data,
+            "up_count",
+            "上涨家数",
+            "rise_count",
+        ),
+        0.0,
+    )
+    down_count = _safe_float(
+        _first_non_empty(
+            market_stats,
+            "down_count",
+            "下跌家数",
+            "fall_count",
+        )
+        or _first_non_empty(
+            market_data,
+            "down_count",
+            "下跌家数",
+            "fall_count",
+        ),
+        0.0,
+    )
+    return up_count, down_count
+
+
+def _index_display_name(name, index_data):
+    if str(name or "").strip():
+        return str(name).strip()
+    index_data = index_data or {}
+    label = _first_non_empty(index_data, "name", "index_name", "label", "指数", "名称")
+    if label not in (None, ""):
+        return str(label).strip()
+    code = str(
+        _first_non_empty(index_data, "code", "index_code", "ts_code", "symbol", "指数代码") or ""
+    ).strip().lower()
+    code_map = {
+        "000001": "上证指数",
+        "sh000001": "上证指数",
+        "399001": "深证成指",
+        "sz399001": "深证成指",
+        "399006": "创业板指",
+        "sz399006": "创业板指",
+        "000688": "科创50",
+        "sh000688": "科创50",
+        "899050": "北证50",
+        "bj899050": "北证50",
+        "000985": "中证全指",
+        "000852": "中证1000",
+        "000300": "沪深300",
+        "000905": "中证500",
+        "000016": "上证50",
+    }
+    return code_map.get(code, "")
+
+
+def _iter_index_items(data):
+    indices = (data or {}).get("indices")
+    if isinstance(indices, dict):
+        return list(indices.items())
+    if isinstance(indices, list):
+        items = []
+        for item in indices:
+            if not isinstance(item, dict):
+                continue
+            items.append((_index_display_name("", item), item))
+        return items
+    return []
+
+
 def evaluate_turnover_quality(market_data):
     """
     评估成交量质量，区分"做多放量"和"杀跌放量"。
@@ -51,12 +177,10 @@ def evaluate_turnover_quality(market_data):
     market_data = market_data or {}
 
     # 获取两市成交额
-    total_turnover = _safe_float(market_data.get("total_turnover"), 0.0)
+    total_turnover = _resolve_total_turnover(market_data)
 
     # 获取涨跌家数
-    market_stats = market_data.get("market_stats") or {}
-    up_count = _safe_float(market_stats.get("up_count"), 0.0)
-    down_count = _safe_float(market_stats.get("down_count"), 0.0)
+    up_count, down_count = _resolve_breadth_counts(market_data)
 
     # 处理数据缺失情况
     if total_turnover <= 0 or (up_count <= 0 and down_count <= 0):
@@ -708,32 +832,33 @@ def _margin_pressure_usage_note(snapshot, target_date=""):
     return note
 
 
-def _new_high_regime(all_a_share_pct):
-    all_a_share_pct = _safe_float(all_a_share_pct)
-    if all_a_share_pct < 2:
+def _new_high_regime(all_a_share_pct, new_high_count=None):
+    level = classify_new_high_breadth_level(all_a_share_pct, new_high_count)
+    if level["breadth_level"] in {"cold_diffusion", "very_low_diffusion", "diffusion_fracture"}:
         return "冰点"
-    if all_a_share_pct > 5:
+    if level["breadth_level"] == "extreme_diffusion":
         return "高潮"
     return "震荡"
 
 
-def _new_high_regime_signal(all_a_share_pct):
-    regime = _new_high_regime(all_a_share_pct)
-    if regime == "冰点":
-        return "趋势扩散偏冷"
-    if regime == "高潮":
-        return "趋势扩散偏热"
-    return "趋势扩散震荡"
+def _new_high_regime_signal(all_a_share_pct, new_high_count=None):
+    return classify_new_high_breadth_level(all_a_share_pct, new_high_count)["breadth_level_label"]
 
 
-def _new_high_interpretation(all_a_share_pct):
-    signal = _new_high_regime_signal(all_a_share_pct)
+def _new_high_interpretation(all_a_share_pct, new_high_count=None):
+    signal = _new_high_regime_signal(all_a_share_pct, new_high_count)
     pct_text = _format_pct(all_a_share_pct)
-    if signal == "趋势扩散偏冷":
-        return f"全A占比{pct_text}，趋势扩散偏冷，说明趋势赚钱效应扩散不足；这不是整体市场冰点。"
-    if signal == "趋势扩散偏热":
-        return f"全A占比{pct_text}，趋势扩散偏热；只有成交额、指数位置和涨跌家数同步支持时，整体才按高潮看待。"
-    return f"全A占比{pct_text}，趋势扩散震荡，说明趋势扩散存在但还不是极端热度。"
+    if signal == "极致扩散":
+        return f"全A占比{pct_text}，极致扩散，说明新趋势覆盖很广；若同时放量和一致性加速，需防次日降温。"
+    if signal == "有效扩散":
+        return f"全A占比{pct_text}，有效扩散，说明趋势赚钱效应已有可用宽度，但仍需观察方向能否持续。"
+    if signal == "扩散偏冷":
+        return f"全A占比{pct_text}，扩散偏冷，说明趋势赚钱效应扩散不足；同一低值仍要结合变化方向判断。"
+    if signal == "极低扩散":
+        return f"全A占比{pct_text}，极低扩散，说明新趋势生成率处于异常低位；需区分继续收缩与低位修复。"
+    if signal == "扩散断层":
+        return f"全A占比{pct_text}，扩散断层，说明绝对水位已低于0.2%或新高数进入个位数；先复核来源、板块成群和核心同步。"
+    return f"全A占比{pct_text}，事实不足，暂不判断创新高绝对水位。"
 
 
 def _price_band_style_signal(label):
@@ -777,22 +902,50 @@ def _index_risk_is_weak(data):
         if not isinstance(item, dict):
             return
         price = _safe_float(
-            item.get("price")
-            or item.get("点位")
-            or item.get("close")
-            or item.get("收盘")
-            or item.get("最新价"),
+            _first_non_empty(
+                item,
+                "price",
+                "点位",
+                "close",
+                "收盘",
+                "最新价",
+                "latest_price",
+                "current_price",
+                "value",
+            ),
             None,
         )
-        has_price_key = any(key in item for key in ("price", "点位", "close", "收盘", "最新价"))
+        has_price_key = any(
+            key in item
+            for key in (
+                "price",
+                "点位",
+                "close",
+                "收盘",
+                "最新价",
+                "latest_price",
+                "current_price",
+                "value",
+            )
+        )
         if has_price_key and (price is None or price <= 0):
             return
-        change = _safe_float(item.get("涨跌幅", item.get("change_pct")), None)
+        change = _safe_float(
+            _first_non_empty(
+                item,
+                "涨跌幅",
+                "change_pct",
+                "pct_chg",
+                "source_change_pct",
+                "latest_change_pct",
+            ),
+            None,
+        )
         if change is None:
             return
         values.append(change)
 
-    for item in (data.get("indices") or {}).values():
+    for _, item in _iter_index_items(data):
         append_change_if_valid(item)
     wind_a = data.get("wind_a_alternative") or {}
     if wind_a:
@@ -807,9 +960,7 @@ def _index_risk_is_weak(data):
 
 
 def _breadth_risk_is_weak(data):
-    stats = (data or {}).get("market_stats") or {}
-    up_count = _safe_float(stats.get("up_count"))
-    down_count = _safe_float(stats.get("down_count"))
+    up_count, down_count = _resolve_breadth_counts(data)
     if down_count >= max(3000, up_count * 1.8):
         return True
     return len((data or {}).get("dt_pool") or []) >= 50
@@ -819,7 +970,11 @@ def resolve_unified_market_sentiment(data, target_date="", *, db_path=None):
     data = data or {}
     top50_share = resolve_top50_turnover_share(data)
     new_high = data.get("new_high_feedback") or {}
-    new_high_regime = _new_high_regime(new_high.get("all_a_share_pct")) if new_high.get("available") else "待累计"
+    new_high_regime = (
+        _new_high_regime(new_high.get("all_a_share_pct"), new_high.get("new_high_count"))
+        if new_high.get("available")
+        else "待累计"
+    )
     margin_pressure = _margin_pressure_snapshot(data, target_date, db_path=db_path)
     margin_pressure_hot = (
         bool(margin_pressure.get("available"))
@@ -830,19 +985,25 @@ def resolve_unified_market_sentiment(data, target_date="", *, db_path=None):
     local_hot = top50_hot or new_high_regime == "高潮" or margin_pressure_hot
 
     if risk_weak and local_hot:
+        if margin_pressure_hot:
+            risk_meaning = "融资承接压力高且指数、涨跌家数仍弱，先防承接继续恶化，等待卖压收敛。"
+        elif new_high_regime == "高潮":
+            risk_meaning = "创新高达到极致扩散，但指数和涨跌家数破坏，先防降温，等待止跌和核心承接。"
+        else:
+            risk_meaning = "头部成交集中，但指数和涨跌家数破坏，先防局部活跃继续收缩，等待承接改善。"
         return {
             "state": "震荡偏风险",
             "local_heat": (
                 "融资承接压力高，同时指数大跌、跌多涨少、跌停扩散，只写承接风险，不把整体市场升级为高潮。"
                 if margin_pressure_hot
                 else (
-                "创新高高潮，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。"
+                "创新高达到极致扩散，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。"
                 if new_high_regime == "高潮"
                 else "局部资金活跃，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。"
                 )
             ),
             "rr_text": "不值得主动参与",
-            "meaning": "趋势扩散偏热，但指数和涨跌家数破坏，先防降温，等待止跌和核心承接。",
+            "meaning": risk_meaning,
         }
     if risk_weak:
         return {
@@ -938,22 +1099,40 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
             return "偏强修复"
         return "强势上涨"
 
-    if data.get("indices"):
-        for name, index_data in data["indices"].items():
-            point = _safe_float(
-                (index_data or {}).get("点位")
-                or (index_data or {}).get("close")
-                or (index_data or {}).get("price")
-                or (index_data or {}).get("收盘")
-                or (index_data or {}).get("最新价"),
-                None,
-            )
-            change = _safe_float((index_data or {}).get("涨跌幅", (index_data or {}).get("change_pct")), None)
-            if point is None or point <= 0 or change is None:
-                lines.append(f"| {name} | 待补 | 待补 | 待补 |")
-                continue
-            trend = _index_trend_label(index_data, change)
-            lines.append(f"| {name} | {point:.2f} | {change:+.2f}% | {trend} |")
+    for raw_name, index_data in _iter_index_items(data):
+        name = _index_display_name(raw_name, index_data)
+        if not name:
+            continue
+        point = _safe_float(
+            _first_non_empty(
+                index_data,
+                "点位",
+                "close",
+                "price",
+                "收盘",
+                "最新价",
+                "latest_price",
+                "current_price",
+                "value",
+            ),
+            None,
+        )
+        change = _safe_float(
+            _first_non_empty(
+                index_data,
+                "涨跌幅",
+                "change_pct",
+                "pct_chg",
+                "source_change_pct",
+                "latest_change_pct",
+            ),
+            None,
+        )
+        if point is None or point <= 0 or change is None:
+            lines.append(f"| {name} | 待补 | 待补 | 待补 |")
+            continue
+        trend = _index_trend_label(index_data, change)
+        lines.append(f"| {name} | {point:.2f} | {change:+.2f}% | {trend} |")
 
     if data.get("wind_a_alternative"):
         wa = data["wind_a_alternative"]
@@ -984,11 +1163,10 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         else:
             trend = _index_trend_label(csi1000, change)
             lines.append(f"| 中证1000 | {point:.2f} | {change:+.2f}% | {trend} |")
-    turnover = float(data.get("total_turnover", 0) or 0)
+    turnover = float(_resolve_total_turnover(data) or 0)
     zt_count = len(data.get("zt_pool", []))
     dt_count = len(data.get("dt_pool", []))
-    up_count = data.get("market_stats", {}).get("up_count", 0)
-    down_count = data.get("market_stats", {}).get("down_count", 0)
+    up_count, down_count = _resolve_breadth_counts(data)
     top50_share = resolve_top50_turnover_share(data)
     top20_capacity = resolve_top20_turnover_capacity(data)
     etf_capacity = _etf_capacity_signal(data)
@@ -1025,7 +1203,7 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         f"{_append_sentence(_margin_pressure_basis(margin_pressure, target_date), _margin_pressure_usage_note(margin_pressure, target_date))} |"
     )
     lines.append(f"| 涨停 / 跌停 | {zt_count} / {dt_count} | - | {'活跃度还在，但亏钱端不轻' if dt_count >= 3 else '情绪尚可'} |")
-    lines.append(f"| 涨跌比 | {up_count} / {down_count} | - | {'下跌家数偏多，底色偏防守' if down_count > up_count else '多头仍占优'} |")
+    lines.append(f"| 涨跌比 | {up_count:g} / {down_count:g} | - | {'下跌家数偏多，底色偏防守' if down_count > up_count else '多头仍占优'} |")
     lines.append("")
     top50_trend_rows = resolve_top50_turnover_share_trend_rows(data, _target_date(context))
     if top50_trend_rows:
@@ -1061,7 +1239,11 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
     top20_capacity = resolve_top20_turnover_capacity(data)
     etf_capacity = _etf_capacity_signal(data)
     new_high = data.get("new_high_feedback") or {}
-    new_high_regime = _new_high_regime(new_high.get("all_a_share_pct")) if new_high.get("available") else "待累计"
+    new_high_regime = (
+        _new_high_regime(new_high.get("all_a_share_pct"), new_high.get("new_high_count"))
+        if new_high.get("available")
+        else "待累计"
+    )
     margin_pressure = _margin_pressure_snapshot(data, target_date, db_path=daily_fact_db_path)
     unified = resolve_unified_market_sentiment(data, target_date, db_path=daily_fact_db_path)
     etf_combo = _etf_capacity_combo_judgment(etf_capacity, top50_share, new_high_regime, margin_pressure)
@@ -1127,27 +1309,40 @@ def build_market_overview_price_band_style_node(context, node_meta=None, node_lo
 def build_market_overview_new_high_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     snapshot = data.get("new_high_feedback") or {}
+    structure = build_new_high_structure_signal(snapshot, _target_date(context))
     lines = ["### 4. 创新高趋势反馈"]
     if not snapshot.get("available"):
         message = snapshot.get("message") or "创新高趋势反馈待累计。"
         lines.extend([f"> {message}", ""])
-        return {"lines": lines, "exports": {"new_high_feedback": snapshot}, "module_logs": []}
+        return {
+            "lines": lines,
+            "exports": {
+                "new_high_feedback": snapshot,
+                "new_high_structure_signal": structure,
+            },
+            "module_logs": [],
+        }
 
     lines.extend(
         [
             f"> {snapshot.get('summary') or '创新高趋势反馈已生成。'}",
-            "> 用途：创新高看的是趋势赚钱效应有没有扩散。全A占比越高，说明越多股票突破过去约250个交易日高点；但超过5%后若同时放量，往往偏热，次日更容易降温。",
-            "> 读法：全A占比低于2%看趋势扩散偏冷，2%到5%看趋势扩散震荡，5%以上看趋势扩散偏热。这个指标只作趋势扩散背景，整体市场温度仍要结合成交额、指数位置、涨跌家数和核心承接。",
-            f"> 当前解读：{_new_high_interpretation(snapshot.get('all_a_share_pct'))}",
+            "> 用途：创新高看的是趋势赚钱效应有没有扩散。绝对水位说明覆盖广度，变化方向说明扩散是在增强、收缩还是低位修复；5%及以上若同时放量，往往偏热，次日更容易降温。",
+            "> 读法：5%及以上为极致扩散，2%到5%为有效扩散，1%到2%为扩散偏冷，0.2%到1%为极低扩散；低于0.2%或新高数低于10只为扩散断层。绝对水位不是买卖动作，同一低值还要结合变化方向、板块成群度、核心板块同步性和来源质量。",
+            f"> 当前解读：{_new_high_interpretation(snapshot.get('all_a_share_pct'), snapshot.get('new_high_count'))}",
+            f"> 结构判断：{structure.get('summary') or '创新高结构事实不足。'}",
+            f"> 风险含义：{structure.get('risk_note') or '当前只作结构观察。'}",
+            f"> 主要反证：{structure.get('counterevidence') or '同源宽度持续修复时，收缩判断降级。'}",
+            f"> 下一窗口：{structure.get('next_window') or '复核创新高扩散、板块成群和核心承接。'}",
             "",
-            "| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |",
+            "| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 板块分布前列 |",
             "|------|--------|---------|------|--------|----------|",
         ]
     )
     for row in _display_latest_first(snapshot.get("trend_rows", []) or []):
         lines.append(
             f"| {row.get('trade_date', '')} | {int(_safe_float(row.get('new_high_count')))} | "
-            f"{_format_pct(row.get('all_a_share_pct'))} | {_new_high_regime_signal(row.get('all_a_share_pct'))} | "
+            f"{_format_pct(row.get('all_a_share_pct'))} | "
+            f"{_new_high_regime_signal(row.get('all_a_share_pct'), row.get('new_high_count'))} | "
             f"{row.get('change_text', '待累计')} | "
             f"{row.get('leading_sectors', '待补充板块')} |"
         )
@@ -1180,7 +1375,14 @@ def build_market_overview_new_high_node(context, node_meta=None, node_lookup=Non
             f"{_format_amount_yi(stock.get('amount_yi'))} | {topdays}日新高 |"
         )
     lines.append("")
-    return {"lines": lines, "exports": {"new_high_feedback": snapshot}, "module_logs": []}
+    return {
+        "lines": lines,
+        "exports": {
+            "new_high_feedback": snapshot,
+            "new_high_structure_signal": structure,
+        },
+        "module_logs": [],
+    }
 
 
 def build_market_overview_margin_pressure_node(context, node_meta=None, node_lookup=None):

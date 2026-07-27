@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import textwrap
@@ -9,10 +10,162 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class PositionStrategyReportTest(unittest.TestCase):
+    def test_candidate_explicit_zero_position_does_not_fall_back_to_b1(self):
+        from portfolio.position_strategy_report import (
+            _candidate_position_pct,
+            _candidate_tier_execution_text,
+            _format_candidate_execution_path,
+            _format_recommended_position,
+        )
+
+        plan = {"target_position_pct": 0}
+
+        self.assertEqual(_candidate_position_pct(plan), 0)
+        self.assertEqual(_format_recommended_position(plan), "0%不参与")
+        self.assertIn("0%不参与", _candidate_tier_execution_text(plan))
+        self.assertNotIn("B1", _candidate_tier_execution_text(plan))
+        self.assertNotIn("B1", _format_candidate_execution_path(plan))
+        self.assertNotIn("B2", _format_candidate_execution_path(plan))
+
+    def test_candidate_missing_position_plan_does_not_default_to_b1(self):
+        from portfolio.position_strategy_report import (
+            _candidate_position_pct,
+            _format_candidate_execution_path,
+            _format_recommended_position,
+        )
+
+        self.assertEqual(_candidate_position_pct({}), 0)
+        self.assertEqual(_format_recommended_position({}), "0%不参与")
+        self.assertNotIn("B1", _format_candidate_execution_path({}))
+        self.assertNotIn("B2", _format_candidate_execution_path({}))
+
+    def test_candidate_non_tier_60_percent_does_not_create_a_plan_tier(self):
+        from portfolio.position_strategy_report import (
+            _candidate_position_pct,
+            _format_account_new_entry,
+            _format_recommended_position,
+        )
+
+        target = {
+            "name": "长电科技",
+            "code": "600584",
+            "planned_participation": {"target_position_pct": 60},
+        }
+
+        self.assertEqual(_candidate_position_pct(target["planned_participation"]), 0)
+        self.assertEqual(_format_recommended_position(target["planned_participation"]), "0%不参与")
+        self.assertEqual(
+            _format_account_new_entry(
+                target,
+                {
+                    "selection_workflow": {
+                        "final": {
+                            "execution_object": {"name": "长电科技", "code": "600584"},
+                            "position_pct": 50,
+                        }
+                    }
+                },
+            ),
+            "0%不参与",
+        )
+
+    def test_candidate_non_tier_40_percent_does_not_create_a_plan_tier(self):
+        from portfolio.position_strategy_report import (
+            _candidate_position_pct,
+            _format_account_new_entry,
+            _format_recommended_position,
+        )
+
+        target = {
+            "name": "长电科技",
+            "code": "600584",
+            "planned_participation": {"target_position_pct": 40},
+        }
+
+        self.assertEqual(_candidate_position_pct(target["planned_participation"]), 0)
+        self.assertEqual(_format_recommended_position(target["planned_participation"]), "0%不参与")
+        self.assertEqual(_format_account_new_entry(target, {}), "0%不参与")
+
+    def test_candidate_position_text_cannot_replace_structured_plan(self):
+        from portfolio.position_strategy_report import _candidate_position_pct
+
+        for attack_state in ("50%条件执行", "满仓条件执行", "1x", "2x"):
+            with self.subTest(attack_state=attack_state):
+                self.assertEqual(_candidate_position_pct({"attack_state": attack_state}), 0)
+
+    def test_invalid_workflow_position_blocks_target_instead_of_using_action_text(self):
+        from portfolio.position_strategy_report import (
+            _selection_workflow_blocks_new_entry,
+            _selection_workflow_final_target,
+        )
+
+        workflow = {
+            "final": {
+                "execution_object": {"name": "长电科技", "code": "600584"},
+                "position_pct": 75,
+                "action_text": "50%条件执行",
+            }
+        }
+
+        self.assertEqual(_selection_workflow_final_target(workflow), {})
+        self.assertTrue(_selection_workflow_blocks_new_entry(workflow))
+
+    def test_candidate_exact_position_tiers_keep_zero_b1_and_b1_b2_meaning(self):
+        from portfolio.position_strategy_report import (
+            _candidate_position_pct,
+            _format_account_new_entry,
+            _format_recommended_position,
+        )
+
+        expected = {
+            0: ("0%不参与", "0%不参与"),
+            50: ("1x/50%半仓条件执行", "1x/50%半仓条件执行；B1参与权"),
+            100: ("2x/100%满仓计划", "2x/100%核心进攻；B1先参与，B2确认后补到满仓"),
+        }
+        for position_pct, (position_text, account_text) in expected.items():
+            with self.subTest(position_pct=position_pct):
+                plan = {"target_position_pct": position_pct}
+                target = {"name": "长电科技", "code": "600584", "planned_participation": plan}
+                self.assertEqual(_candidate_position_pct(plan), position_pct)
+                self.assertEqual(_format_recommended_position(plan), position_text)
+                self.assertEqual(_format_account_new_entry(target, {}), account_text)
+
+    def test_existing_position_zero_or_missing_pct_never_defaults_to_full_position(self):
+        from portfolio.position_strategy_report import _positions_from_existing_position_context
+
+        explicit_zero = _positions_from_existing_position_context(
+            {
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "name": "长电科技",
+                        "code": "600584",
+                        "position": 0,
+                    }
+                }
+            }
+        )
+        missing_pct = _positions_from_existing_position_context(
+            {
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "name": "长电科技",
+                        "code": "600584",
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(explicit_zero[0]["position"], 0.0)
+        self.assertEqual(missing_pct[0]["position"], "待确认")
+        self.assertNotEqual(explicit_zero[0]["position"], 100.0)
+        self.assertNotEqual(missing_pct[0]["position"], 100.0)
+
     def test_render_separates_holding_actions_and_new_opportunity_actions_by_market_script(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 
@@ -66,11 +219,11 @@ class PositionStrategyReportTest(unittest.TestCase):
             self.assertIn(heading, report)
         self.assertIn("## 持仓处理", report)
         self.assertIn("## 新机会处理", report)
-        self.assertIn(TWO_B_CONFIRMATION_CLAUSE, report)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, report)
         self.assertIn("| 军工一号 | 30.0% | 是 |", report)
         self.assertIn("| 旧仓三号 | 20.0% | 否 |", report)
-        self.assertIn("| 军工一号 | 000001 | 军工 | 09:30-09:35 | 50% |", report)
-        self.assertIn("| 算力二号 | 000002 | 算力 | 09:50-10:10 | 50% |", report)
+        self.assertIn("| 军工一号 | 000001 | 军工 | 09:30-09:35 | 1x/50%半仓 |", report)
+        self.assertIn("| 算力二号 | 000002 | 算力 | 09:50-10:10 | 1x/50%半仓 |", report)
         self.assertIn("卖出处理和买入处理分开判断", report)
         self.assertIn("持仓按防守线独立评估", report)
         self.assertNotIn("卖出用于买入", report)
@@ -257,7 +410,7 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("MA10=认错线", report)
         self.assertIn("MA20=环境线", report)
         self.assertIn("MA不是买入理由", report)
-        self.assertIn("分两笔", report)
+        self.assertIn("B1只执行一笔到1x/50%；本计划不追加B2", report)
         self.assertIn("不把价格更低本身当买点", report)
 
     def test_render_selects_tomorrow_target_when_extreme_candidates_exist(self):
@@ -302,7 +455,8 @@ class PositionStrategyReportTest(unittest.TestCase):
         )
 
         self.assertIn("## 明日目标标的", report)
-        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 50%条件执行 |", report)
+        self.assertIn("| 明日新仓 | 1x/50%半仓条件执行；B1参与权 |", report)
+        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 1x/50%半仓条件执行 |", report)
         self.assertIn("条件不满足回到0%", report)
         non_ice_scripts = report.split("# 上证A杀", 1)[0]
         self.assertNotIn("默认不开新仓", non_ice_scripts)
@@ -340,8 +494,8 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| Ta | 2026-06-23（周二） | 最远复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对，不改变Te动作 |", report)
         tc_line = next(line for line in report.splitlines() if line.startswith("| Tc |"))
         self.assertNotIn("华电辽能", tc_line)
-        self.assertIn("| Td | 2026-06-26（周五） | 报告日：旧仓进入复核：华电辽能 | 华电辽能 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |", report)
-        self.assertIn("| Te | 2026-06-29（周一） | 新目标单独看B1，不用旧仓亏损补仓 | 汇源通信(000586) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |", report)
+        self.assertIn("| Td | 2026-06-26（周五） | 报告日：旧仓进入复核：华电辽能 | 华电辽能 | 只定Te的B1预案，不下单；本计划无B2 | 写清执行资格和取消条件 |", report)
+        self.assertIn("| Te | 2026-06-29（周一） | 新目标单独看B1，不用旧仓亏损补仓 | 汇源通信(000586) | B1参与权=1x/50%；本计划无B2 | B1条件不满足则取消参与；不追加B2 |", report)
         self.assertIn("Ta最远，Tb/Tc为前两段，Td是报告日，Te是明日执行日", report)
         self.assertNotIn("旧路径来源", report)
         self.assertNotIn("2026-06-27（周六）", report)
@@ -351,18 +505,106 @@ class PositionStrategyReportTest(unittest.TestCase):
     def test_render_empty_tomorrow_target_states_missing_tb_tc_and_early_ta_exit(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 
-        report = render_position_strategy_report(
-            data={},
-            target_date="2026-06-26",
-            positions=[{"name": "太极实业", "position": 100.0}],
-        )
+        with TemporaryDirectory() as tempdir:
+            report = render_position_strategy_report(
+                data={},
+                target_date="2026-06-26",
+                positions=[{"name": "太极实业", "position": 100.0}],
+                output_root=Path(tempdir),
+            )
 
         self.assertIn("| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |", report)
         self.assertIn("| Td | 2026-06-26（周五） | 报告日：旧仓进入复核：太极实业 | 太极实业 | Te不新增参与，B2取消 | 只观察，不新增参与 |", report)
         self.assertIn("| Te | 2026-06-29（周一） | 只处理旧仓风险 | 太极实业 | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |", report)
         self.assertIn("Te只处理已确认旧仓风险，不新增参与对象", report)
 
-    def test_render_recovers_postgres_position_summary_for_current_day_order(self):
+    def test_previous_report_target_persists_across_an_intervening_no_target_report(self):
+        from portfolio.position_strategy_report import _read_previous_report_target
+
+        with TemporaryDirectory() as tempdir:
+            reports_root = Path(tempdir)
+            (reports_root / "2026-07-14_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 无 |\n| 执行性质 | 无明日执行对象 |\n",
+                encoding="utf-8",
+            )
+            (reports_root / "2026-07-09_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 长电科技(600584) |\n",
+                encoding="utf-8",
+            )
+
+            result = _read_previous_report_target(
+                "2026-07-15",
+                output_root=reports_root,
+            )
+
+        self.assertEqual(result["name"], "长电科技")
+        self.assertEqual(result["code"], "600584")
+        self.assertEqual(result["source_report_date"], "2026-07-09")
+
+    def test_previous_report_target_stops_at_explicit_empty_account_report(self):
+        from portfolio.position_strategy_report import _read_previous_report_target
+
+        with TemporaryDirectory() as tempdir:
+            reports_root = Path(tempdir)
+            (reports_root / "2026-07-14_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 无 |\n| 旧仓事实 | 已确认无旧仓 |\n",
+                encoding="utf-8",
+            )
+            (reports_root / "2026-07-09_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 长电科技(600584) |\n",
+                encoding="utf-8",
+            )
+
+            result = _read_previous_report_target(
+                "2026-07-15",
+                output_root=reports_root,
+            )
+
+        self.assertEqual(result["source_report_date"], "2026-07-14")
+        self.assertTrue(result["previous_report_no_target"])
+        self.assertTrue(result["previous_position_ended"])
+
+    def test_previous_report_target_survives_empty_report_day(self):
+        from portfolio.position_strategy_report import _read_previous_report_target
+
+        with TemporaryDirectory() as tempdir:
+            reports_root = Path(tempdir)
+            (reports_root / "2026-07-14_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 长电科技(600584) |\n"
+                "| 旧仓事实 | 已确认无旧仓 |\n",
+                encoding="utf-8",
+            )
+
+            result = _read_previous_report_target(
+                "2026-07-15",
+                output_root=reports_root,
+            )
+
+        self.assertEqual(result["name"], "长电科技")
+        self.assertEqual(result["code"], "600584")
+        self.assertEqual(result["source_report_date"], "2026-07-14")
+
+    def test_explicit_tomorrow_empty_overrides_stale_report_target(self):
+        from portfolio.position_strategy_report import _read_previous_report_target
+
+        with TemporaryDirectory() as tempdir:
+            reports_root = Path(tempdir)
+            (reports_root / "2026-07-14_A股日报_执行摘要.md").write_text(
+                "| 明日执行对象 | 长电科技(600584) |\n"
+                "| 明日账户结果 | 明日空仓 |\n",
+                encoding="utf-8",
+            )
+
+            result = _read_previous_report_target(
+                "2026-07-15",
+                output_root=reports_root,
+            )
+
+        self.assertEqual(result["source_report_date"], "2026-07-14")
+        self.assertTrue(result["previous_report_no_target"])
+        self.assertTrue(result["previous_position_ended"])
+
+    def test_render_recovers_postgres_simulated_old_position_for_current_day_order(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 
         with TemporaryDirectory() as tempdir:
@@ -371,8 +613,8 @@ class PositionStrategyReportTest(unittest.TestCase):
                     "position_context_provided": True,
                     "personal_position_context": {
                         "existing_position_summary": {
-                            "has_position": False,
-                            "has_pending_position": True,
+                            "has_position": True,
+                            "has_pending_position": False,
                             "summary": "持有长电科技(600584)，100%仓位",
                             "name": "长电科技",
                             "code": "600584",
@@ -389,25 +631,51 @@ class PositionStrategyReportTest(unittest.TestCase):
             )
 
         self.assertIn(
-            "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584)；前日报计划来源=2026-07-09 | 长电科技(600584) |",
+            "| Td | 2026-07-10（周五） | 报告日：旧仓进入复核：长电科技(600584)；前日报计划来源=2026-07-09 | 长电科技(600584) |",
             report,
         )
         self.assertIn(
-            "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |",
+            "| Te | 2026-07-13（周一） | 只处理旧仓风险 | 长电科技(600584) | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |",
             report,
         )
         self.assertIn(
-            "- Te只核实前日报计划是否成交；未确认前保持0%不参与，不新增B2。",
+            "- Te只处理已确认旧仓风险，不新增参与对象。",
             report,
         )
         self.assertIn(
-            "| 长电科技（待成交确认） | 0x | 否 | 先确认成交事实；未确认不执行持仓卖出或加仓动作 | 前日报计划推定，未确认不视为B1或旧仓 |",
+            "| 长电科技 | 50.0%，上一份日报明日标的默认1x旧仓 | 否 |",
             report,
         )
-        self.assertNotIn("| 长电科技 | 100.0%", report)
-        self.assertNotIn("持有长电科技", report)
+        self.assertIn("| 旧仓事实 | 已确认持有长电科技(600584) |", report)
+        self.assertNotIn("待成交确认", report)
 
-    def test_render_keeps_unconfirmed_postgres_plan_unconfirmed_on_next_report_day(self):
+    def test_render_keeps_pending_position_record_pending_without_summary(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        with TemporaryDirectory() as tempdir:
+            report = render_position_strategy_report(
+                data={"position_context_provided": True},
+                target_date="2026-07-15",
+                positions=[
+                    {
+                        "has_position": False,
+                        "has_pending_position": True,
+                        "name": "长电科技",
+                        "code": "600584",
+                        "position_source": "external_trade_pending",
+                        "summary": "外部成交记录待确认：长电科技(600584)",
+                    }
+                ],
+                output_root=Path(tempdir),
+            )
+
+        self.assertIn("| 旧仓事实 | 外部交易待核实 |", report)
+        self.assertIn("| 旧仓动作 | 只核实成交记录；未确认成交前不卖、不新增B2 |", report)
+        self.assertIn("| 长电科技（外部交易待核实） | 0x | 否 |", report)
+        self.assertNotIn("| 旧仓事实 | 已确认持有长电科技(600584) |", report)
+        self.assertNotIn("前日报计划待成交确认", report)
+
+    def test_render_treats_inherited_postgres_target_as_simulated_history_position(self):
         from portfolio import position_strategy_report
 
         snapshots = {
@@ -444,13 +712,12 @@ class PositionStrategyReportTest(unittest.TestCase):
             )
 
         self.assertIn(
-            "| Tc | 2026-07-10（周五） | 上一交易日计划待成交确认：长电科技(600584) | 长电科技(600584) | 未确认成交，不视为B1 | 进入Td先确认成交事实 |",
+            "| Tc | 2026-07-10（周五） | 上一交易日路径：长电科技(600584) | 长电科技(600584) | 可能形成B1旧仓 | 进入Td复核，不临场补B2 |",
             report,
         )
-        self.assertNotIn("| Tc | 2026-07-10（周五） | 上一交易日路径：长电科技(600584)", report)
-        self.assertNotIn("可能形成B1旧仓", report)
+        self.assertNotIn("待成交确认", report)
 
-    def test_postgres_only_unknown_history_does_not_backfill_current_pending_plan(self):
+    def test_postgres_only_unknown_history_does_not_backfill_current_simulated_position(self):
         from portfolio import position_strategy_report
 
         snapshots = {
@@ -521,7 +788,7 @@ class PositionStrategyReportTest(unittest.TestCase):
             report,
         )
         self.assertIn(
-            "| Tb | 2026-07-08（周三） | 历史复盘日计划待成交确认：华天科技(002185) | 华天科技(002185) | 未确认成交，不视为B1 |",
+            "| Tb | 2026-07-08（周三） | 历史复盘日：华天科技(002185) | 华天科技(002185) | 历史路径校对 |",
             report,
         )
         self.assertIn(
@@ -532,7 +799,7 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertNotIn("长电科技(600584)", tc_line)
         self.assertNotIn("可能形成B1旧仓", tc_line)
         self.assertIn(
-            "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 |",
+            "| Te | 2026-07-13（周一） | 只处理旧仓风险 | 长电科技(600584) | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |",
             report,
         )
 
@@ -676,48 +943,53 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| Te | 2026-07-07（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |", report)
         self.assertIn("当前没有明日极度看好候选，明日不设目标标的。", report)
         self.assertIn("| 太极实业 | 600667 | 半导体 | 无新增参与窗口 | 0%不参与 | 只作过程回放，不新增参与 | 不参与 | - |", report)
+        self.assertIn("| 明日新仓 | 0%不参与 |", report)
 
     def test_render_timeline_prefers_final_entry_target_over_process_candidate(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 
-        report = render_position_strategy_report(
-            data={
-                "final_target_resolution": {
-                    "new_entry_target": {
-                        "name": "华天科技",
-                        "code": "002185",
-                        "sector": "半导体",
-                        "planned_participation": {"buy_window": "09:30-09:35", "attack_state": "满仓条件执行"},
+        with TemporaryDirectory() as tempdir:
+            report = render_position_strategy_report(
+                data={
+                    "position_context_provided": False,
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "华天科技",
+                            "code": "002185",
+                            "sector": "半导体",
+                            "planned_participation": {"buy_window": "09:30-09:35", "attack_state": "满仓条件执行"},
+                        },
+                        "display_target": {"name": "华天科技", "code": "002185", "sector": "半导体"},
+                        "capital_priority_decision": {"capital_priority": "new_entry"},
                     },
-                    "display_target": {"name": "华天科技", "code": "002185", "sector": "半导体"},
-                    "capital_priority_decision": {"capital_priority": "new_entry"},
-                },
-                "execution_stage_context": {
-                    "extreme_conviction_list": [
-                        {
-                            "name": "和远气体",
-                            "code": "002971",
-                            "sector": "化工原料",
-                            "planned_participation": {"buy_window": "09:50-10:10", "attack_state": "50%"},
-                        }
-                    ],
-                    "selection_workflow": {
-                        "final": {
-                            "execution_object": {"name": "华天科技", "code": "002185", "sector": "半导体"},
-                            "position_pct": 100,
-                            "action_text": "满仓条件执行",
+                    "execution_stage_context": {
+                        "extreme_conviction_list": [
+                            {
+                                "name": "和远气体",
+                                "code": "002971",
+                                "sector": "化工原料",
+                                "planned_participation": {"buy_window": "09:50-10:10", "attack_state": "50%"},
+                            }
+                        ],
+                        "selection_workflow": {
+                            "final": {
+                                "execution_object": {"name": "华天科技", "code": "002185", "sector": "半导体"},
+                                "position_pct": 100,
+                                "action_text": "满仓条件执行",
+                            }
                         }
                     },
                 },
-            },
-            target_date="2026-07-07",
-            positions=[],
-        )
+                target_date="2026-07-07",
+                positions=[],
+                output_root=Path(tempdir),
+            )
 
-        self.assertIn("| Td | 2026-07-07（周二） | 报告日：空仓 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |", report)
-        self.assertIn("| Te | 2026-07-08（周三） | 新目标单独看B1，不用旧仓亏损补仓 | 华天科技(002185) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |", report)
+        self.assertIn("| Td | 2026-07-07（周二） | 报告日：持仓未输入 | 无 | 只定Te的B1+B2预案，不下单；B2确认后才到2x/100% | 写清执行资格和取消条件 |", report)
+        self.assertIn("| Te | 2026-07-08（周三） | 先确认是否已有旧仓 | 华天科技(002185) | 先确认是否已有B1；未确认不新增B2 | 旧仓事实不清时不新增参与 |", report)
         self.assertNotIn("| Te | 2026-07-08（周三） | 新目标单独看B1，不用旧仓亏损补仓 | 和远气体(002971)", report)
-        self.assertIn("| 华天科技 | 002185 | 半导体 | 100%核心进攻候选 | 09:30-09:35 |", report)
+        self.assertIn("| 华天科技 | 002185 | 半导体 | 2x/100%满仓计划 | 09:30-09:35 |", report)
+        self.assertIn("| 明日新仓 | 2x/100%核心进攻；B1先参与，B2确认后补到满仓 |", report)
         tomorrow_target_section = report.split("## 明日目标标的", 1)[1].split("# 上证单边上升", 1)[0]
         self.assertNotIn("和远气体 | 002971", tomorrow_target_section)
 
@@ -762,6 +1034,11 @@ class PositionStrategyReportTest(unittest.TestCase):
             report = render_position_strategy_report(
                 data={
                     "position_context_provided": False,
+                    "personal_position_context": {
+                        "existing_position_summary": {
+                            "has_position": False,
+                        },
+                    },
                     "execution_stage_context": {
                         "extreme_conviction_list": [
                             {
@@ -782,10 +1059,44 @@ class PositionStrategyReportTest(unittest.TestCase):
             )
 
         self.assertIn("| Tc | 2026-06-25（周四） | 前一交易日持仓未输入 | - | B1事实待确认 | 先确认账户事实，不从当前计划反推历史持仓 |", report)
-        self.assertIn("| Td | 2026-06-26（周五） | 报告日：持仓未输入 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |", report)
+        self.assertIn("| Td | 2026-06-26（周五） | 报告日：持仓未输入 | 无 | 只定Te的B1预案，不下单；本计划无B2 | 写清执行资格和取消条件 |", report)
         self.assertIn("| Te | 2026-06-29（周一） | 先确认是否已有旧仓 | 汇源通信(000586) | 先确认是否已有B1；未确认不新增B2 | 旧仓事实不清时不新增参与 |", report)
         timeline_text = report.split("# 2026-06-26 持仓策略", 1)[0]
+        self.assertIn("| 旧仓事实 | 持仓未输入 |", timeline_text)
+        self.assertIn("| 收盘目标仓位 | 待确认 |", timeline_text)
         self.assertNotIn("无旧仓", timeline_text)
+        self.assertIn(
+            "| 持仓未输入 | 待确认 | 待确认 | 先核对实际持仓；未确认前不生成旧仓卖出或持有动作 | 先确认账户事实 |",
+            report,
+        )
+        self.assertNotIn("今日空仓", report)
+        self.assertNotIn("无旧仓处理", report)
+
+    def test_render_explicit_empty_today_is_not_overwritten_by_unknown_history(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        with TemporaryDirectory() as tempdir:
+            report = render_position_strategy_report(
+                data={
+                    "position_context_provided": True,
+                    "personal_position_context": {
+                        "existing_position_summary": {
+                            "has_position": False,
+                            "summary": "已确认今日空仓",
+                            "position_source": "explicit_empty_input",
+                        }
+                    },
+                },
+                target_date="2026-07-15",
+                positions=[],
+                output_root=Path(tempdir),
+            )
+
+        self.assertIn("| Tc | 2026-07-14（周二） | 前一交易日持仓未输入 |", report)
+        self.assertIn("| Td | 2026-07-15（周三） | 报告日：空仓 | 无 |", report)
+        td_line = next(line for line in report.splitlines() if line.startswith("| Td |"))
+        self.assertNotIn("持仓未输入", td_line)
+        self.assertIn("| 旧仓事实 | 已确认无旧仓 |", report)
 
     def test_render_day_order_keeps_today_unknown_when_previous_report_had_no_target(self):
         from portfolio.position_strategy_report import render_position_strategy_report
@@ -838,11 +1149,35 @@ class PositionStrategyReportTest(unittest.TestCase):
             report,
         )
         self.assertIn(
-            "| Te | 2026-07-10（周五） | 新目标单独看B1，不用旧仓亏损补仓 | 长电科技(600584) |",
+            "| Te | 2026-07-10（周五） | 先确认是否已有旧仓 | 长电科技(600584) | 先确认是否已有B1；未确认不新增B2 |",
             report,
         )
         td_line = next(line for line in report.splitlines() if line.startswith("| Td |"))
         self.assertNotIn("长电科技(600584)", td_line)
+        timeline_text = report.split("# 2026-07-09 持仓策略", 1)[0]
+        self.assertIn("| 旧仓事实 | 持仓未输入 |", timeline_text)
+        self.assertIn("| 收盘目标仓位 | 待确认 |", timeline_text)
+        self.assertNotIn("已确认无旧仓", timeline_text)
+        self.assertNotIn("今日空仓", report)
+        self.assertNotIn("无旧仓处理", report)
+
+    def test_render_unknown_position_ignores_nonempty_invalid_position_rows(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        with TemporaryDirectory() as tempdir:
+            report = render_position_strategy_report(
+                data={"position_context_provided": False},
+                target_date="2026-07-14",
+                positions=[{}],
+                output_root=Path(tempdir),
+            )
+
+        self.assertIn(
+            "| 持仓未输入 | 待确认 | 待确认 | 先核对实际持仓；未确认前不生成旧仓卖出或持有动作 | 先确认账户事实 |",
+            report,
+        )
+        self.assertNotIn("今日空仓", report)
+        self.assertNotIn("强于板块锚点的持仓继续持有", report)
 
     def test_postgres_only_history_reader_stops_instead_of_using_stale_markdown(self):
         from portfolio import position_strategy_report
@@ -965,8 +1300,8 @@ class PositionStrategyReportTest(unittest.TestCase):
 
         self.assertIn("| Ta | 2026-06-24（周三） | 最远复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对，不改变Te动作 |", report)
         self.assertIn("| Tc | 2026-06-26（周五） | 前一交易日持仓未输入 | - | B1事实待确认 | 先确认账户事实，不从当前计划反推历史持仓 |", report)
-        self.assertIn("| Td | 2026-06-29（周一） | 报告日：持仓未输入；上一份日报目标来源=2026-06-26 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |", report)
-        self.assertIn("| Te | 2026-06-30（周二） | 新目标单独看B1，不用旧仓亏损补仓 | 深科技(000021) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |", report)
+        self.assertIn("| Td | 2026-06-29（周一） | 报告日：持仓未输入；上一份日报目标来源=2026-06-26 | 无 | 只定Te的B1预案，不下单；本计划无B2 | 写清执行资格和取消条件 |", report)
+        self.assertIn("| Te | 2026-06-30（周二） | 新目标单独看B1，不用旧仓亏损补仓 | 深科技(000021) | B1参与权=1x/50%；本计划无B2 | B1条件不满足则取消参与；不追加B2 |", report)
 
     def test_render_day_order_carries_history_paths_without_today_position(self):
         from portfolio.position_strategy_report import render_position_strategy_report
@@ -1010,7 +1345,7 @@ class PositionStrategyReportTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (root / "2026-07-08_A股日报_执行摘要.md").write_text(
-                "| 明日执行对象 | 无 |\n| 对象性质 | 无明日执行对象 |\n| 旧仓处理 | 持有华天科技(002185)，100%仓位，上一份日报明日标的默认1x旧仓 |\n",
+                "| 明日执行对象 | 无 |\n| 对象性质 | 无明日执行对象 |\n| 旧仓处理 | 持有华天科技(002185)，1x/50%半仓，上一份日报明日标的默认1x旧仓 |\n",
                 encoding="utf-8",
             )
             report = render_position_strategy_report(
@@ -1038,7 +1373,7 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| Ta | 2026-07-06（周一） | 最远复盘日：太极实业(600667) | 太极实业(600667) | 历史路径校对 |", report)
         self.assertIn("| Tb | 2026-07-07（周二） | 历史复盘日：空仓 | - | 不生成B1/B2 |", report)
         self.assertIn("| Tc | 2026-07-08（周三） | 上一交易日路径：华天科技(002185) | 华天科技(002185) | 可能形成B1旧仓 |", report)
-        self.assertIn("| Td | 2026-07-09（周四） | 报告日：空仓 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 |", report)
+        self.assertIn("| Td | 2026-07-09（周四） | 报告日：空仓 | 无 | 只定Te的B1预案，不下单；本计划无B2 |", report)
         self.assertIn("| Te | 2026-07-10（周五） | 新目标单独看B1，不用旧仓亏损补仓 | 长电科技(600584) |", report)
         self.assertIn("| - | - | - | 今日空仓，无旧仓处理 | 无旧仓处理 |", report)
         td_line = next(line for line in report.splitlines() if line.startswith("| Td |"))
@@ -1147,6 +1482,7 @@ class PositionStrategyReportTest(unittest.TestCase):
                  patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html"), \\
                  patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")), \\
                  patch.object(daily_report_entry_demo, "_save_data_snapshot"), \\
+                 patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={{"source": "test", "field_count": 0}}), \\
                  patch.object(daily_report_entry_demo, "save_position_strategy_report", side_effect=lambda report, date, mode: calls.append((report, date, mode)) or "/tmp/strategy.md"):
                 exit_code = daily_report_entry_demo.main()
 
@@ -1166,7 +1502,20 @@ class PositionStrategyReportTest(unittest.TestCase):
             """
         )
 
-        result = subprocess.run([sys.executable, "-c", script], cwd=str(ROOT), capture_output=True, text=True)
+        env = os.environ.copy()
+        for key in (
+            "A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME",
+            "A_DAILY_REPORT_DATABASE_URL",
+            "DATABASE_URL",
+        ):
+            env.pop(key, None)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
 

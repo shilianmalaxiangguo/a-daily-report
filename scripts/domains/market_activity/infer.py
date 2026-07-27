@@ -1056,11 +1056,15 @@ def build_market_activity_quant_signal_bundle(
 
     emit("  3️⃣ 板块共振评分... (依赖: 步骤4-涨停池, 步骤7-板块资金流向)")
     sectors_data = {}
+    resonance_computed = False
     try:
         sectors_data = _build_resonance_sector_payload(all_data, results.get("lhb_analysis", []), stocks_with_history, emit)
         resonance_scores = calculate_resonance(sectors_data)
+        if not isinstance(resonance_scores, dict):
+            raise TypeError("板块共振结果不可用")
         results["resonance_scores"] = resonance_scores
         emit(f"   ✅ 计算 {len(resonance_scores)} 个板块共振评分")
+        resonance_computed = True
     except Exception as error:
         emit(f"   ⚠️ 共振评分失败: {error}")
         results["resonance_scores"] = {}
@@ -1097,6 +1101,8 @@ def build_market_activity_quant_signal_bundle(
         volume_anomaly_count=len(results.get("volume_anomalies", []) or []),
         lhb_count=len(results.get("lhb_analysis", []) or []),
         resonance_count=len(results.get("resonance_scores", {}) or {}),
+        resonance_input_count=len(sectors_data or {}),
+        resonance_computed=resonance_computed,
         signal_count=len(results.get("trade_signals", []) or []),
     )
     return {

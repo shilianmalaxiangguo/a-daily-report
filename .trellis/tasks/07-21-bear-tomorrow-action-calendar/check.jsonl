@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查 PostgreSQL 查询、来源和缺失策略"}
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "检查日历没有改写明日决策链"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查 Bear HTML 顺序、可访问性和窄屏"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查数据库事实贯穿入口、渲染和验收"}
+{"file": ".trellis/tasks/07-21-bear-tomorrow-action-calendar/research/postgres-calendar-source-audit.md", "reason": "复核日期映射、收益公式和数据缺失口径"}

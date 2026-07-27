@@ -44,6 +44,194 @@ class LlmWikiRouterTest(unittest.TestCase):
             },
         )
 
+    def test_builds_and_routes_new_high_breadth_contraction_fact(self):
+        sectors = [
+            {"sector": sector, "new_high_count": 1}
+            for sector in ["半导体", "水运", "纺织", "医药", "银行", "机械"]
+        ]
+        data = {
+            "target_date": "2026-07-13",
+            "new_high_feedback": {
+                "available": True,
+                "trend_rows": [
+                    {
+                        "trade_date": "2026-07-10",
+                        "source_date": "2026-07-10",
+                        "source": "same-source",
+                        "new_high_count": 18,
+                        "all_a_share_pct": 0.36,
+                    },
+                    {
+                        "trade_date": "2026-07-13",
+                        "source_date": "2026-07-13",
+                        "source": "same-source",
+                        "new_high_count": 6,
+                        "all_a_share_pct": 0.12,
+                        "sector_distribution": sectors,
+                    },
+                ],
+            },
+        }
+
+        facts = build_llm_wiki_fact_tags(data)
+        self.assertIn("扩散断层预警", facts["market"]["breadth"])
+        self.assertIn("首次进入个位数", facts["market"]["breadth"])
+        self.assertIn("板块碎片化", facts["market"]["breadth"])
+
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report", limit=5)
+        hit = next(
+            item
+            for item in hits
+            if item["knowledge_id"] == "market.new-high-breadth-contraction"
+        )
+        self.assertIn("创新高扩散结构", hit["matched_conditions"])
+        self.assertIn("不直接改变候选", hit["impact"])
+
+    def test_new_high_trace_keeps_explanation_only_boundary(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {"market": {"breadth": "创新高扩散断层预警，趋势生成率首次进入个位数"}},
+            manifest=context["manifest"],
+            limit=5,
+            **TRACE_DATES,
+        )
+
+        hit = next(
+            item
+            for item in trace["hits"]
+            if item["knowledge_id"] == "market.new-high-breadth-contraction"
+        )
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        self.assertIn("selection_workflow", hit["not_used_for"])
+        self.assertIn("final_target_resolution", hit["not_used_for"])
+        self.assertIn("position_plan", hit["not_used_for"])
+        self.assertIn("b1_b2", hit["not_used_for"])
+        self.assertIn("exit_action", hit["not_used_for"])
+        self.assertEqual(hit["matched_fact_paths"], ["market.breadth"])
+
+    def test_historical_prior_live_structure_requires_registered_market_fact(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "market": {
+                    "market_form": "历史类比只提供历史先验，实时结构与模型分歧决定当前解释",
+                    "breadth": "短促反弹不等于稳定修复，继续观察修复质量",
+                }
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        hit = next(
+            item
+            for item in trace["hits"]
+            if item["knowledge_id"] == "market.historical-prior-live-structure"
+        )
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        self.assertEqual(
+            hit["used_for"],
+            ["knowledge_citation", "explanation", "review"],
+        )
+        self.assertEqual(
+            hit["not_used_for"],
+            [
+                "selection_workflow",
+                "final_target_resolution",
+                "execution_object",
+                "position_plan",
+                "b1_b2",
+                "old_position_handling",
+                "exit_action",
+            ],
+        )
+        self.assertEqual(
+            hit["matched_fact_paths"],
+            ["market.breadth", "market.market_form"],
+        )
+        self.assertIn("历史先验与当前结构", hit["matched_conditions"])
+        self.assertIn("反弹与稳定修复结构", hit["matched_conditions"])
+
+    def test_historical_prior_question_is_human_routable_but_not_a_production_hit(self):
+        human_hits = route_llm_wiki_knowledge(
+            {"question": "用诺曼底高空急流解释历史类比会不会刻舟求剑？"},
+            scenario="intraday_question",
+            limit=10,
+        )
+        self.assertIn(
+            "market.historical-prior-live-structure",
+            {item["knowledge_id"] for item in human_hits},
+        )
+
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {"question": "用诺曼底高空急流解释历史类比会不会刻舟求剑？"},
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        self.assertNotIn(
+            "market.historical-prior-live-structure",
+            {item["knowledge_id"] for item in trace["hits"]},
+        )
+        self.assertIn("knowledge_fact_root_rejected:question", trace["warnings"])
+
+    def test_unknown_or_negated_historical_prior_fact_does_not_create_trace_hit(self):
+        context = build_llm_wiki_context()
+        unknown_trace = route_llm_wiki_knowledge_trace(
+            {"market": {"historical_prior": "历史先验与实时结构"}},
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+        negated_trace = route_llm_wiki_knowledge_trace(
+            {"market": {"market_form": "并非历史类比，也没有实时结构或模型分歧"}},
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=10,
+            **TRACE_DATES,
+        )
+
+        for trace in (unknown_trace, negated_trace):
+            self.assertNotIn(
+                "market.historical-prior-live-structure",
+                {item["knowledge_id"] for item in trace["hits"]},
+            )
+        self.assertIn(
+            "knowledge_fact_path_rejected:market.historical_prior",
+            unknown_trace["warnings"],
+        )
+
+    def test_routes_direct_new_high_structure_question(self):
+        hits = route_llm_wiki_knowledge(
+            {"question": "创新高首次跌到个位数，是否说明趋势生成率扩散断层并可能出现核心补跌？"},
+            scenario="intraday_question",
+            limit=5,
+        )
+
+        ids = [item["knowledge_id"] for item in hits]
+        self.assertIn("market.new-high-breadth-contraction", ids)
+
+    def test_routes_absolute_new_high_breadth_level_terms(self):
+        for term in ["极致扩散", "有效扩散", "扩散偏冷", "极低扩散", "扩散断层"]:
+            with self.subTest(term=term):
+                hits = route_llm_wiki_knowledge(
+                    {"question": f"创新高全A占比处于{term}时应该怎么理解？"},
+                    scenario="intraday_question",
+                    limit=5,
+                )
+                hit = next(
+                    item
+                    for item in hits
+                    if item["knowledge_id"] == "market.new-high-breadth-contraction"
+                )
+                self.assertIn(term, hit["triggered_by"])
+                self.assertIn("绝对水位", hit["impact"])
+
     def test_builds_fact_tags_from_sector_grid_first_selection(self):
         facts = build_llm_wiki_fact_tags(
             {
@@ -113,6 +301,50 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertEqual(facts["account"]["cash_available"], 9800)
         self.assertEqual(facts["candidate"]["identity"], "市场核心")
         self.assertEqual(facts["candidate"]["one_lot_amount"], 18000)
+
+    def test_builds_fact_tags_from_quality_sample_after_empty_candidate_placeholders(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "personal_position_context": {
+                    "account_profile": {
+                        "cash_available": 9800,
+                    },
+                },
+                "watch_anchor": {},
+                "market_research_snapshot": {
+                    "selected_position_candidate": {},
+                },
+                "execution_stage_context": {
+                    "candidate_quality_samples": [
+                        {},
+                        {
+                            "name": "强核心",
+                            "identity": "市场核心",
+                            "one_lot_amount": 18000,
+                            "status": "过程候选",
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertEqual(facts["account"]["status"], "实际不可买")
+        self.assertEqual(facts["candidate"]["identity"], "市场核心")
+        self.assertEqual(facts["candidate"]["one_lot_amount"], 18000)
+
+    def test_builds_unbuyable_fact_when_known_cash_is_zero(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "account_profile": {"cash_available": 0},
+                "selected_position_candidate": {
+                    "identity": "市场核心",
+                    "one_lot_amount": 18000,
+                },
+            }
+        )
+
+        self.assertEqual(facts["account"]["cash_available"], 0)
+        self.assertEqual(facts["account"]["status"], "实际不可买")
 
     def test_builds_fact_tags_from_final_target_resolution_capital_priority(self):
         facts = build_llm_wiki_fact_tags(
@@ -448,11 +680,16 @@ class LlmWikiRouterTest(unittest.TestCase):
         ]:
             self.assertIn(required, hit["triggered_by"])
         self.assertEqual(hit["report_slot"], "超短边际节奏复核")
+        self.assertEqual(hit["title"], "节奏复位不新增与边际主线复核")
+        self.assertIn("节奏复位不新增", hit["matched_topics"])
+        self.assertIn("延后确认不新增", hit["matched_topics"])
         self.assertIn("最终0%不是思考终点", hit["impact"])
         self.assertIn("追溯周五选股、买点、持仓预期和退出纪律", hit["impact"])
         self.assertIn("不替周五或周一正名", hit["impact"])
         self.assertIn("T+1复核", hit["impact"])
         self.assertIn("过程候选不覆盖最终动作", hit["impact"])
+        self.assertNotIn("节奏复位空仓", hit["title"] + "".join(hit["matched_topics"]) + hit["impact"])
+        self.assertNotIn("延后确认空仓", hit["title"] + "".join(hit["matched_topics"]) + hit["impact"])
 
     def test_routes_performance_rotation_main_attack_from_haaland_analogy(self):
         hits = route_llm_wiki_knowledge(
@@ -485,6 +722,143 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("同权比较", hit["impact"])
         self.assertIn("风格切换载体", hit["impact"])
 
+    def test_routes_sector_label_neutrality_and_cycle_objectivity(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "没有最好的股票，只有最好的周期。板块标签不该分高低，要客观看真实趋势和真实赚钱效应；承认变化不等于参与，科技看不懂时休息也可以。",
+            },
+            scenario="review",
+            limit=5,
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "market.performance-rotation-main-attack")
+        for required in [
+            "没有最好的股票",
+            "只有最好的周期",
+            "板块标签",
+            "真实趋势",
+            "真实赚钱效应",
+            "承认变化不等于参与",
+            "科技看不懂时休息也可以",
+        ]:
+            self.assertIn(required, hit["triggered_by"])
+        self.assertIn("板块标签中性", hit["matched_topics"])
+        self.assertIn("周期客观性", hit["matched_topics"])
+        self.assertIn("没有天然高低", hit["impact"])
+        self.assertIn("不直接生成买入资格", hit["impact"])
+        self.assertIn("可以不参与", hit["impact"])
+
+    def test_routes_six_layer_trend_derivation_and_multiscale_analogy(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": (
+                    "市场到市场趋势、趋势板块、板块生态、板块中趋势个股、个股的六层推导，"
+                    "怎样避免用局部领先的个股反推市场已经转强？王虹三维挂谷猜想有什么多尺度方法启示？"
+                ),
+            },
+            scenario="intraday_question",
+            limit=5,
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "market.six-layer-trend-derivation")
+        for required in [
+            "市场趋势",
+            "趋势板块",
+            "板块生态",
+            "板块中趋势个股",
+            "六层推导",
+            "局部领先",
+            "王虹",
+            "三维挂谷猜想",
+        ]:
+            self.assertIn(required, hit["triggered_by"])
+        self.assertIn("局部领先不反推市场已经全面修复", hit["impact"])
+        self.assertIn("多尺度证据逐层传递", hit["impact"])
+
+    def test_six_layer_trend_trace_uses_registered_structure_facts_only(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "market": {
+                    "selection_order": "市场→市场趋势→趋势板块→板块生态→板块中趋势个股→个股；局部领先最多B1，不反推市场全面修复",
+                    "sector_grid": "趋势板块完成跨日持续、分歧承接、内部扩散和竞争方向对照",
+                }
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=5,
+            **TRACE_DATES,
+        )
+
+        hit = next(item for item in trace["hits"] if item["knowledge_id"] == "market.six-layer-trend-derivation")
+        self.assertEqual(hit["matched_fact_paths"], ["market.sector_grid", "market.selection_order"])
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        for excluded in [
+            "selection_workflow",
+            "final_target_resolution",
+            "position_plan",
+            "b1_b2",
+            "old_position_handling",
+            "exit_action",
+        ]:
+            self.assertIn(excluded, hit["not_used_for"])
+
+        missing_structure = route_llm_wiki_knowledge_trace(
+            {"market": {"selection_order": "个股强势可以反推市场已经转强"}},
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=5,
+            **TRACE_DATES,
+        )
+        self.assertNotIn(
+            "market.six-layer-trend-derivation",
+            {item["knowledge_id"] for item in missing_structure["hits"]},
+        )
+
+    def test_sector_label_cycle_trace_requires_registered_positive_fact(self):
+        context = build_llm_wiki_context()
+        trace = route_llm_wiki_knowledge_trace(
+            {
+                "market": {
+                    "market_form": "板块标签中性；没有最好的股票，只有最好的周期；客观看真实趋势和真实赚钱效应；承认变化不等于参与",
+                }
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=5,
+            **TRACE_DATES,
+        )
+
+        hit = next(item for item in trace["hits"] if item["knowledge_id"] == "market.performance-rotation-main-attack")
+        self.assertIn("板块标签与周期事实", hit["matched_conditions"])
+        self.assertEqual(hit["matched_fact_paths"], ["market.market_form"])
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        for excluded in [
+            "selection_workflow",
+            "final_target_resolution",
+            "position_plan",
+            "b1_b2",
+            "old_position_handling",
+            "exit_action",
+        ]:
+            self.assertIn(excluded, hit["not_used_for"])
+
+        negated = route_llm_wiki_knowledge_trace(
+            {
+                "market": {
+                    "market_form": "并非只有最好的周期，也没有真实趋势或真实赚钱效应",
+                }
+            },
+            manifest=context["manifest"],
+            scenario="daily_report",
+            limit=5,
+            **TRACE_DATES,
+        )
+        self.assertNotIn(
+            "market.performance-rotation-main-attack",
+            {item["knowledge_id"] for item in negated["hits"]},
+        )
+
     def test_routes_ta_te_timeline_to_slot_timeline_knowledge(self):
         hits = route_llm_wiki_knowledge(
             {
@@ -500,6 +874,44 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("Te", hit["triggered_by"])
         self.assertIn("Ta是最远复盘日", hit["impact"])
         self.assertIn("Te是明日执行日", hit["impact"])
+        self.assertIn("明日标的为空时", hit["impact"])
+        self.assertNotIn("明日无新目标", hit["impact"])
+
+    def test_routes_explicit_tomorrow_empty_to_account_zero_semantics(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "日报写明日空仓时，旧仓是不是集合竞价卖清，新股不买，也不做T？",
+                "position": {"state": "旧仓", "name": "长电科技"},
+            },
+            scenario="daily_report",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "discipline.tomorrow-empty-position-semantics")
+        self.assertIn("明日空仓", hit["triggered_by"])
+        self.assertIn("集合竞价卖清全部可卖旧仓", hit["impact"])
+        self.assertIn("未清完不能称空仓", hit["impact"])
+        self.assertIn("覆盖已经失败、待10:10复核和正常T+2", hit["impact"])
+        self.assertIn("明日新仓0%只表示不新增参与", hit["impact"])
+
+    def test_routes_non_empty_position_phrases_to_distinction_without_timing_override(self):
+        cases = [
+            ("明日新仓0%时旧仓怎么办", "明日新仓0%", "只表示不新增参与"),
+            ("明日标的为空时旧仓怎么办", "明日标的为空", "明日标的为空同理"),
+            ("当前空仓明天还能不能买", "当前空仓", "只描述当前账户事实"),
+            ("持仓未知时能不能写账户为0", "持仓未知", "持仓未知保持待确认"),
+        ]
+
+        for question, trigger, distinction in cases:
+            with self.subTest(question=question):
+                hits = route_llm_wiki_knowledge({"question": question}, scenario="daily_report")
+                hit = next(
+                    item
+                    for item in hits
+                    if item["knowledge_id"] == "discipline.tomorrow-empty-position-semantics"
+                )
+                self.assertIn(trigger, hit["triggered_by"])
+                self.assertIn(distinction, hit["impact"])
+                self.assertIn("这四种情况都不触发上述覆盖", hit["impact"])
 
     def test_routes_daily_report_final_resolution_to_cull_weak_keep_strong(self):
         facts = build_llm_wiki_fact_tags(
@@ -559,6 +971,91 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("买回确认", hit["impact"])
         self.assertIn("不把更便宜当作更正确", hit["impact"])
 
+    def test_routes_unplanned_profit_to_fresh_entry_qualification(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "日报没有标的，我擅自计划外买入后涨了8%，是不是说明这笔交易其实做对了？",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "discipline.unplanned-profit-qualification")
+        self.assertIn("计划外", hit["triggered_by"])
+        self.assertIn("计划外买入", hit["triggered_by"])
+        self.assertIn("涨了8%", hit["triggered_by"])
+        self.assertIn("不能证明计划外交易正确", hit["impact"])
+        self.assertIn("独立重新取得买入资格", hit["impact"])
+
+    def test_routes_loss_aversion_and_fear_of_missing_rebound(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "旧仓已经失败，集合竞价低开我又加仓做T，现在怕卖出后反弹卖飞，能不能继续拿？",
+                "position": {"state": "满仓亏损", "decision_class": "failed"},
+            },
+            scenario="intraday_question",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "position.failed-position-loss-aversion")
+        self.assertIn("低开我又加仓", hit["triggered_by"])
+        self.assertIn("加仓做T", hit["triggered_by"])
+        self.assertIn("卖飞", hit["triggered_by"])
+        self.assertIn("不是做T", hit["impact"])
+        self.assertIn("不能覆盖失败仓退出", hit["impact"])
+
+    def test_routes_dragon_tiger_list_to_sample_boundary(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "华天科技龙虎榜净买为正，能否证明全市场主力看多，只是榜外小额资金合力踩踏？",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "evidence.dragon-tiger-list-sample-boundary")
+        self.assertIn("龙虎榜", hit["triggered_by"])
+        self.assertIn("净买为正", hit["triggered_by"])
+        self.assertIn("榜外小额资金", hit["triggered_by"])
+        self.assertIn("只覆盖上榜席位样本", hit["impact"])
+        self.assertIn("不能代表全市场主力方向", hit["impact"])
+        self.assertIn("不能推导榜外资金行为", hit["impact"])
+
+    def test_routes_long_industry_thesis_away_from_failed_short_trade(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "我想不出2027年除了存储还有什么板块值得参与，长期产业逻辑能不能让我继续拿短线失败仓？",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "discipline.long-thesis-short-failure-separation")
+        self.assertIn("2027", hit["triggered_by"])
+        self.assertIn("存储", hit["triggered_by"])
+        self.assertIn("长期产业逻辑", hit["triggered_by"])
+        self.assertIn("短线失败仓", hit["triggered_by"])
+        self.assertIn("不能给短线失败仓续命", hit["impact"])
+        self.assertIn("重新取得持仓资格", hit["impact"])
+
+    def test_does_not_route_failed_position_or_long_thesis_from_general_holding_words(self):
+        cases = [
+            "科技板块今天强吗",
+            "我想继续拿这只盈利股",
+        ]
+
+        for question in cases:
+            with self.subTest(question=question):
+                hits = route_llm_wiki_knowledge({"question": question}, scenario="intraday_question")
+                ids = [item["knowledge_id"] for item in hits]
+                self.assertNotIn("position.failed-position-loss-aversion", ids)
+                self.assertNotIn("discipline.long-thesis-short-failure-separation", ids)
+
+    def test_does_not_route_dragon_tiger_boundary_from_generic_list_lookup(self):
+        hits = route_llm_wiki_knowledge(
+            {"question": "龙虎榜今天有哪些"},
+            scenario="review",
+        )
+
+        ids = [item["knowledge_id"] for item in hits]
+        self.assertNotIn("evidence.dragon-tiger-list-sample-boundary", ids)
+
     def test_routes_same_stock_t_failure_control(self):
         hits = route_llm_wiki_knowledge(
             {
@@ -606,6 +1103,103 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("same_stock_t", hit["triggered_by"])
         self.assertIn("同股T", hit["triggered_by"])
         self.assertIn("临时2x", hit["triggered_by"])
+
+    def test_maps_v2_same_stock_satisfied_plan_to_zero_current_entry(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "new_entry_target": {"name": "太极实业", "code": "600667"},
+                    "account_exposure_plan": {
+                        "schema_version": "position_tier_exposure.v2",
+                        "old_position_pct": 50,
+                        "old_position_x": 1,
+                        "planned_new_entry_pct": 50,
+                        "planned_new_entry_x": 1,
+                        "new_entry_pct": 0,
+                        "new_entry_x": 0,
+                        "same_stock_target": True,
+                        "same_stock_t": False,
+                    },
+                }
+            }
+        )
+
+        self.assertEqual(facts["position"]["state"], "旧仓")
+        self.assertIn("当前0%新增", facts["position"]["action"])
+        self.assertIn("不重复B1", facts["position"]["action"])
+        self.assertIn("计划总档1x/50%", facts["decision"]["position_plan"])
+        self.assertIn("当前新增0%", facts["decision"]["position_plan"])
+        self.assertNotIn("同股T", facts["position"]["action"])
+
+    def test_maps_v2_same_stock_b2_to_one_x_current_increment(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "new_entry_target": {"name": "太极实业", "code": "600667"},
+                    "account_exposure_plan": {
+                        "schema_version": "position_tier_exposure.v2",
+                        "old_position_pct": 50,
+                        "old_position_x": 1,
+                        "planned_new_entry_pct": 100,
+                        "planned_new_entry_x": 2,
+                        "new_entry_pct": 50,
+                        "new_entry_x": 1,
+                        "same_stock_target": True,
+                        "same_stock_t": True,
+                    },
+                }
+            }
+        )
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report", limit=5)
+
+        self.assertIn("当前只新增1x/50%=B2", facts["position"]["action"])
+        self.assertIn("总仓位2x/100%", facts["position"]["action"])
+        self.assertIn("计划总档2x/100%", facts["decision"]["position_plan"])
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("position.position-tier-exposure-contract", ids)
+        self.assertIn("intraday.same-stock-t-failure-control", ids)
+
+    def test_maps_v2_different_stock_two_legs_to_two_x_total(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "new_entry_target": {"name": "深科技", "code": "000021"},
+                    "account_exposure_plan": {
+                        "schema_version": "position_tier_exposure.v2",
+                        "old_position_pct": 50,
+                        "old_position_x": 1,
+                        "planned_new_entry_pct": 50,
+                        "planned_new_entry_x": 1,
+                        "new_entry_pct": 50,
+                        "new_entry_x": 1,
+                        "same_stock_target": False,
+                        "same_stock_t": False,
+                    },
+                }
+            }
+        )
+
+        self.assertIn("不同股旧仓1x/50% + 当前新仓1x/50%", facts["position"]["action"])
+        self.assertIn("账户合计2x/100%", facts["position"]["action"])
+        self.assertNotIn("200%", str(facts))
+
+    def test_routes_direct_position_tier_question_to_exact_contract(self):
+        hits = route_llm_wiki_knowledge(
+            {"question": "1x和2x仓位分别是多少？B1和B2分别代表什么？"},
+            scenario="intraday_question",
+            limit=5,
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "position.position-tier-exposure-contract")
+        self.assertIn("0=0%不参与", hit["impact"])
+        self.assertIn("1x=50%半仓=B1参与权", hit["impact"])
+        self.assertIn("2x=100%满仓=B1+B2", hit["impact"])
+        self.assertIn("planned_new_entry_pct/x是计划总档", hit["impact"])
+        self.assertIn("new_entry_pct/x是当前新增档", hit["impact"])
+        self.assertNotIn("200%暴露", hit["impact"])
 
     def test_does_not_route_same_stock_t_for_different_old_and_new_target(self):
         hits = route_llm_wiki_knowledge(
@@ -724,6 +1318,58 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("同一失效线", hit["impact"])
         self.assertEqual(hit["report_slot"], "价格行为判断")
         self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_trend_graphic_narrative_cycle_to_brooks_framework(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "当前是趋势交易、图形交易、叙事交易和小作文段子交易的周期，逻辑和信息只是引子和助燃剂，只交易趋势时怎样避免亏损后出现策略身份漂移？",
+            },
+            scenario="intraday_question",
+            limit=5,
+        )
+
+        hit = next(
+            item
+            for item in hits
+            if item["knowledge_id"] == "price-action.brooks-trend-framework"
+        )
+        for trigger in [
+            "趋势交易",
+            "图形交易",
+            "叙事交易",
+            "小作文段子交易",
+            "策略身份漂移",
+            "引子和助燃剂",
+            "只交易趋势",
+        ]:
+            self.assertIn(trigger, hit["triggered_by"])
+
+    def test_trend_cycle_trace_still_requires_price_confirmation(self):
+        context = build_llm_wiki_context()
+        phrase_only = route_llm_wiki_knowledge_trace(
+            {"candidate": {"quality": "趋势交易周期"}},
+            manifest=context["manifest"],
+            limit=5,
+            **TRACE_DATES,
+        )
+        confirmed = route_llm_wiki_knowledge_trace(
+            {
+                "position": {
+                    "capital_priority_reason": "趋势交易周期中趋势仍在，且失效线清楚",
+                }
+            },
+            manifest=context["manifest"],
+            limit=5,
+            **TRACE_DATES,
+        )
+
+        knowledge_id = "price-action.brooks-trend-framework"
+        self.assertNotIn(knowledge_id, {item["knowledge_id"] for item in phrase_only["hits"]})
+        hit = next(item for item in confirmed["hits"] if item["knowledge_id"] == knowledge_id)
+        self.assertEqual(hit["matched_fact_paths"], ["position.capital_priority_reason"])
+        self.assertEqual(hit["decision_scope"], "explanation_only")
+        self.assertIn("selection_workflow", hit["not_used_for"])
+        self.assertIn("position_plan", hit["not_used_for"])
 
     def test_routes_fake_bottom_attack_shape_to_brooks_price_action_trend_framework(self):
         hits = route_llm_wiki_knowledge(

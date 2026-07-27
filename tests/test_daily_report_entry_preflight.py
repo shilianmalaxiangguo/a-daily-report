@@ -829,7 +829,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "_save_data_snapshot"):
             daily_report_entry_demo.main()
 
-        audit_mock.assert_called_once()
+        self.assertEqual(audit_mock.call_count, 2)
         self.assertEqual(
             audit_mock.call_args.args[0],
             report_outputs[daily_report_entry_demo.REPORT_VARIANT_FULL],
@@ -1953,6 +1953,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
                      "findings": [{"code": "market_breadth_incomplete", "message": "关键数据不完整，停止生成", "line": 1}],
                  },
                  {"passed": True, "findings": []},
+                 {"passed": True, "findings": []},
              ]) as audit_mock, \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
@@ -1972,7 +1973,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             daily_report_entry_demo.main()
 
         self.assertEqual(audit_mock.call_args_list[0].args[0], stale_report.read_text(encoding="utf-8"))
-        self.assertEqual(audit_mock.call_count, 2)
+        self.assertEqual(audit_mock.call_count, 3)
         self.assertEqual(build_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
         self.assertEqual(save_mock.call_args.kwargs["mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
         self.assertFalse(save_mock.call_args.kwargs["overwrite_existing"])
@@ -2022,6 +2023,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
              patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", side_effect=sync_to_postgres), \
+             patch.object(daily_report_entry_demo, "_assert_fresh_llm_wiki_trace_complete"), \
              patch.object(
                  daily_report_entry_demo,
                  "write_fresh_market_language_translation",
@@ -2123,6 +2125,9 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
                 daily_report_entry_demo,
                 "import_daily_report_data_to_postgres",
                 side_effect=sync_to_postgres,
+            ), patch.object(
+                daily_report_entry_demo,
+                "_assert_fresh_llm_wiki_trace_complete",
             ), patch.object(
                 daily_report_entry_demo,
                 "write_fresh_market_language_translation",

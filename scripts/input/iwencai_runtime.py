@@ -316,9 +316,12 @@ def _get_named_index_tushare_primary(index_name, code, target_date=None, *, fetc
         if not valid_bars:
             return {"price": 0, "change_pct": 0}
         latest_bar = valid_bars[-1]
+        trade_date = latest_bar.get("date")
+        if trade_date != end_date:
+            return {"price": 0, "change_pct": 0}
         prev_bar = valid_bars[-2] if len(valid_bars) >= 2 else {}
         close_price = _safe_float(latest_bar.get("close"))
-        prev_close = _safe_float(prev_bar.get("close"))
+        prev_close = _safe_float(latest_bar.get("pre_close")) or _safe_float(prev_bar.get("close"))
         open_price = _safe_float(latest_bar.get("open"))
         if close_price <= 0:
             return {"price": 0, "change_pct": 0}
@@ -332,9 +335,11 @@ def _get_named_index_tushare_primary(index_name, code, target_date=None, *, fetc
             "name": index_name,
             "code": code,
             "price": close_price,
+            "close": close_price,
+            "pre_close": prev_close,
             "change_pct": change_pct,
             "data_source": "tushare.index_daily",
-            "trade_date": latest_bar.get("date"),
+            "trade_date": trade_date,
         }
     except Exception:
         return {"price": 0, "change_pct": 0}
@@ -756,11 +761,17 @@ def _build_major_index_bar_fallback(
                 bar for bar in (bars or [])
                 if normalize_kline_date_str(bar.get("date")) <= end_date
             ]
+            valid_bars.sort(key=lambda bar: normalize_kline_date_str(bar.get("date")))
             if not valid_bars:
                 continue
 
             latest_bar = valid_bars[-1]
-            prev_close = _safe_float(valid_bars[-2].get("close")) if len(valid_bars) >= 2 else 0.0
+            trade_date = normalize_kline_date_str(latest_bar.get("date"))
+            if trade_date != end_date:
+                continue
+            prev_close = _safe_float(latest_bar.get("pre_close"))
+            if prev_close <= 0 and len(valid_bars) >= 2:
+                prev_close = _safe_float(valid_bars[-2].get("close"))
             close_price = _safe_float(latest_bar.get("close"))
             open_price = _safe_float(latest_bar.get("open"))
             if prev_close > 0:
@@ -776,13 +787,14 @@ def _build_major_index_bar_fallback(
                 "price": close_price,
                 "open": open_price,
                 "close": close_price,
+                "pre_close": prev_close,
                 "high": _safe_float(latest_bar.get("high")),
                 "low": _safe_float(latest_bar.get("low")),
                 "change_pct": change_pct,
                 "turnover": 0.0,
                 "涨跌幅": change_pct,
                 "data_source": data_source_label,
-                "trade_date": normalize_kline_date_str(latest_bar.get("date")),
+                "trade_date": trade_date,
             }
 
         if indices:

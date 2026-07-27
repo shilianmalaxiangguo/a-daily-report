@@ -35,11 +35,11 @@ description: Use when 需要判断任务应直接言出法随执行、进入 Tre
 
 如果实际任务牵涉共享契约、数据源、存储、业务主链路、候选池、推理或生成链路，先用中文说明为什么升级，再按 Trellis 或 Trellis + Grill 处理。
 
-### Superpowers
+### 头脑风暴
 
-- 默认不进入完整 Superpowers 链路；本项目日常开发用 Plan、Trellis 和 grill-me 完成。
-- 只有用户明确点名 Superpowers，或当前任务是在维护 Superpowers 相关 skill / 文档 / 集成时，才启用对应 Superpowers 流程。
-- 如果 Superpowers 自动触发会扩大当前请求范围，按本 skill 的 Plan / Trellis / Grill 分流优先。
+- 用户明确要求头脑风暴，或关键设计取舍会实质改变结果时，使用独立的 `brainstorming` skill。
+- 不需要设计取舍的简单任务继续按 Plan 直接执行。
+- 设计获确认后，回到本 skill 的 Plan / Trellis / Grill 分流继续执行。
 
 ## 复合任务拆分
 
@@ -71,7 +71,7 @@ description: Use when 需要判断任务应直接言出法随执行、进入 Tre
 ## Subagent 与 review
 
 - subagent 只有用户明确允许代理、并行或 subagent 工作时才用。
-- 如果平台不支持 subagent，回退到 `executing-plans` 串行执行，并用中文说明。
+- 如果平台不支持 subagent，回退到主线程串行执行，并用中文说明。
 - 子代理基于具体 commit 工作时，必须用 `git switch -c <branch> <sha>` 或等价方式创建分支，不要裸切到提交。
 - 子代理长时间没有回报时，主动打断并报告停滞原因。
 - Plan 和 Trellis 的 review 优先 inline self-review；只有用户明确允许代理或并行，且任务天然独立时，才考虑评审子代理。
@@ -93,7 +93,7 @@ description: Use when 需要判断任务应直接言出法随执行、进入 Tre
 
 | 模式 | 适用任务 | 执行方式 |
 |---|---|---|
-| Plan | 单文件、小文案、清晰 bug、小配置、可直接验证的规则补丁 | 言出法随直接做，跑最窄验证；不创建 Trellis 任务，不启动 Superpowers，不写规格文档，不拆 subagent |
+| Plan | 单文件、小文案、清晰 bug、小配置、可直接验证的规则补丁 | 言出法随直接做，跑最窄验证；不创建 Trellis 任务，不写规格文档，不拆 subagent |
 | Trellis | 多文件但边界清楚、局部逻辑、沿用现有模式的扩展，或需要规范/任务记录/知识沉淀/质量检查 | 先用中文写范围、风险、验证；按 Trellis 任务/spec/check 流程推进 |
 | Trellis + Grill | 新功能、跨模块重构、共享契约、数据源、存储、业务主链路、候选池、推理或生成链路，或方案需要反例拷问 | 先用 grill-me 把目标、边界、反例和取舍问清楚，再用 Trellis 执行 |
 | Grill | 用户要求“拷问我 / grill me / 这个方案对吗 / 判断方案”，或当前方案需要先判断是否成立 | 使用 grill-me 追问和压测决策；先把方案判断清楚，再决定是否进入 Plan 或 Trellis |
@@ -103,7 +103,7 @@ description: Use when 需要判断任务应直接言出法随执行、进入 Tre
 
 - Goal、In Scope、Out of Scope、Non-goals、Done Definition、Verification 必须用中文写给用户看。
 - 所有人可见 Todo、任务拆分、子任务说明、subagent 提示词、审计结论、复盘摘要必须中文。
-- `docs/superpowers/specs/` 或其他规格文档必须中文；如果模板是英文，保存前改成本仓库可读的中文。
+- `docs/brainstorming/specs/` 或其他规格文档必须中文；如果模板是英文，保存前改成本仓库可读的中文。
 - Trellis + Grill 里也不是自动拆 subagent；只有用户明确允许代理或并行代理，且任务天然独立时才拆。
 
 ## 中文任务上下文

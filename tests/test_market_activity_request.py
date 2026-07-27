@@ -377,6 +377,46 @@ class MarketActivityRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.pool_snapshot"], "tushare.limit_list_ths")
 
+    def test_collect_market_activity_pool_request_bundle_replaces_partial_snapshot_from_legacy_sources(self):
+        timer = _TimerStub()
+        emitted = []
+        legacy_calls = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-07-13",
+            get_limit_up_pool=lambda date_str: legacy_calls.append(("limit_up", date_str))
+            or (_FrameStub([{"代码": "000001", "名称": "平安银行", "所属行业": "银行", "涨停统计": "首板"}]), {"000001"}),
+            get_limit_down_pool=lambda date_str: legacy_calls.append(("limit_down", date_str))
+            or (_FrameStub([{"代码": "000002", "名称": "万科A", "所属行业": "地产"}]), {"000002"}),
+            fetch_market_activity_df=lambda: (_ for _ in ()).throw(RuntimeError("market breadth unavailable")),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [],
+                    "dt_pool": [{"代码": "000002", "名称": "万科A", "所属行业": "地产"}],
+                    "limit_up_codes": set(),
+                    "limit_down_codes": {"000002"},
+                    "market_stats": {"up_count": 801, "down_count": 4683, "zt_count": 0, "dt_count": 1},
+                    "provider": "tushare.limit_list_ths",
+                    "fallback_used": False,
+                    "source_status": "partial",
+                    "source_error": "limit-up retry unavailable",
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(
+            legacy_calls,
+            [("limit_up", "20260713"), ("limit_down", "20260713")],
+        )
+        self.assertEqual([row["代码"] for row in result["results"]["zt_pool"]], ["000001"])
+        self.assertEqual([row["代码"] for row in result["results"]["dt_pool"]], ["000002"])
+        self.assertEqual(result["results"]["market_stats"]["zt_count"], 1)
+        self.assertEqual(result["results"]["market_stats"]["dt_count"], 1)
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.pool_snapshot"], "akshare.limit_up_down+akshare.stock_market_activity_legu")
+
     def test_collect_market_activity_pool_request_bundle_uses_legacy_sources_when_registry_empty(self):
         timer = _TimerStub()
         emitted = []

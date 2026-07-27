@@ -2,6 +2,17 @@
 
 The quality you have the fast you go, the only way to go fast is to go well.
 
+# 问题定义优先
+
+大模型时代，把“定义问题的能力 > 提问能力 > 解决问题能力”理解为工作顺序，不是轻视执行和验证。
+
+- 先定义需要改善的决定，不先选择工具、模型或答案。
+- 问题定义必须写清目标、事实边界、完成证据、不可改变项和验证方式。
+- 只询问会实质改变判断或实现的关键未知；仓库、事实源或既有文档能回答的先自行核实。
+- 解决方案以最小可验证闭环为准。有效价值取决于问题重要性、定义质量、解决质量和验证可信度，任何一项接近零，整体价值都接近零。
+- 验证失败时，先检查事实和问题定义，再修改方案；不得在错误问题上继续堆叠答案。
+- 不从“AI 能做什么”出发，先问“哪个重要决定仍然容易做错、为什么会错、怎样证明它变好了”。
+
 # Python 运行版本硬约束
 
 本仓库所有 Python 命令、测试、脚本、日报生成、数据源检查和临时诊断都必须使用 Python 3.14。
@@ -238,7 +249,7 @@ During review, if a PR materially exceeds the current Done Definition, request a
 
 默认先走 Plan；简单明确的任务言出法随，直接完成。只有任务复杂度、风险和影响范围真的需要，才升级到 Trellis；方案不稳、判断困难或业务口径需要压测时，再叠加 grill-me。
 
-- Plan：小任务、单文件、明确 bug、小文案/规则、可直接验证。内部圈定目标、范围、非目标和验证方式后直接做；不创建 Trellis 任务，不启动 Superpowers，不写规格文档，不拆 subagent。
+- Plan：小任务、单文件、明确 bug、小文案/规则、可直接验证。内部圈定目标、范围、非目标和验证方式后直接做；不创建 Trellis 任务，不写规格文档，不拆 subagent。
 - Trellis：多文件但边界清楚、局部逻辑、沿用现有模式的扩展，或需要项目规范、任务记录、知识沉淀和质量检查的任务。先用中文简述范围、风险和验证方式，再按 Trellis 任务/spec/check 流程推进。
 - Trellis + Grill：新功能、跨模块重构、共享契约、数据源、存储、业务主链路、候选池、推理或生成链路等高风险任务；或方案本身需要反例拷问、边界压测、术语统一。先用 grill-me 把决策问清楚，再用 Trellis 落任务、规格、执行和检查。
 - Grill：用户明确要求拷问、评估方案、判断方案是否正确，或当前方案虽然要做但边界明显不稳。Grill 是决策拷问，不是单独的执行流程；拷问后按 Plan 或 Trellis 推进。
@@ -251,11 +262,10 @@ During review, if a PR materially exceeds the current Done Definition, request a
 - 一个请求包含多个目标、任务大小不明、影响范围不清，或用户问“应该怎么做”时，自动先按 task-mode 拆分并给每个子任务标模式。
 - 进入 Trellis / Trellis + Grill，或用户明确允许 subagent 时，自动带入中文任务上下文：模式、目标、范围、非目标、验证、限制、输出要求。
 
-Superpowers 本地覆写摘要：
+头脑风暴本地口径：
 
-- 默认不进入完整 Superpowers 链路；本项目日常开发用 Plan、Trellis 和 grill-me 完成。
-- 只有用户明确点名 Superpowers，或当前任务是在维护 Superpowers 相关 skill / 文档 / 集成时，才启用对应 Superpowers 流程。
-- 如果 Superpowers 自动触发会扩大当前请求范围，按本节的 Plan / Trellis / Grill 分流优先。
+- 用户明确要求头脑风暴，或关键设计取舍会实质改变结果时，使用独立的 `brainstorming` skill。
+- 头脑风暴只负责把目标、边界、反例和取舍讨论清楚；设计获确认后，回到本节的 Plan / Trellis / Grill 分流继续执行。
 - 非用户明确要求，不默认创建 worktree；已经在原生隔离工作区内时，不再叠加 `git worktree add`。
 - spec / plan 可以落盘，但提交到 git 前必须问用户。
 - subagent 只有用户明确允许代理或并行时才用；子代理基于具体 commit 工作时，必须创建分支，不要裸切到提交。

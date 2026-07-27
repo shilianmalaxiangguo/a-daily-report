@@ -17,6 +17,8 @@ from report.elimination_tournament import elimination_tournament_html_path
 from report.elimination_tournament import render_elimination_tournament_html
 from report.elimination_tournament import render_sector_capital_preflight_html
 from report.elimination_tournament import sector_capital_preflight_html_path
+from report.elimination_tournament import _normalize_preflight_payload
+from report.elimination_tournament import _sync_preflight_final_action_layer
 
 
 def _embedded_json_payload(rendered_html, script_id):
@@ -104,6 +106,36 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
                 },
             ],
         }
+
+    def test_preflight_payload_rejects_non_tier_final_action_everywhere(self):
+        target = {"name": "长电科技", "code": "600584", "sector": "半导体"}
+        for position_pct in (33, 40, 60, 75, None):
+            with self.subTest(position_pct=position_pct):
+                final_action = {
+                    "label": "50%条件执行",
+                    "target": target,
+                    "reason": "旧文案不能替代结构化仓位",
+                }
+                if position_pct is not None:
+                    final_action["position_pct"] = position_pct
+                payload = _normalize_preflight_payload(
+                    {
+                        "schema_version": "sector_capital_preflight.v1",
+                        "final_action": final_action,
+                        "layers": [],
+                    }
+                )
+
+                self.assertEqual(payload["final_action"]["position_pct"], 0)
+                self.assertEqual(payload["final_action"]["target"], {})
+                self.assertEqual(payload["final_action"]["label"], "0%不参与")
+                self.assertTrue(
+                    all(row["action"] != "允许进入执行窗口" for row in payload["decision_list"])
+                )
+                self.assertNotEqual(
+                    payload["tplus_rehearsal"]["tplus1"]["participation_qualification"],
+                    "有条件参与",
+                )
 
     def test_payload_has_fixed_layers_and_self_consistent_counts(self):
         payload = build_elimination_tournament_payload(
@@ -227,6 +259,138 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
         self.assertEqual(final_layer["entries"][0]["stock_label"], "无执行对象")
         self.assertIn("最终没有新增参与对象", final_layer["entries"][0]["reason"])
         self.assertIn("过程样本", final_layer["note"])
+
+    def test_non_tier_final_position_does_not_survive_tournament(self):
+        target = {"name": "和远气体", "code": "002971", "sector": "化工原料"}
+        for position_pct in (33, 75, None):
+            with self.subTest(position_pct=position_pct):
+                workflow = self._workflow()
+                workflow["final"] = {
+                    "execution_object": target,
+                    "position_pct": position_pct,
+                    "action_text": "旧文案不能替代结构化仓位",
+                    "source_node": "N8",
+                }
+                payload = build_elimination_tournament_payload(
+                    trade_date="2026-07-19",
+                    variant="replay",
+                    selection_workflow=workflow,
+                    final_target_resolution={
+                        "new_entry_target": target,
+                        "display_target": target,
+                        "capital_priority_decision": {
+                            "capital_priority": "new_entry",
+                        },
+                    },
+                    position_decision={"target_position_pct": position_pct},
+                )
+
+                account_layer = next(
+                    layer for layer in payload["layers"] if layer["id"] == "account_execution"
+                )
+                final_layer = payload["layers"][-1]
+
+                self.assertEqual(payload["final_action"]["label"], "0%不参与")
+                self.assertEqual(payload["final_action"]["position_pct"], 0)
+                self.assertEqual(payload["final_action"]["target"], {})
+                self.assertEqual(account_layer["survivor_count"], 0)
+                self.assertEqual(final_layer["survivor_count"], 0)
+
+    def test_same_stock_t_zero_increment_does_not_create_b1(self):
+        target = {"name": "和远气体", "code": "002971", "sector": "化工原料"}
+        payload = build_elimination_tournament_payload(
+            trade_date="2026-07-19",
+            variant="replay",
+            selection_workflow=self._workflow(),
+            final_target_resolution={
+                "new_entry_target": target,
+                "display_target": target,
+                "capital_priority_decision": {
+                    "capital_priority": "same_stock_t",
+                    "reason": "同股旧仓已满足当前计划总档",
+                },
+                "account_exposure_plan": {
+                    "schema_version": "position_tier_exposure.v2",
+                    "position_fact_status": "confirmed",
+                    "old_position_pct": 50,
+                    "planned_new_entry_pct": 50,
+                    "new_entry_pct": 0,
+                    "same_stock_target": True,
+                    "same_stock_t": False,
+                },
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        self.assertEqual(payload["final_action"]["label"], "0%不参与")
+        self.assertEqual(payload["final_action"]["position_pct"], 0)
+        self.assertEqual(payload["final_action"]["target"], {})
+        self.assertEqual(payload["layers"][-1]["survivor_count"], 0)
+
+    def test_tournament_prefers_v2_current_increment_over_planned_total_tier(self):
+        target = {"name": "和远气体", "code": "002971", "sector": "化工原料"}
+        workflow = self._workflow()
+        workflow["final"] = {
+            "execution_object": target,
+            "position_pct": 100,
+            "action_text": "2x计划总档",
+            "source_node": "N8",
+        }
+        payload = build_elimination_tournament_payload(
+            trade_date="2026-07-19",
+            variant="replay",
+            selection_workflow=workflow,
+            final_target_resolution={
+                "new_entry_target": target,
+                "display_target": target,
+                "capital_priority_decision": {
+                    "capital_priority": "same_stock_t",
+                    "reason": "旧仓已有1x，只新增B2对应的1x",
+                },
+                "account_exposure_plan": {
+                    "schema_version": "position_tier_exposure.v2",
+                    "position_fact_status": "confirmed",
+                    "old_position_pct": 50,
+                    "planned_new_entry_pct": 100,
+                    "new_entry_pct": 50,
+                    "same_stock_target": True,
+                    "same_stock_t": True,
+                },
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        self.assertEqual(payload["final_action"]["label"], "50%条件执行")
+        self.assertEqual(payload["final_action"]["position_pct"], 50)
+        self.assertEqual(payload["final_action"]["target"]["code"], "002971")
+        self.assertEqual(payload["layers"][-1]["survivor_count"], 1)
+
+    def test_preflight_final_layer_does_not_default_non_tier_action_to_b1(self):
+        target = {"name": "和远气体", "code": "002971", "sector": "化工原料"}
+        layers = [
+            {
+                "id": "price_action",
+                "survivors": [{"stock": target, "status": "survived"}],
+                "entries": [{"stock": target, "status": "survived"}],
+            },
+            {
+                "id": "final_action",
+                "input_count": 1,
+                "survivor_count": 1,
+                "survivors": [{"stock": target, "status": "final_action"}],
+                "entries": [{"stock": target, "status": "final_action"}],
+            },
+        ]
+        for position_pct in (33, 75, None):
+            with self.subTest(position_pct=position_pct):
+                final_action = {"target": target, "label": "50%条件执行"}
+                if position_pct is not None:
+                    final_action["position_pct"] = position_pct
+                synced = _sync_preflight_final_action_layer(layers, final_action)
+                final_layer = next(layer for layer in synced if layer["id"] == "final_action")
+
+                self.assertEqual(final_layer["survivor_count"], 0)
+                self.assertEqual(final_layer["survivors"], [])
 
     def test_final_layer_keeps_previous_round_inputs_visible_when_action_exists(self):
         workflow = self._workflow()
@@ -909,6 +1073,196 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertIn("尚未证明它就是该板块锚/龙头", entry["reason"])
         self.assertIn("涨停或热榜本身只作线索", entry["elimination_basis"])
 
+    def test_sector_capital_preflight_routes_limit_down_anchor_to_risk_review_first(self):
+        source = build_elimination_tournament_payload(
+            trade_date="2026-07-16",
+            variant="live",
+            selection_workflow={
+                "schema_version": "selection_workflow.v1",
+                "target_date": "2026-07-16",
+                "final": {
+                    "execution_object": {},
+                    "position_pct": 0,
+                    "action_text": "0%不参与",
+                    "source_node": "N8",
+                },
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "华天科技", "code": "002185", "sector": "半导体"},
+                        "candidate_origin": "sector_capital_carrier_v1",
+                        "source_pools": ["sector_capital_carrier_strategy", "hot_rank", "turnover"],
+                        "entered_reason": "半导体进入板块候选；个股证据：热榜关注、容量成交",
+                        "sector_role": "板块锚",
+                        "reversal_decision": "可作为主对象",
+                        "same_day_quote": {
+                            "stock_code": "002185",
+                            "name": "华天科技",
+                            "change_pct": -10.0,
+                            "limit_status": "跌停",
+                        },
+                        "price_action_block_reason": "同日跌幅-10.00%，按跌停/接近跌停处理",
+                        "brooks_price_action_judge": {
+                            "status": "risk_first",
+                            "verdict": "跌停风险优先",
+                            "participation_effect": "只按跌停反包专项复核，不新增资格",
+                        },
+                    }
+                ],
+            },
+        )
+        sector_entry = dict(next(layer for layer in source["layers"] if layer["id"] == "sector")["entries"][0])
+        stale_positive_entry = {
+            **sector_entry,
+            "status": "survived",
+            "reason": "旧载荷仍保留正向身份",
+            "next_basis": "进入下一层",
+            "elimination_basis": "",
+            "sector_role": "板块锚",
+            "reversal_decision": "可作为主对象",
+        }
+        for layer in source["layers"]:
+            if layer["id"] in {"sector_role", "leader_reverse", "price_action"}:
+                layer["entries"] = [dict(stale_positive_entry)]
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-07-16",
+            variant="live",
+            elimination_tournament_payload=source,
+        )
+        by_id = {layer["id"]: layer for layer in payload["layers"]}
+        market_entry = by_id["market_capital_structure"]["entries"][0]
+
+        self.assertEqual(market_entry["stock_label"], "华天科技(002185)")
+        self.assertEqual(market_entry["status"], "eliminated")
+        self.assertIn("跌停", market_entry["reason"])
+        self.assertIn("只作风险复核", market_entry["reason"])
+        self.assertNotIn("进入板块资金扩散层", market_entry["next_basis"])
+        self.assertEqual(by_id["sector_capital_diffusion"]["input_count"], 0)
+        self.assertEqual(by_id["capital_carrier"]["input_count"], 0)
+        self.assertEqual(by_id["carrier_role"]["input_count"], 0)
+        self.assertEqual(by_id["quant_trace"]["input_count"], 0)
+        self.assertEqual(by_id["price_action"]["input_count"], 0)
+        self.assertTrue(
+            all(
+                layer["input_count"] == 0
+                and layer["eliminated_count"] == 0
+                and layer["survivor_count"] == 0
+                for layer in payload["layers"][1:]
+            )
+        )
+        self.assertTrue(
+            all(
+                not any(entry.get("stock_label") == "华天科技(002185)" for entry in layer.get("entries") or [])
+                for layer in payload["layers"][1:]
+            )
+        )
+
+    def test_sector_capital_preflight_rechecks_limit_down_risk_in_modern_saved_layers(self):
+        stale_entry = {
+            "stock": {"name": "华天科技", "code": "002185", "sector": "半导体"},
+            "stock_label": "华天科技(002185)",
+            "status": "survived",
+            "reason": "旧载荷仍保留正向身份",
+            "next_basis": "进入下一层",
+            "elimination_basis": "",
+            "sector_role": "板块锚",
+            "reversal_decision": "可作为主对象",
+            "same_day_quote": {
+                "stock_code": "002185",
+                "name": "华天科技",
+                "change_pct": -10.0,
+                "limit_status": "跌停",
+            },
+        }
+        stale_payload = {
+            "schema_version": "sector_capital_preflight.v1",
+            "trade_date": "2026-07-16",
+            "variant": "frozen",
+            "final_action": {"label": "0%不参与", "position_pct": 0, "target": {}},
+            "layers": [
+                {
+                    "id": "market_capital_structure",
+                    "title": "市场资金结构",
+                    "entries": [dict(stale_entry)],
+                },
+                {
+                    "id": "sector_capital_diffusion",
+                    "title": "板块资金扩散",
+                    "entries": [dict(stale_entry)],
+                },
+                {
+                    "id": "capital_carrier",
+                    "title": "板块内资金载体",
+                    "entries": [dict(stale_entry)],
+                },
+            ],
+        }
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-07-16",
+            variant="frozen",
+            sector_capital_preflight=stale_payload,
+        )
+        by_id = {layer["id"]: layer for layer in payload["layers"]}
+        market_entry = by_id["market_capital_structure"]["entries"][0]
+
+        self.assertEqual(market_entry["status"], "eliminated")
+        self.assertEqual(market_entry["sector_role"], "风险复核样本")
+        self.assertIn("只作风险复核", market_entry["reason"])
+        self.assertEqual(by_id["sector_capital_diffusion"]["input_count"], 0)
+        self.assertEqual(by_id["capital_carrier"]["input_count"], 0)
+
+    def test_sector_capital_preflight_keeps_complete_limit_down_reversal_plan(self):
+        source = build_elimination_tournament_payload(
+            trade_date="2026-07-16",
+            variant="live",
+            selection_workflow={
+                "schema_version": "selection_workflow.v1",
+                "target_date": "2026-07-16",
+                "final": {
+                    "execution_object": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                    "position_pct": 50,
+                    "action_text": "50%条件执行",
+                    "source_node": "N8",
+                },
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                        "candidate_origin": "sector_first",
+                        "source_pools": ["sector_capital_carrier_strategy", "hot_rank"],
+                        "status": "最终执行对象",
+                        "sector_role": "板块锚",
+                        "reversal_decision": "可作为主对象",
+                        "same_day_quote": {"change_pct": -10.0, "limit_status": "跌停"},
+                        "execution_eligibility": "跌停反包专项",
+                        "participation_window": "09:50-10:10跌停反包确认",
+                        "cancellation": "继续封死或站不回VWAP就不参与",
+                        "fallback_state": "不满足回到0%不参与",
+                        "limit_down_reversal_plan": {
+                            "status": "complete",
+                            "contract_text": "跌停反包专项 / 09:50-10:10跌停反包确认 / 继续封死或站不回VWAP就不参与 / 不满足回到0%不参与",
+                            "participation_window": "09:50-10:10跌停反包确认",
+                            "cancellation": "继续封死或站不回VWAP就不参与",
+                            "fallback_state": "不满足回到0%不参与",
+                        },
+                    }
+                ],
+            },
+        )
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-07-16",
+            variant="live",
+            elimination_tournament_payload=source,
+        )
+        market_entry = next(layer for layer in payload["layers"] if layer["id"] == "market_capital_structure")[
+            "entries"
+        ][0]
+
+        self.assertEqual(market_entry["status"], "survived")
+        self.assertNotEqual(market_entry.get("sector_role"), "风险复核样本")
+        self.assertNotIn("只作风险复核", market_entry["reason"])
+
     def test_sector_capital_preflight_uses_decision_day_probe_evidence_for_power_second_wave(self):
         source = build_elimination_tournament_payload(
             trade_date="2026-06-08",
@@ -1483,6 +1837,29 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertEqual(final_layer["input_count"], 0)
         self.assertEqual(final_layer["survivor_count"], 0)
         self.assertEqual(payload["tplus_rehearsal"]["tplus1"]["participation_qualification"], "只观察承接，不新增参与")
+
+    def test_sector_capital_preflight_tplus_rehearsal_keeps_confirmed_old_position_visible(self):
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-07-15",
+            variant="live",
+            source_payloads={
+                "final_target_resolution": {
+                    "existing_position_target": {
+                        "name": "长电科技",
+                        "code": "600584",
+                        "has_position": True,
+                    },
+                    "account_exposure_plan": {"position_fact_status": "confirmed"},
+                    "capital_priority_decision": {"capital_priority": "wait"},
+                }
+            },
+            elimination_tournament_payload=self._payload(),
+        )
+
+        action = payload["tplus_rehearsal"]["tplus1"]["action"]
+
+        self.assertEqual(action, "不新增参与，只按旧仓预案处理")
+        self.assertNotIn("空仓", action)
 
     def test_sector_capital_preflight_tplus_rehearsal_uses_t0_market_and_sector_facts(self):
         payload = build_sector_capital_preflight_payload(

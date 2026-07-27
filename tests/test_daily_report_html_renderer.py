@@ -241,7 +241,7 @@ def _view():
                     "stock_rows": [],
                     "rule_rows": [
                         {"label": "默认节奏", "text": "没有日内强核心承接，不新增参与。"},
-                        {"label": "例外条件", "text": "强核心全天强，最多25%试仓。"},
+                        {"label": "强核心复核", "text": "强核心全天强，也只做尾盘复核，不新增参与。"},
                     ],
                 },
             },
@@ -319,6 +319,7 @@ class DailyReportHtmlRendererTest(unittest.TestCase):
         self.assertIn('<div class="reader-table is-two-column"><table>', html)
         self.assertIn(".reader-table.is-two-column table", html)
         self.assertIn("明日动作", html)
+        self.assertIn("明日新仓", html)
         self.assertIn("观察对象", html)
         self.assertIn('<code class="stock-ref">豫能控股(001896)</code>', html)
         self.assertNotIn("<td>参与对象</td>", html)

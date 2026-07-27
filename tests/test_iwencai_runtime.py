@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from input.iwencai_runtime import (
+    _build_major_index_bar_fallback,
     _default_fetch_daily_price_bars,
     get_major_indices_from_iwencai,
     get_sector_change_from_iwencai,
@@ -124,7 +125,32 @@ class IwencaiRuntimeTest(unittest.TestCase):
         self.assertEqual(set(result.keys()), {"上证指数", "深证成指", "创业板指"})
         self.assertEqual(result["上证指数"]["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["上证指数"]["change_pct"], (3240 - 3210) / 3210 * 100)
+        self.assertEqual(result["上证指数"]["pre_close"], 3210)
         self.assertEqual(result["创业板指"]["trade_date"], "2026-04-22")
+
+    def test_major_index_bar_fallback_rejects_previous_trade_date(self):
+        result = _build_major_index_bar_fallback(
+            target_date="2026-04-22",
+            fetch_daily_price_bars_fn=lambda *args, **kwargs: [
+                {"date": "2026-04-20", "close": 3190},
+                {"date": "2026-04-21", "close": 3210, "pre_close": 3190},
+            ],
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertEqual(result, {})
+
+    def test_major_index_bar_fallback_preserves_source_pre_close(self):
+        result = _build_major_index_bar_fallback(
+            target_date="2026-04-22",
+            fetch_daily_price_bars_fn=lambda *args, **kwargs: [
+                {"date": "2026-04-21", "close": 3210},
+                {"date": "2026-04-22", "close": 3240, "pre_close": 3208},
+            ],
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertEqual(result["上证指数"]["pre_close"], 3208)
 
     def test_major_indices_uses_tushare_price_bars_without_calling_iwencai_when_skill_version_low(self):
         bar_map = {
@@ -292,7 +318,23 @@ class IwencaiRuntimeTest(unittest.TestCase):
         self.assertEqual(iwencai_calls, [])
         self.assertEqual(akshare_calls, [])
         self.assertEqual(result["data_source"], "tushare.index_daily")
+        self.assertEqual(result["trade_date"], "2026-04-27")
+        self.assertEqual(result["close"], 6296.45)
+        self.assertEqual(result["pre_close"], 6271.17)
         self.assertAlmostEqual(result["change_pct"], (6296.45 - 6271.17) / 6271.17 * 100)
+
+    def test_wind_a_rejects_previous_trade_date_from_tushare(self):
+        with patch.dict(os.environ, {"IWENCAI_API_KEY": ""}, clear=False):
+            result = get_wind_a_from_iwencai(
+                target_date="2026-04-27",
+                fetch_daily_price_bars_fn=lambda *args, **kwargs: [
+                    {"date": "2026-04-25", "close": 6250.0},
+                    {"date": "2026-04-26", "close": 6271.17},
+                ],
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+        self.assertEqual(result, {"price": 0, "change_pct": 0})
 
     def test_turnover_rank_uses_eastmoney_primary_with_sector(self):
         def fake_eastmoney_urlopen(request, timeout=30):

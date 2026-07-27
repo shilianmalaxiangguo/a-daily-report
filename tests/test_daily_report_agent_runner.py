@@ -406,7 +406,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
                 "position_inferred_rendered_as_confirmed_holding",
             )
 
-    def test_runner_normalizes_inferred_position_before_injected_builder(self):
+    def test_runner_normalizes_inferred_position_as_simulated_old_position_before_injected_builder(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             audit_calls = []
@@ -424,22 +424,31 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
             def build_outputs(data, target_date, **kwargs):
                 summary = data["personal_position_context"]["existing_position_summary"]
-                self.assertFalse(summary["has_position"])
-                self.assertTrue(summary["has_pending_position"])
+                self.assertTrue(summary["has_position"])
+                self.assertFalse(summary["has_pending_position"])
                 self.assertTrue(summary["inferred_from_previous_report"])
-                self.assertEqual(summary["position"], 0.0)
-                self.assertEqual(summary["position_pct"], 0.0)
+                self.assertEqual(summary["position"], 50.0)
+                self.assertEqual(summary["position_pct"], 50.0)
+                self.assertEqual(summary["default_position_pct"], 50.0)
                 return {"full": "# report"}
 
             def render_position_strategy(data, target_date, positions, **kwargs):
                 self.assertEqual(positions, [])
-                self.assertFalse(data["personal_position_context"]["existing_position_summary"]["has_position"])
+                self.assertTrue(data["personal_position_context"]["existing_position_summary"]["has_position"])
                 return "\n".join(
                     [
                         "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
                         "|------|------|----------|----------|-------------|------|",
-                        "| Td | 2026-05-24（周日） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | 未确认成交，不视为B1 | 只观察，不新增参与 |",
-                        "| Te | 2026-05-25（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |",
+                        "| Td | 2026-05-24（周日） | 报告日：旧仓进入复核：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                        "| Te | 2026-05-25（周一） | 只处理旧仓风险 | 长电科技(600584) | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |",
+                        "",
+                        "| 明日账户动作 | 结论 |",
+                        "|--------------|------|",
+                        "| 明日新仓 | 0%不参与 |",
+                        "| 旧仓事实 | 已确认持有长电科技(600584) |",
+                        "| 旧仓判断 | 事实不足 |",
+                        "| 旧仓动作 | 旧仓事实不足；先补持仓周期、失效线和原退出预案 |",
+                        "| 收盘目标仓位 | 待确认 |",
                         "",
                         "# 持仓策略",
                     ]
@@ -499,7 +508,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             self.assertEqual(audit_calls, [[], []])
             saved_report = Path(result["outputs"]["full"]).read_text(encoding="utf-8")
             self.assertIn("## 账户日序表", saved_report)
-            self.assertIn("前日报计划推定，待成交确认：长电科技(600584)", saved_report)
+            self.assertIn("报告日：旧仓进入复核：长电科技(600584)", saved_report)
 
     def test_runner_writes_error_artifacts_when_rendering_fails_without_live_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:

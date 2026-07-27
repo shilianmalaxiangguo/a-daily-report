@@ -68,6 +68,18 @@ class MarketOverviewNodesTest(unittest.TestCase):
         self.assertEqual(result["turnover_quality"], "待累计")
         self.assertEqual(result["turnover_quality_desc"], "成交量或涨跌家数数据不足，暂不判断成交量质量")
 
+    def test_evaluate_turnover_quality_accepts_turnover_data_and_root_breadth(self):
+        result = evaluate_turnover_quality(
+            {
+                "turnover_data": {"total_turnover_yi": 34660.27},
+                "up_count": 3200,
+                "down_count": 1800,
+            }
+        )
+
+        self.assertEqual(result["turnover_quality"], "做多放量")
+        self.assertEqual(result["turnover_quality_desc"], "成交量充沛且上涨家数占优，赚钱效应较强")
+
     def test_market_base_renders_etf_turnover_capacity_with_existing_25_day_metrics(self):
         rows = [
             {"trade_date": "2026-05-19", "etf_turnover_yi": 4672.8, "change_pct": "待累计", "covered_etf_count": 1518},
@@ -184,6 +196,75 @@ class MarketOverviewNodesTest(unittest.TestCase):
         self.assertIn("| ETF两市成交额 | 665.80亿 | 样本覆盖不足 |", rendered)
         self.assertNotIn("机构容量中性偏收缩 | 近5日", rendered)
         self.assertIn("| ETF容量协同 | 待复核 | ETF容量数据样本不足，暂不判断与其他市场指标的配合。 |", rendered)
+
+    def test_market_base_accepts_list_indices_and_turnover_data_snapshot_shape(self):
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-06-23",
+                "enabled_node_keys": ["header", "indices", "volume"],
+                "data": {
+                    "turnover_data": {
+                        "total_turnover_yi": 34660.27,
+                        "date": "2026-06-23",
+                    },
+                    "up_count": 3200,
+                    "down_count": 1800,
+                    "indices": [
+                        {
+                            "code": "000001",
+                            "latest_price": 4120.28,
+                            "source_change_pct": 0.93,
+                            "open": 4090.1,
+                            "high": 4133.097,
+                            "low": 4075.492,
+                            "close": 4120.28,
+                        },
+                        {
+                            "name": "深证成指",
+                            "value": 12500.5,
+                            "pct_chg": 1.26,
+                            "open": 12380.0,
+                            "high": 12560.0,
+                            "low": 12310.0,
+                            "close": 12500.5,
+                        },
+                        {
+                            "index_code": "399006",
+                            "price": 2688.81,
+                            "change_pct": -0.44,
+                            "open": 2701.0,
+                            "high": 2705.0,
+                            "low": 2679.0,
+                            "close": 2688.81,
+                        },
+                    ],
+                    "market_stats": {},
+                    "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                    "new_high_feedback": {"available": True, "all_a_share_pct": 3.2},
+                    "margin_pressure": {
+                        "available": True,
+                        "latest_pressure_label": "中性",
+                        "latest_margin_turnover_ratio_pct": 93.5,
+                        "latest_data_date": "2026-06-23",
+                        "rows": [
+                            {
+                                "trade_date": "2026-06-23",
+                                "margin_turnover_ratio_pct": 93.5,
+                                "pressure_label": "中性",
+                                "market_turnover_yi": 34660.27,
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 上证指数 | 4120.28 | +0.93% |", rendered)
+        self.assertIn("| 深证成指 | 12500.50 | +1.26% |", rendered)
+        self.assertIn("| 创业板指 | 2688.81 | -0.44% |", rendered)
+        self.assertIn("| 两市成交额 | 34660.27亿 |", rendered)
+        self.assertIn("| 成交量质量 | 做多放量 | - | 成交量充沛且上涨家数占优，赚钱效应较强 |", rendered)
 
 
 if __name__ == "__main__":

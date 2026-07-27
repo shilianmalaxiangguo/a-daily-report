@@ -148,6 +148,8 @@ def run(ctx):
                     "step0_action": inputs.get("step0_action", ""),
                     "final_gate": final_gate,
                     "mainline_name": mainline_name,
+                    "personal_position_context": inputs.get("personal_position_context", {}) or {},
+                    "existing_position_summary": inputs.get("existing_position_summary", {}) or {},
                     "mainline_label": (
                         build_front_mainline_label(
                             market_research_snapshot,

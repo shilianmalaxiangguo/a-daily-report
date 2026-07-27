@@ -1791,6 +1791,30 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertNotIn("分层参与", rendered)
         self.assertNotIn("买入后再用30分钟结构定止损", rendered)
 
+    def test_render_step0_follow_reminder_keeps_half_position_at_b1(self):
+        lines = render_step0_follow_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["reminder"],
+                "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
+
+    def test_render_step0_follow_reminder_keeps_two_b_for_full_position(self):
+        lines = render_step0_follow_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["reminder"],
+                "position_decision": {"signal_grade": "100", "target_position_pct": 100},
+            }
+        )
+
+        self.assertIn("B2只在确认后补到2x/100%", "\n".join(lines))
+
     def test_render_gem_breathing_sections(self):
         step2_lines = render_gem_breathing_step2_section(
             {

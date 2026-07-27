@@ -274,6 +274,32 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertIn("只保留观察", comparison["comparison"]["final_action"])
         self.assertIn("risk_price", comparison["new_target"]["missing_fields"])
 
+    def test_opportunity_comparison_preserves_simulated_old_position_fact(self):
+        comparison = build_opportunity_comparison(
+            old_position={
+                "name": "长电科技",
+                "code": "600584",
+                "has_position": True,
+                "has_pending_position": False,
+                "position": 50.0,
+                "position_pct": 50.0,
+                "position_source": "previous_report_target_default_1x",
+                "inferred_from_previous_report": True,
+                "summary": "持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓",
+            },
+            new_target={"name": "深科技", "code": "000021"},
+            requested_participation_pct=50,
+        )
+
+        old_position = comparison["old_position"]
+        self.assertTrue(old_position["has_position"])
+        self.assertFalse(old_position["has_pending_position"])
+        self.assertEqual(old_position["position"], 50.0)
+        self.assertEqual(old_position["position_pct"], 50.0)
+        self.assertEqual(old_position["position_source"], "previous_report_target_default_1x")
+        self.assertTrue(old_position["inferred_from_previous_report"])
+        self.assertIn("上一份日报明日标的默认1x旧仓", old_position["summary"])
+
     def test_opportunity_comparison_rejects_stretched_ma_risk_even_for_stronger_target(self):
         comparison = build_opportunity_comparison(
             old_position={

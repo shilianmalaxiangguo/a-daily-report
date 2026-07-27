@@ -6,7 +6,14 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
 from report.execution_wording import (
     PREMARKET_50_EXECUTION_TEXT,
     PREMARKET_50_TRIGGER_TEXT,
+    PREMARKET_FULL_EXECUTION_TEXT,
+    PREMARKET_FULL_TRIGGER_TEXT,
     SAME_STOCK_T_CONFIRMATION_CLAUSE,
+)
+from report.position_tier_contract import (
+    POSITION_TIER_B1_B2_PCT,
+    POSITION_TIER_B1_PCT,
+    normalize_planned_position_tier_pct,
 )
 
 
@@ -326,12 +333,7 @@ def _canonical_role_text(packet):
 
 
 def _canonical_role_for_action(role, position_pct):
-    if role == "执行对象":
-        return "执行对象"
-    try:
-        return "执行对象" if int(position_pct or 0) > 0 else "观察对象"
-    except (TypeError, ValueError):
-        return "观察对象"
+    return "执行对象" if _normalized_position_pct(position_pct) > 0 else "观察对象"
 
 
 def _with_role(target, role):
@@ -341,7 +343,14 @@ def _with_role(target, role):
     return payload
 
 
-def _two_layer_execution_target(two_layer_decision_payload=None):
+def _normalized_position_pct(value):
+    try:
+        return normalize_planned_position_tier_pct(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _two_layer_execution_decision(two_layer_decision_payload=None):
     payload = two_layer_decision_payload if isinstance(two_layer_decision_payload, dict) else {}
     front = payload.get("front_decision") if isinstance(payload.get("front_decision"), dict) else {}
     raw_target = front.get("execution_object")
@@ -351,10 +360,13 @@ def _two_layer_execution_target(two_layer_decision_payload=None):
     if not target:
         return {}
     identity = clean_text(front.get("execution_identity"))
-    position_plan = clean_text(front.get("position_plan"))
-    if identity != "明日执行对象" and position_plan != "50%条件执行":
+    position_pct = _normalized_position_pct(front.get("position_pct"))
+    if identity != "明日执行对象" or position_pct <= 0:
         return {}
-    return target
+    return {
+        "target": target,
+        "position_pct": position_pct,
+    }
 
 
 def _canonical_for_packet(
@@ -363,10 +375,10 @@ def _canonical_for_packet(
     position_decision=None,
     two_layer_decision_payload=None,
 ):
-    two_layer_target = _two_layer_execution_target(two_layer_decision_payload)
-    if two_layer_target:
+    two_layer_decision = _two_layer_execution_decision(two_layer_decision_payload)
+    if two_layer_decision:
         return (
-            _with_role(two_layer_target, "执行对象"),
+            _with_role(two_layer_decision["target"], "执行对象"),
             "two_layer_decision_payload.front_decision.execution_object",
             "执行对象",
         )
@@ -386,20 +398,26 @@ def _canonical_for_packet(
 def _position_pct(position_decision=None):
     if not isinstance(position_decision, dict):
         return 0
-    try:
-        value = str(position_decision.get("target_position_pct") or position_decision.get("position_pct") or 0)
-        return int(float(value.replace("%", "").strip() or 0))
-    except (TypeError, ValueError):
-        return 0
+    for key in ("target_position_pct", "position_pct"):
+        if key in position_decision:
+            return _normalized_position_pct(position_decision.get(key))
+    return 0
 
 
 def _final_action(position_decision=None, final_gate=None, final_target_resolution=None, two_layer_decision_payload=None):
-    two_layer_target = _two_layer_execution_target(two_layer_decision_payload)
-    if two_layer_target:
+    two_layer_decision = _two_layer_execution_decision(two_layer_decision_payload)
+    if two_layer_decision:
+        position_pct = two_layer_decision["position_pct"]
+        if position_pct == POSITION_TIER_B1_B2_PCT:
+            action = PREMARKET_FULL_EXECUTION_TEXT
+            reason = "双层决策已给出明日执行对象和2x/100%计划"
+        else:
+            action = PREMARKET_50_EXECUTION_TEXT
+            reason = "双层决策已给出明日执行对象和1x/50%计划"
         return {
-            "position_pct": 50,
-            "action": PREMARKET_50_EXECUTION_TEXT,
-            "reason": "双层决策已给出明日执行对象和50%条件执行条件",
+            "position_pct": position_pct,
+            "action": action,
+            "reason": reason,
         }
     pct = _position_pct(position_decision)
     gate = final_gate if isinstance(final_gate, dict) else {}
@@ -412,13 +430,17 @@ def _final_action(position_decision=None, final_gate=None, final_target_resoluti
         or (position_decision or {}).get("final_action")
         or (position_decision or {}).get("sizing_reason")
     )
-    if priority_value == "same_stock_t":
-        if pct <= 0:
-            action = "只观察，不新增参与"
-        elif "B1" not in action:
+    if pct <= 0:
+        action = "只观察，不新增参与"
+    elif priority_value == "same_stock_t":
+        if "B1" not in action:
             action = SAME_STOCK_T_CONFIRMATION_CLAUSE
     elif not action:
-        action = "只观察，不新增参与" if pct <= 0 else PREMARKET_50_TRIGGER_TEXT
+        action = (
+            PREMARKET_FULL_TRIGGER_TEXT
+            if pct == POSITION_TIER_B1_B2_PCT
+            else PREMARKET_50_TRIGGER_TEXT
+        )
     return {
         "position_pct": pct,
         "action": action,
@@ -460,10 +482,7 @@ def _workflow_final(workflow):
 
 def _workflow_position_pct(workflow):
     final = _workflow_final(workflow)
-    try:
-        return int(float(str(final.get("position_pct") or 0).replace("%", "").strip() or 0))
-    except (TypeError, ValueError):
-        return 0
+    return _normalized_position_pct(final.get("position_pct"))
 
 
 def _workflow_final_target(workflow):
@@ -480,7 +499,8 @@ def _workflow_controls_derivation(workflow):
 def _packet_from_selection_workflow(workflow, target_date="", bayesian_diagnosis=None):
     final = _workflow_final(workflow)
     position_pct = _workflow_position_pct(workflow)
-    canonical = stock_payload(final.get("execution_object"))
+    raw_canonical = stock_payload(final.get("execution_object"))
+    canonical = raw_canonical if position_pct > 0 else {}
     canonical_role = "执行对象" if canonical and position_pct > 0 else "无"
     if canonical:
         canonical["role"] = canonical_role
@@ -514,7 +534,11 @@ def _packet_from_selection_workflow(workflow, target_date="", bayesian_diagnosis
         "canonical_role": canonical_role,
         "final_action": {
             "position_pct": position_pct,
-            "action": clean_text(final.get("action_text"), "0%不参与"),
+            "action": (
+                clean_text(final.get("action_text"), "0%不参与")
+                if position_pct > 0
+                else "0%不参与"
+            ),
             "reason": "来自 selection_workflow.v1 的 N8 仓位与执行条件",
         },
         "steps": steps,
@@ -583,9 +607,6 @@ def _render_bayesian_diagnosis_lines(packet):
 
 
 def _position_display_text(position_pct, action_text=""):
-    action = clean_text(action_text, "")
-    if "满仓" in action:
-        return "满仓"
     pct = clean_text(position_pct, "0").replace("％", "%")
     if pct.endswith("%"):
         return pct
@@ -781,14 +802,7 @@ def full_ascii_from_packet(packet):
 
 
 def _normalize_cached_full_ascii_lines(lines):
-    normalized = []
-    for line in lines or []:
-        text = str(line)
-        if "动作=满仓条件执行" in text:
-            text = text.replace("仓位=50% 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
-            text = text.replace("仓位=50 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
-        normalized.append(text)
-    return normalized
+    return [str(line) for line in lines or []]
 
 
 def compact_section(packet, *, heading="### 最终标的传导链"):

@@ -27,6 +27,8 @@
 	      --accent-soft-text: #7d231b;
 	      --signal-extreme: #F92722;
 	      --signal-extreme-text: #FFFFFF;
+	      --signal-ice: #2364aa;
+	      --signal-deep-ice: #12365a;
 	      --signal-green: #176e54;
 	      --signal-green-soft: rgba(224, 245, 235, 0.8);
 	      --reader-cream: #fffaf3;
@@ -35,6 +37,8 @@
 	      --editor-width: 1120px;
 	      --outline-width: 284px;
 	      --outline-rail-width: calc(var(--outline-width) + 36px);
+	      --outline-toggle-rail-width: 64px;
+	      --outline-toggle-size: 44px;
 	      color-scheme: light;
 	      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Avenir Next", -apple-system, BlinkMacSystemFont, sans-serif;
 	      letter-spacing: 0;
@@ -72,8 +76,8 @@
 		      isolation: isolate;
 		    }
 
-		    .outline-sidebar {
-		      position: fixed;
+	    .outline-sidebar {
+	      position: fixed;
 		      top: 0;
 		      left: 0;
 		      z-index: 2;
@@ -81,13 +85,14 @@
 		      height: 100vh;
 		      padding: 18px 0 18px 18px;
 		      border-right: 1px solid rgba(255, 255, 255, 0.64);
-		      background: var(--reader-sidebar);
+	      background: var(--reader-sidebar);
+	      transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
 	      box-shadow:
 	        16px 0 46px rgba(104, 56, 24, 0.06),
 	        inset 1px 0 0 rgba(255, 255, 255, 0.74);
 	    }
 
-		    .outline-sticky {
+	    .outline-sticky {
 		      position: relative;
 		      height: calc(100vh - 36px);
 		      overflow-y: auto;
@@ -101,6 +106,78 @@
 	      box-shadow:
 	        0 18px 44px rgba(104, 56, 24, 0.07),
 	        inset 0 1px 0 rgba(255, 255, 255, 0.86);
+	      transition:
+	        opacity 160ms cubic-bezier(0.16, 1, 0.3, 1),
+	        transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+	        visibility 160ms linear;
+	    }
+
+	    .outline-toggle {
+	      position: absolute;
+	      top: 18px;
+	      right: 10px;
+	      z-index: 1;
+	      display: inline-grid;
+	      place-items: center;
+	      width: var(--outline-toggle-size);
+	      height: var(--outline-toggle-size);
+	      padding: 0;
+	      border: 1px solid rgba(108, 69, 55, 0.18);
+	      border-radius: 50%;
+	      background: rgba(255, 252, 246, 0.82);
+	      color: var(--reader-muted);
+	      cursor: pointer;
+	      box-shadow:
+	        0 7px 16px rgba(104, 56, 24, 0.08),
+	        inset 0 1px 0 rgba(255, 255, 255, 0.82);
+	      transition:
+	        color 160ms cubic-bezier(0.16, 1, 0.3, 1),
+	        background 160ms cubic-bezier(0.16, 1, 0.3, 1),
+	        transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+	    }
+
+	    .outline-toggle:hover {
+	      background: #fffaf3;
+	      color: var(--accent-red);
+	      transform: translateY(-1px);
+	    }
+
+	    .outline-toggle:active {
+	      transform: translateY(0) scale(0.96);
+	    }
+
+	    .outline-toggle:focus-visible {
+	      outline: 2px solid var(--accent-red);
+	      outline-offset: 3px;
+	    }
+
+	    .outline-toggle-icon {
+	      display: block;
+	      width: 9px;
+	      height: 9px;
+	      border-right: 2px solid currentColor;
+	      border-bottom: 2px solid currentColor;
+	      transform: rotate(135deg) translate(-1px, -1px);
+	      transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+	    }
+
+	    .bear-shell.is-outline-collapsed .outline-sidebar {
+	      transform: translateX(calc(-1 * (var(--outline-rail-width) - var(--outline-toggle-rail-width))));
+	    }
+
+	    .bear-shell.is-outline-collapsed .outline-sticky {
+	      opacity: 0;
+	      pointer-events: none;
+	      transform: translateX(-12px);
+	      visibility: hidden;
+	    }
+
+	    .bear-shell.is-outline-collapsed .editor-pane {
+	      margin-left: var(--outline-toggle-rail-width);
+	    }
+
+	    .bear-shell.is-outline-collapsed .outline-toggle-icon {
+	      transform: rotate(-45deg) translate(-1px, -1px);
 	    }
 
     .window-controls {
@@ -213,6 +290,12 @@
 	      max-width: var(--editor-width);
 	      margin: 0 auto;
 	      padding: 38px clamp(18px, 3vw, 34px) 88px;
+	    }
+
+	    @media (min-width: 761px) {
+	      .bear-shell.is-outline-collapsed .reader-document {
+	        max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width));
+	      }
 	    }
 
 	    .reader-header {
@@ -510,11 +593,281 @@
       font-size: 1em;
     }
 
-    .markdown-body pre.fenced-code::before {
-      content: "\200B";
-    }
+	    .markdown-body pre.fenced-code::before {
+	      content: "\200B";
+	    }
 
-    .position-timeline-shell {
+	    .tomorrow-action-calendar {
+	      width: 100%;
+	      max-width: 100%;
+	      min-width: 0;
+	      margin: 0 0 20px;
+	      padding: 16px;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 86%, #ffffff);
+	      border-radius: 8px;
+	      background: rgba(255, 255, 255, 0.72);
+	      box-sizing: border-box;
+	    }
+
+	    .tomorrow-action-calendar-header {
+	      display: flex;
+	      align-items: flex-end;
+	      justify-content: space-between;
+	      gap: 16px;
+	      margin: 0 0 12px;
+	    }
+
+	    .tomorrow-action-calendar-eyebrow {
+	      display: block;
+	      margin: 0 0 3px;
+	      color: var(--reader-muted-soft);
+	      font-size: 11px;
+	      font-weight: 700;
+	      line-height: 1.2;
+	    }
+
+	    .tomorrow-action-calendar-header h2 {
+	      margin: 0;
+	      color: var(--reader-text);
+	      font-size: 18px;
+	      line-height: 1.35;
+	    }
+
+	    .tomorrow-action-calendar-header p {
+	      flex: 0 0 auto;
+	      margin: 0;
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	      line-height: 1.45;
+	      text-align: right;
+	    }
+
+	    .tomorrow-action-calendar-scroll {
+	      width: 100%;
+	      max-width: 100%;
+	      overflow-x: auto;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 6px;
+	      box-sizing: border-box;
+	      -webkit-overflow-scrolling: touch;
+	    }
+
+	    .tomorrow-action-calendar-table {
+	      width: 100%;
+	      min-width: 900px;
+	      margin: 0;
+	      border: 0;
+	      border-collapse: collapse;
+	      table-layout: fixed;
+	      font-size: 12px;
+	      line-height: 1.45;
+	    }
+
+	    .tomorrow-action-calendar-table th,
+	    .tomorrow-action-calendar-table td {
+	      width: 20%;
+	      min-width: 180px;
+	      border: 0;
+	      border-right: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	      box-sizing: border-box;
+	    }
+
+	    .tomorrow-action-calendar-table tr > :last-child {
+	      border-right: 0;
+	    }
+
+	    .tomorrow-action-calendar-table tbody tr:last-child td {
+	      border-bottom: 0;
+	    }
+
+	    .tomorrow-action-calendar-table thead th {
+	      height: 36px;
+	      padding: 8px 10px;
+	      background: rgba(68, 68, 68, 0.055);
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	      font-weight: 700;
+	      text-align: center;
+	    }
+
+	    .tomorrow-action-calendar-cell {
+	      height: 184px;
+	      padding: 0;
+	      vertical-align: top;
+	      background: rgba(255, 255, 255, 0.48);
+	    }
+
+	    .tomorrow-action-calendar-cell.is-blank {
+	      background: rgba(68, 68, 68, 0.025);
+	    }
+
+	    .tomorrow-action-calendar-cell.is-calendar-note {
+	      background: rgba(68, 68, 68, 0.035);
+	    }
+
+	    .tomorrow-action-calendar-cell.is-holiday {
+	      background: rgba(126, 92, 61, 0.07);
+	    }
+
+	    .tomorrow-action-calendar-entry {
+	      display: flex;
+	      min-height: 184px;
+	      flex-direction: column;
+	      gap: 7px;
+	      padding: 11px 12px;
+	      box-sizing: border-box;
+	    }
+
+	    .tomorrow-action-calendar-date {
+	      display: flex;
+	      align-items: baseline;
+	      justify-content: space-between;
+	      gap: 8px;
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	      line-height: 1.3;
+	    }
+
+	    .tomorrow-action-calendar-date time,
+	    .tomorrow-action-calendar-date-missing {
+	      color: var(--reader-text);
+	      font-variant-numeric: tabular-nums;
+	      font-weight: 700;
+	    }
+
+	    .tomorrow-action-calendar-action {
+	      min-height: 38px;
+	      color: var(--reader-text);
+	      font-size: 14px;
+	      line-height: 1.35;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .tomorrow-action-calendar-actions {
+	      display: grid;
+	      gap: 5px;
+	    }
+
+	    .tomorrow-action-calendar-action-item {
+	      display: grid;
+	      gap: 1px;
+	      padding-bottom: 4px;
+	      border-bottom: 1px dotted var(--reader-line);
+	    }
+
+	    .tomorrow-action-calendar-action-item:last-child {
+	      padding-bottom: 0;
+	      border-bottom: 0;
+	    }
+
+	    .tomorrow-action-calendar-action-item strong {
+	      color: var(--reader-text);
+	      font-size: 12px;
+	      line-height: 1.3;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .tomorrow-action-calendar-action-item span,
+	    .tomorrow-action-calendar-plan-note {
+	      color: var(--reader-muted);
+	      font-size: 10px;
+	      line-height: 1.25;
+	    }
+
+	    .tomorrow-action-calendar-note strong {
+	      color: var(--reader-muted);
+	      font-size: 14px;
+	      line-height: 1.35;
+	    }
+
+	    .tomorrow-action-calendar-note > span {
+	      color: var(--reader-muted-soft);
+	      font-size: 10px;
+	      line-height: 1.25;
+	    }
+
+	    .tomorrow-action-calendar-cell.is-empty .tomorrow-action-calendar-action,
+	    .tomorrow-action-calendar-cell.is-no_new_entry .tomorrow-action-calendar-action {
+	      color: var(--reader-muted);
+	    }
+
+	    .tomorrow-action-calendar-report-date {
+	      color: var(--reader-muted-soft);
+	      font-size: 10px;
+	      line-height: 1.25;
+	      font-variant-numeric: tabular-nums;
+	    }
+
+	    .tomorrow-action-calendar-metrics {
+	      display: grid;
+	      gap: 4px;
+	      margin: auto 0 0;
+	    }
+
+	    .tomorrow-action-calendar-metrics div {
+	      display: flex;
+	      align-items: baseline;
+	      justify-content: space-between;
+	      gap: 8px;
+	    }
+
+	    .tomorrow-action-calendar-metrics dt,
+	    .tomorrow-action-calendar-metrics dd {
+	      margin: 0;
+	    }
+
+	    .tomorrow-action-calendar-metrics dt {
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	    }
+
+	    .tomorrow-action-calendar-metrics dd {
+	      color: var(--reader-text);
+	      font-variant-numeric: tabular-nums;
+	      font-weight: 700;
+	      white-space: nowrap;
+	    }
+
+	    .tomorrow-action-calendar-metrics dd.is-positive {
+	      color: var(--accent-red);
+	    }
+
+	    .tomorrow-action-calendar-metrics dd.is-negative {
+	      color: var(--signal-green);
+	    }
+
+	    .tomorrow-action-calendar-metrics dd.is-incomplete,
+	    .tomorrow-action-calendar-metrics dd.is-pending,
+	    .tomorrow-action-calendar-metrics dd.is-flat {
+	      color: var(--reader-muted);
+	    }
+
+	    .tomorrow-action-calendar-summary {
+	      display: flex;
+	      flex-wrap: wrap;
+	      gap: 6px 14px;
+	      margin: 10px 0 0;
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	      line-height: 1.45;
+	    }
+
+	    .tomorrow-action-calendar-summary span {
+	      white-space: nowrap;
+	    }
+
+	    .tomorrow-action-calendar-empty {
+	      margin: 0;
+	      padding: 18px 12px;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 6px;
+	      color: var(--reader-muted);
+	      font-size: 13px;
+	      text-align: center;
+	    }
+
+	    .position-timeline-shell {
       --timeline-lane-width: 76px;
       --timeline-asset-width: 116px;
       --timeline-grid-line: color-mix(in srgb, var(--reader-line) 72%, #ffffff);
@@ -527,7 +880,9 @@
     }
 
     .position-timeline-scroll {
+      position: relative;
       overflow-x: auto;
+      isolation: isolate;
       border-radius: 8px;
       -webkit-overflow-scrolling: touch;
     }
@@ -540,6 +895,7 @@
       border-collapse: separate;
       border-spacing: 0;
       table-layout: fixed;
+      overflow: visible;
       font-size: 13px;
       line-height: 1.35;
     }
@@ -558,6 +914,20 @@
 
     .position-timeline-table col.timeline-col-track {
       width: auto;
+    }
+
+    .timeline-axis-origin,
+    .timeline-lane {
+      width: var(--timeline-lane-width);
+      min-width: var(--timeline-lane-width);
+      max-width: var(--timeline-lane-width);
+    }
+
+    .timeline-axis-asset,
+    .timeline-asset {
+      width: var(--timeline-asset-width);
+      min-width: var(--timeline-asset-width);
+      max-width: var(--timeline-asset-width);
     }
 
     .position-timeline-table th,
@@ -764,6 +1134,11 @@
 
     .timeline-date-intent.is-empty {
       background: color-mix(in srgb, var(--reader-heading) 92%, #ffffff);
+      color: #ffffff;
+    }
+
+    .timeline-date-intent.is-check {
+      background: color-mix(in srgb, var(--accent-orange) 86%, #ffffff);
       color: #ffffff;
     }
 
@@ -1259,7 +1634,9 @@
 	    .markdown-body .mermaid {
       display: block;
       width: 100%;
-      min-width: 1040px;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       margin: 0;
       padding: 10px 16px 16px;
       overflow-x: auto;
@@ -1599,11 +1976,19 @@
         box-shadow: none;
       }
 
-		      .outline-sidebar {
-		        display: none;
-		      }
+	      .outline-sidebar {
+	        display: none;
+	      }
+
+	      .outline-toggle {
+	        display: none;
+	      }
 
 	      .editor-pane {
+	        margin-left: 0;
+	      }
+
+	      .bear-shell.is-outline-collapsed .editor-pane {
 	        margin-left: 0;
 	      }
 
@@ -1621,6 +2006,21 @@
 	        margin: 16px -2px 20px;
 	        padding: 16px 12px 14px;
 	        border-radius: 12px;
+	      }
+
+	      .tomorrow-action-calendar {
+	        margin-bottom: 16px;
+	        padding: 12px;
+	      }
+
+	      .tomorrow-action-calendar-header {
+	        align-items: flex-start;
+	        flex-direction: column;
+	        gap: 4px;
+	      }
+
+	      .tomorrow-action-calendar-header p {
+	        text-align: left;
 	      }
 
 	      .bear-chart-frame {
@@ -1668,13 +2068,31 @@
 	      .outline-nav a {
 	        transition: none;
 	      }
+
+	      .outline-sidebar,
+	      .outline-sticky,
+	      .outline-toggle,
+	      .outline-toggle-icon {
+	        transition: none;
+	      }
 	    }
 	  </style>
 </head>
 <body>
-  <main class="bear-shell">
-    <aside class="outline-sidebar">
-      <div class="outline-sticky">
+	  <main class="bear-shell">
+	    <aside id="outline-sidebar" class="outline-sidebar" aria-label="当前日报目录">
+	      <button
+	        class="outline-toggle"
+	        type="button"
+	        data-outline-toggle
+	        aria-controls="outline-sticky"
+	        aria-expanded="true"
+	        aria-label="收起侧边栏"
+	        title="收起侧边栏"
+	      >
+	        <span class="outline-toggle-icon" aria-hidden="true"></span>
+	      </button>
+	      <div id="outline-sticky" class="outline-sticky">
         <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
         <p class="outline-kicker">当前日报</p>
         <p class="outline-title">$outline_title</p>
@@ -1775,6 +2193,26 @@
 	        }
 	      })();
 
+	      const shell = document.querySelector(".bear-shell");
+	      const outlineToggle = document.querySelector("[data-outline-toggle]");
+	      const setOutlineCollapsed = (collapsed) => {
+	        if (!shell || !outlineToggle) {
+	          return;
+	        }
+	        shell.classList.toggle("is-outline-collapsed", collapsed);
+	        outlineToggle.setAttribute("aria-expanded", String(!collapsed));
+	        const label = collapsed ? "展开侧边栏" : "收起侧边栏";
+	        outlineToggle.setAttribute("aria-label", label);
+	        outlineToggle.setAttribute("title", label);
+	        window.dispatchEvent(new Event("resize"));
+	      };
+      setOutlineCollapsed(false);
+      if (outlineToggle) {
+        outlineToggle.addEventListener("click", () => {
+          setOutlineCollapsed(!shell.classList.contains("is-outline-collapsed"));
+        });
+      }
+
 	      const escapeText = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
 	        "&": "&amp;",
 	        "<": "&lt;",
@@ -1795,11 +2233,19 @@
 		        red: cssValue("--accent-red", "#e73922"),
 		        extremeRed: cssValue("--signal-extreme", "#F92722"),
 		        extremeText: cssValue("--signal-extreme-text", "#FFFFFF"),
+		        iceBlue: cssValue("--signal-ice", "#2364aa"),
+		        deepIceBlue: cssValue("--signal-deep-ice", "#12365a"),
 		        green: cssValue("--signal-green", "#176e54"),
+		        gold: cssValue("--accent-orange", "#ff8a1f"),
 		        surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)"),
 		      };
 
 	      const numberValue = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+	      const nullableNumber = (value) => (
+	        value === null || value === undefined || value === "" || !Number.isFinite(Number(value))
+	          ? null
+	          : Number(value)
+	      );
 	      const formatAmount = (value) => `${numberValue(value).toFixed(2)}亿`;
 	      const formatSignedAmount = (value) => {
 	        const number = numberValue(value);
@@ -2247,95 +2693,260 @@
 	        },
 	      });
 
-	      const renderMarketTurnoverTop50TrendChart = (node, payload) => {
-	        const items = Array.isArray(payload?.items) ? payload.items : [];
+		      const marketTrendXAxis = (items) => ({
+		        type: "category",
+		        data: items.map((item) => item.date),
+		        axisLabel: { color: chartTone.muted, formatter: compactDateLabel, rotate: items.length > 12 ? 34 : 0 },
+		        axisTick: { show: false },
+		        axisLine: { lineStyle: { color: chartTone.line } },
+		      });
+
+		      const renderT0MarketBreadthChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const breadthDownTone = "#07C160";
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          ...baseChartOption(),
+		          color: [chartTone.red, breadthDownTone, chartTone.iceBlue, chartTone.gold],
+		          legend: {
+		            type: "scroll",
+		            top: 4,
+		            left: "center",
+		            textStyle: { color: chartTone.muted, fontSize: 11 },
+		          },
+		          grid: { left: 58, right: 58, top: 58, bottom: 48, containLabel: false },
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            axisPointer: { type: "shadow" },
+		            formatter: (params) => {
+		              const first = Array.isArray(params) ? params[0] : params;
+		              const item = items[first?.dataIndex] || {};
+		              const upCount = nullableNumber(item.up_count);
+		              const downCount = nullableNumber(item.down_count);
+		              const allAChange = nullableNumber(item.all_a_change_pct);
+		              const newHighShare = nullableNumber(item.new_high_share_pct);
+		              return [
+		                `<strong>${escapeText(item.date || "")}</strong>`,
+		                `上涨家数：${escapeText(upCount === null ? "事实不足" : `${Math.round(upCount)}家`)}`,
+		                `下跌家数：${escapeText(downCount === null ? "事实不足" : `${Math.round(downCount)}家`)}`,
+		                `全A涨跌幅：${escapeText(allAChange === null ? "事实不足" : formatSignedPct(allAChange))}`,
+		                `创新高全A占比：${escapeText(newHighShare === null ? "事实不足" : formatPct(newHighShare))}`,
+		              ].join("<br>");
+		            },
+		          },
+		          xAxis: marketTrendXAxis(items),
+		          yAxis: [
+		            {
+		              type: "value",
+		              name: "家数",
+		              min: (value) => Math.min(-4200, value.min),
+		              nameTextStyle: { color: chartTone.muted },
+		              axisLabel: { color: chartTone.muted, formatter: (value) => Math.abs(value) },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		            {
+		              type: "value",
+		              name: "涨跌幅/占比",
+		              nameTextStyle: { color: chartTone.muted },
+		              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		              splitLine: { show: false },
+		            },
+		          ],
+		          series: [
+		            {
+		              name: "上涨家数",
+		              type: "bar",
+		              stack: "breadth",
+		              barMaxWidth: 20,
+		              itemStyle: { borderRadius: [7, 7, 0, 0] },
+		              data: items.map((item) => nullableNumber(item.up_count)),
+		            },
+		            {
+		              name: "下跌家数",
+		              type: "bar",
+		              stack: "breadth",
+		              barMaxWidth: 20,
+		              itemStyle: { borderRadius: [0, 0, 7, 7] },
+		              markLine: {
+		                silent: true,
+		                symbol: ["none", "none"],
+		                lineStyle: { color: breadthDownTone, type: "dashed", width: 1.5, opacity: 0.82 },
+		                label: {
+		                  show: true,
+		                  formatter: "4000+下跌",
+		                  position: "insideEndTop",
+		                  color: chartTone.green,
+		                  fontSize: 11,
+		                  fontWeight: 700,
+		                  backgroundColor: chartTone.surface,
+		                  borderRadius: 3,
+		                  padding: [2, 4],
+		                },
+		                data: [{ yAxis: -4000 }],
+		              },
+		              data: items.map((item) => {
+		                const value = nullableNumber(item.down_count);
+		                return value === null ? null : -Math.abs(value);
+		              }),
+		            },
+		            {
+		              name: "全A涨跌幅",
+		              type: "line",
+		              yAxisIndex: 1,
+		              smooth: 0.18,
+		              showSymbol: false,
+		              lineStyle: { width: 2.2 },
+		              data: items.map((item) => nullableNumber(item.all_a_change_pct)),
+		            },
+		            {
+		              name: "创新高占比",
+		              type: "line",
+		              yAxisIndex: 1,
+		              smooth: 0.18,
+		              showSymbol: false,
+		              lineStyle: { width: 2.2 },
+		              data: items.map((item) => nullableNumber(item.new_high_share_pct)),
+		            },
+		          ],
+		        });
+		        return chart;
+		      };
+
+		      const renderMarketTurnoverTrendChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
 		        if (!items.length || !window.echarts) {
 		          return null;
 		        }
 		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
-		        const hasNewHighShare = items.some((item) => item.new_high_share_pct !== null && item.new_high_share_pct !== undefined);
 		        chart.setOption({
-	          ...baseChartOption(),
-	          color: ["rgba(231,57,34,0.58)", chartTone.red, "rgba(23,110,84,0.5)"],
-	          grid: { left: 72, right: 72, top: 46, bottom: 44, containLabel: false },
-	          legend: {
-	            top: 8,
-	            right: 8,
-	            itemWidth: 10,
-	            itemHeight: 10,
-	            textStyle: { color: chartTone.muted, fontSize: 12 },
-	            data: ["两市成交额", "Top50占比", "创新高全A占比"],
-	          },
-	          tooltip: {
-	            ...baseChartOption().tooltip,
-	            trigger: "axis",
-	            formatter: (params) => {
-	              const first = Array.isArray(params) ? params[0] : params;
-	              const item = first?.data?.item || {};
-	              return [
-	                `<strong>${escapeText(item.date)}</strong>`,
-	                `两市成交额：${escapeText(formatAmount(item.total_turnover))}`,
-	                `Top50成交额：${escapeText(item.top50_turnover == null ? "待确认" : formatAmount(item.top50_turnover))}`,
-	                `Top50占比：${escapeText(formatPct(item.top50_share_pct))}`,
-	                item.new_high_share_pct == null ? "" : `创新高全A占比：${escapeText(formatPct(item.new_high_share_pct))}`,
-	                item.change_pct_point == null ? "" : `较前日：${escapeText(`${numberValue(item.change_pct_point) > 0 ? "+" : ""}${numberValue(item.change_pct_point).toFixed(2)}pct`)}`,
-	                item.state ? `状态：${escapeText(item.state)}` : "",
-	              ].filter(Boolean).join("<br>");
-	            },
-	          },
-	          xAxis: {
-	            type: "category",
-	            data: items.map((item) => item.date),
-	            axisLabel: { color: chartTone.muted, formatter: compactDateLabel, rotate: items.length > 12 ? 34 : 0 },
-	            axisTick: { show: false },
-	            axisLine: { lineStyle: { color: chartTone.line } },
-	          },
-	          yAxis: [
-	            {
-	              type: "value",
-	              name: "成交额",
-	              nameTextStyle: { color: chartTone.muted },
-	              axisLabel: { color: chartTone.muted, formatter: (value) => `${Math.round(value)}亿` },
-	              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
-	            },
-	            {
-		              type: "value",
-		              name: "占比",
-		              min: (value) => hasNewHighShare ? Math.min(0, Math.floor(value.min) - 1) : Math.min(16, Math.floor(value.min) - 1),
-		              max: (value) => Math.max(26, Math.ceil(value.max) + 1),
-		              nameTextStyle: { color: chartTone.muted },
-	              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
-	              splitLine: { show: false },
-	            },
-	          ],
-	          series: [
-	            {
-	              name: "两市成交额",
-	              type: "bar",
-	              barWidth: "54%",
-	              data: items.map((item) => ({ value: numberValue(item.total_turnover), item })),
-	              itemStyle: { borderRadius: [7, 7, 0, 0] },
-	            },
-	            {
-	              name: "Top50占比",
-	              type: "line",
-	              yAxisIndex: 1,
-	              smooth: 0.32,
-	              symbol: "circle",
-	              symbolSize: 6,
-	              lineStyle: { width: 2.5 },
-	              data: items.map((item) => ({ value: numberValue(item.top50_share_pct), item })),
-	              markLine: {
-	                silent: true,
-	                symbol: "none",
-	                label: {
-	                  color: chartTone.muted,
-	                  formatter: "{b}",
-	                  position: "middle",
-	                  padding: [2, 6],
-	                  borderRadius: 999,
-	                  backgroundColor: "rgba(255,255,255,0.78)",
-	                },
+		          ...baseChartOption(),
+		          color: ["rgba(231,57,34,0.58)"],
+		          grid: { left: 72, right: 30, top: 28, bottom: 44, containLabel: false },
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            formatter: (params) => {
+		              const first = Array.isArray(params) ? params[0] : params;
+		              const item = first?.data?.item || {};
+		              return [
+		                `<strong>${escapeText(item.date)}</strong>`,
+		                `两市成交额：${escapeText(formatAmount(item.total_turnover))}`,
+		              ].filter(Boolean).join("<br>");
+		            },
+		          },
+		          xAxis: marketTrendXAxis(items),
+		          yAxis: {
+		            type: "value",
+		            name: "成交额",
+		            min: 0,
+		            max: (value) => Math.max(40000, Math.ceil(value.max / 5000) * 5000),
+		            nameTextStyle: { color: chartTone.muted },
+		            axisLabel: { color: chartTone.muted, formatter: (value) => `${Math.round(value)}亿` },
+		            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		          },
+		          series: [
+		            {
+		              name: "两市成交额",
+		              type: "bar",
+		              barWidth: "54%",
+		              data: items.map((item) => ({ value: numberValue(item.total_turnover), item })),
+		              itemStyle: { borderRadius: [7, 7, 0, 0] },
+		              markLine: {
+		                silent: true,
+		                symbol: "none",
+		                label: {
+		                  color: chartTone.muted,
+		                  formatter: "{b}",
+		                  padding: [2, 6],
+		                  borderRadius: 999,
+		                  backgroundColor: "rgba(255,255,255,0.84)",
+		                },
+		                lineStyle: { color: chartTone.line, type: "dashed", width: 1, opacity: 0.82 },
+		                data: [
+		                  { yAxis: 15000, name: "1.5万亿以下", label: { position: "insideStartTop" } },
+		                  { yAxis: 20000, name: "2万亿以下", label: { position: "insideEndTop" } },
+		                  { yAxis: 25000, name: "2.5万亿以下", label: { position: "insideStartTop" } },
+		                  { yAxis: 30000, name: "3万亿以下", label: { position: "insideEndTop" } },
+		                  {
+		                    yAxis: 35000,
+		                    name: "3.5万亿以上·极致沸点",
+		                    lineStyle: { color: chartTone.extremeRed, width: 1.6, opacity: 1 },
+		                    label: {
+		                      position: "insideEndTop",
+		                      color: chartTone.extremeText,
+		                      backgroundColor: chartTone.extremeRed,
+		                      textShadowColor: "rgba(94,0,0,0.5)",
+		                      textShadowBlur: 2,
+		                      textShadowOffsetY: 1,
+		                    },
+		                  },
+		                ],
+		              },
+		            },
+		          ],
+		        });
+		        return chart;
+		      };
+
+		      const renderTop50ShareTrendChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          ...baseChartOption(),
+		          color: [chartTone.red],
+		          grid: { left: 58, right: 34, top: 28, bottom: 44, containLabel: false },
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            formatter: (params) => {
+		              const first = Array.isArray(params) ? params[0] : params;
+		              const item = first?.data?.item || {};
+		              return [
+		                `<strong>${escapeText(item.date)}</strong>`,
+		                `Top50占比：${escapeText(formatPct(item.top50_share_pct))}`,
+		                `Top50成交额：${escapeText(item.top50_turnover == null ? "待确认" : formatAmount(item.top50_turnover))}`,
+		                item.change_pct_point == null ? "" : `较前日：${escapeText(`${numberValue(item.change_pct_point) > 0 ? "+" : ""}${numberValue(item.change_pct_point).toFixed(2)}pct`)}`,
+		                item.state ? `状态：${escapeText(item.state)}` : "",
+		              ].filter(Boolean).join("<br>");
+		            },
+		          },
+		          xAxis: marketTrendXAxis(items),
+		          yAxis: {
+		            type: "value",
+		            name: "占比",
+		            min: (value) => Math.min(16, Math.floor(value.min) - 1),
+		            max: (value) => Math.max(26, Math.ceil(value.max) + 1),
+		            nameTextStyle: { color: chartTone.muted },
+		            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		          },
+		          series: [
+		            {
+		              name: "Top50占比",
+		              type: "line",
+		              smooth: 0.32,
+		              symbol: "circle",
+		              symbolSize: 6,
+		              lineStyle: { width: 2.5 },
+		              data: items.map((item) => ({ value: numberValue(item.top50_share_pct), item })),
+		              markLine: {
+		                silent: true,
+		                symbol: "none",
+		                label: {
+		                  color: chartTone.muted,
+		                  formatter: "{b}",
+		                  position: "middle",
+		                  padding: [2, 6],
+		                  borderRadius: 999,
+		                  backgroundColor: "rgba(255,255,255,0.78)",
+		                },
 		                lineStyle: { color: chartTone.line, type: "dashed" },
 		                data: [
 		                  {
@@ -2352,30 +2963,103 @@
 		                  },
 		                  { yAxis: 20, name: "20%活跃" },
 		                  { yAxis: 18, name: "18%收缩" },
-	                ],
+		                ],
 		              },
-		            },
-		            {
-		              name: "创新高全A占比",
-		              type: "line",
-		              yAxisIndex: 1,
-		              smooth: 0.2,
-		              symbol: "circle",
-		              symbolSize: 4,
-		              showSymbol: false,
-		              connectNulls: false,
-		              lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 },
-		              itemStyle: { color: "rgba(23,110,84,0.72)" },
-		              emphasis: {
-		                lineStyle: { width: 2.4, opacity: 0.9 },
-		                itemStyle: { color: chartTone.green },
-		              },
-		              data: items.map((item) => ({ value: item.new_high_share_pct == null ? null : numberValue(item.new_high_share_pct), item })),
 		            },
 		          ],
 		        });
-	        return chart;
-	      };
+		        return chart;
+		      };
+
+		      const renderNewHighShareTrendChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const thresholdTone = {
+		          extreme: { color: chartTone.extremeRed, width: 1.6 },
+		          effective: { color: chartTone.green, width: 1.4 },
+		          cold: { color: chartTone.iceBlue, width: 1.4 },
+		          fracture: { color: chartTone.deepIceBlue, width: 1.4 },
+		        };
+		        const thresholdLines = Array.isArray(payload?.thresholds?.mark_lines)
+		          ? payload.thresholds.mark_lines
+		          : [];
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          ...baseChartOption(),
+		          color: [chartTone.green],
+		          grid: { left: 58, right: 34, top: 28, bottom: 44, containLabel: false },
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            formatter: (params) => {
+		              const first = Array.isArray(params) ? params[0] : params;
+		              const item = first?.data?.item || {};
+		              return [
+		                `<strong>${escapeText(item.date)}</strong>`,
+		                `创新高数：${escapeText(item.new_high_count === null || item.new_high_count === undefined ? "待确认" : `${item.new_high_count}只`)}`,
+		                `创新高全A占比：${escapeText(formatPct(item.new_high_share_pct))}`,
+		                `绝对水位：${escapeText(item.breadth_level_label || "待确认")}`,
+		              ].join("<br>");
+		            },
+		          },
+		          xAxis: {
+		            type: "category",
+		            data: items.map((item) => item.date),
+		            axisLabel: { color: chartTone.muted, formatter: compactDateLabel, rotate: items.length > 12 ? 34 : 0 },
+		            axisTick: { show: false },
+		            axisLine: { lineStyle: { color: chartTone.line } },
+		          },
+		          yAxis: {
+		            type: "value",
+		            name: "全A占比",
+		            min: 0,
+		            max: (value) => Math.max(6, Math.ceil(value.max) + 1),
+		            nameTextStyle: { color: chartTone.muted },
+		            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		          },
+		          series: [{
+		            name: "创新高全A占比",
+		            type: "line",
+		            smooth: 0.2,
+		            symbol: "circle",
+		            symbolSize: 4,
+		            showSymbol: false,
+		            connectNulls: false,
+		            lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 },
+		            itemStyle: { color: "rgba(23,110,84,0.72)" },
+		            emphasis: {
+		              lineStyle: { width: 2.4, opacity: 0.9 },
+		              itemStyle: { color: chartTone.green },
+		            },
+		            data: items.map((item) => ({ value: numberValue(item.new_high_share_pct), item })),
+		            markLine: {
+		              silent: true,
+		              symbol: "none",
+		              label: {
+		                color: chartTone.extremeText,
+		                formatter: "{b}",
+		                position: "insideEndTop",
+		                padding: [2, 6],
+		                borderRadius: 4,
+		              },
+		              lineStyle: { type: "dashed" },
+		              data: thresholdLines.map((line) => {
+		                const tone = thresholdTone[line.tone] || thresholdTone.cold;
+		                return {
+		                  yAxis: numberValue(line.value),
+		                  name: line.label,
+		                  lineStyle: { color: tone.color, width: tone.width },
+		                  label: { backgroundColor: tone.color },
+		                };
+		              }),
+		            },
+		          }],
+		        });
+		        return chart;
+		      };
 
 	      const renderSectorTurnoverShareChart = (node, payload) => {
 	        const items = Array.isArray(payload?.items) ? payload.items : [];
@@ -2875,13 +3559,22 @@
 			      const renderedCharts = Array.from(document.querySelectorAll("[data-market-structure-chart]"))
 			        .map((node) => renderMarketStructureChart(node))
 			        .concat(Array.from(document.querySelectorAll("[data-bear-chart]"))
-			        .map((node) => {
-			          const key = node.dataset.bearChart;
-			          if (key === "intraday_feedback_review") {
+		        .map((node) => {
+		          const key = node.dataset.bearChart;
+		          if (key === "t0_market_breadth") {
+		            return renderT0MarketBreadthChart(node, chartPayload.t0_market_breadth);
+		          }
+		          if (key === "intraday_feedback_review") {
 			            return renderIntradayFeedbackReviewChart(node, chartPayload.intraday_feedback_review);
 		          }
-		          if (key === "market_turnover_top50_trend") {
-		            return renderMarketTurnoverTop50TrendChart(node, chartPayload.market_turnover_top50_trend);
+		          if (key === "market_turnover_trend") {
+		            return renderMarketTurnoverTrendChart(node, chartPayload.market_turnover_top50_trend);
+		          }
+		          if (key === "top50_share_trend") {
+		            return renderTop50ShareTrendChart(node, chartPayload.market_turnover_top50_trend);
+		          }
+		          if (key === "new_high_share_trend") {
+		            return renderNewHighShareTrendChart(node, chartPayload.new_high_share_trend);
 		          }
 	          if (key === "sector_turnover_share") {
 	            return renderSectorTurnoverShareChart(node, chartPayload.sector_turnover_share);

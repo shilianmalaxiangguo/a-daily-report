@@ -742,6 +742,10 @@ def _load_akshare_index_dataframe(index_code, recent_days, target_date=None):
             df[column] = 0.0
     df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
     df = df.sort_values("date").tail(int(recent_days or 120) + 1).reset_index(drop=True)
+    if target_date and (
+        df.empty or df["date"].iloc[-1] != normalize_kline_date_str(target_date)
+    ):
+        return None, "akshare.stock_zh_index_daily_em"
     if len(df) < 2:
         return None, "akshare.stock_zh_index_daily_em"
     return df, "akshare.stock_zh_index_daily_em"
@@ -779,6 +783,10 @@ def _load_tushare_index_dataframe(index_code, recent_days, target_date=None):
             df[column] = 0.0
     df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
     df = df.sort_values("date").tail(int(recent_days or 120) + 1).reset_index(drop=True)
+    if target_date and (
+        df.empty or df["date"].iloc[-1] != normalize_kline_date_str(target_date)
+    ):
+        return None, "tushare.index_daily"
     if len(df) < 2:
         return None, "tushare.index_daily"
     return df, "tushare.index_daily"
@@ -806,6 +814,19 @@ def _load_baostock_index_dataframe(index_code, recent_days, bs_module=None):
     if "amount" not in df.columns:
         df["amount"] = 0.0
     return df[["date", "open", "high", "low", "close", "volume", "amount"]], "fast_index_runtime"
+
+
+def _index_dataframe_has_target_date(df, target_date):
+    if not target_date:
+        return True
+    if df is None or len(df) == 0 or "date" not in df.columns:
+        return False
+    expected_date = normalize_kline_date_str(target_date)
+    return expected_date in {
+        normalize_kline_date_str(value)
+        for value in df["date"].tolist()
+        if normalize_kline_date_str(value)
+    }
 
 
 def analyze_market_zhongshu(
@@ -848,6 +869,8 @@ def analyze_market_zhongshu(
             if df is None or len(df) == 0:
                 print_fn(f"[大盘结构] AkShare 获取失败，尝试使用 fast_index_runtime 兜底...")
                 df, data_source = _load_baostock_index_dataframe(index_code, recent_days, bs_module=bs_module)
+                if not _index_dataframe_has_target_date(df, target_date):
+                    df = None
             if df is None or len(df) == 0:
                 print_fn(f"[大盘结构] fast_index_runtime 获取失败，尝试使用同花顺问财API 兜底...")
                 df = None
@@ -855,16 +878,24 @@ def analyze_market_zhongshu(
             try:
                 if df is None or len(df) == 0:
                     df, data_source = _load_iwencai_index_dataframe(recent_days, urlopen_fn=urlopen_fn)
+                    if not _index_dataframe_has_target_date(df, target_date):
+                        df = None
             except Exception as error:
                 print_fn(f"[大盘结构] 同花顺问财API获取失败: {error}，fast_index_runtime 已尝试")
 
         if df is None or len(df) == 0:
-            return {"success": False, "error": "所有数据源均无法获取指数数据"}
+            target_text = f"{normalize_kline_date_str(target_date)}目标日" if target_date else ""
+            return {"success": False, "error": f"所有数据源均无法获取{target_text}指数数据"}
 
         for price_col in ["open", "high", "low", "close", "volume", "amount"]:
             if price_col in df.columns:
                 df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
         df = df.dropna(subset=["high", "low", "close"])
+        if not _index_dataframe_has_target_date(df, target_date):
+            return {
+                "success": False,
+                "error": f"{data_source}指数日K未包含目标日期{normalize_kline_date_str(target_date)}",
+            }
 
         from decision.security_zhongshu_node import analyze_security_zhongshu_from_frame
 

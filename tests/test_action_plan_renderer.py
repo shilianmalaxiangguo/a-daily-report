@@ -11,7 +11,11 @@ from report.action_plan_nodes import (
     build_action_plan_observation_blocks_node,
     build_action_plan_table_node,
 )
-from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_FULL_EXECUTION_TEXT,
+    TWO_B_CONFIRMATION_CLAUSE,
+)
 from domains.execution_chain.pk_decision_nodes.action_plan_context import build_action_plan_context_payload
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
@@ -20,6 +24,49 @@ from selection.candidate_quality_contracts import (
 
 
 class ActionPlanRendererTest(unittest.TestCase):
+    def test_action_plan_does_not_infer_position_from_visible_text(self):
+        for position_pct in (None, 40, 60, 75):
+            with self.subTest(position_pct=position_pct):
+                context = {
+                    "best_stock": {"name": "豫能控股", "code": "001896"},
+                    "position_level": "50%条件执行",
+                    "step0_prediction": "NEUTRAL",
+                    "step0_prediction_cn": "中性",
+                    "final_gate": {"allow_attack_50_ready": True},
+                }
+                if position_pct is not None:
+                    context["position_decision"] = {"target_position_pct": position_pct}
+                payload = build_action_plan_context_payload(context)
+                rendered = "\n".join(
+                    payload.get("position_section_lines", [])
+                    + [str(row) for row in payload.get("action_rows", [])]
+                )
+
+                self.assertIn("进攻仓位三态**: 0%不参与", rendered)
+                self.assertNotIn("🔥 唯一买入", rendered)
+                self.assertNotIn(PREMARKET_50_EXECUTION_TEXT, rendered)
+                self.assertNotIn(PREMARKET_FULL_EXECUTION_TEXT, rendered)
+
+    def test_action_plan_propagates_exact_structured_position_tiers(self):
+        for position_pct, execution_text in (
+            (50, PREMARKET_50_EXECUTION_TEXT),
+            (100, PREMARKET_FULL_EXECUTION_TEXT),
+        ):
+            with self.subTest(position_pct=position_pct):
+                payload = build_action_plan_context_payload(
+                    {
+                        "best_stock": {"name": "豫能控股", "code": "001896"},
+                        "position_level": "0%不参与",
+                        "position_decision": {"target_position_pct": position_pct},
+                        "step0_prediction": "NEUTRAL",
+                        "step0_prediction_cn": "中性",
+                        "final_gate": {"allow_attack_50_ready": True},
+                    }
+                )
+                rendered = "\n".join(payload.get("position_section_lines", []))
+
+                self.assertIn(execution_text, rendered)
+
     def test_render_action_plan_section_with_watch_only_anchor(self):
         lines = render_action_plan_section(
             {
@@ -39,6 +86,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                     "- **现在到底是什么状态**: 防守观察",
                     "- **明天仓位放多少**: 0%或50%（持有但不新增）",
                 ],
+                "position_decision": {"target_position_pct": 0, "signal_grade": "0"},
                 "pre_market_lines": [
                     "- **跨线重点观察谁**: 军工观察(000002) - 先看预演参与窗口，再看关键区间",
                     "- 查看隔夜消息、外围市场、期货走势",
@@ -72,7 +120,8 @@ class ActionPlanRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 明日操作计划", rendered)
         self.assertIn("> **先看结论**：明天只执行唯一动作，或者只观察。", rendered)
-        self.assertIn(f"> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序；{TWO_B_CONFIRMATION_CLAUSE}；不临场改单。", rendered)
+        self.assertIn("> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序；0%不参与，只观察或处理旧仓；不临场改单。", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertIn("- **怎么执行**: 日线定环境，09:50-10:10窗口，按失效价和单笔-5%底线处理风险", rendered)
         self.assertIn("- 若你有旧仓，确认风险线是否需要上移", rendered)
         self.assertIn("| 👀 明天先盯哪只 | 军工观察 | 000002 |", rendered)
@@ -99,6 +148,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                 "position_section_lines": [
                     "- **市场环境档位**: 50%条件执行",
                 ],
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
                 "pre_market_lines": [
                     "- 设价格预警",
                 ],
@@ -111,8 +161,29 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("**最终动作表**（只展示真正具备参与资格的对象）:", rendered)
         self.assertNotIn("只展示真正可执行对象", rendered)
         self.assertIn("**明天仓位怎么放**:", rendered)
+        self.assertIn("B1只执行到1x/50%；1x是本计划仓位上限，不追加B2", rendered)
+        self.assertNotIn("B2只在确认后补到2x/100%", rendered)
         self.assertNotIn("**明日执行时间表**:", rendered)
         self.assertNotIn("**⚠️ 异动预警**:", rendered)
+
+    def test_render_action_plan_uses_two_b_only_for_full_position_plan(self):
+        lines = render_action_plan_section(
+            {
+                "action_rows": [
+                    {
+                        "action": "🔥 唯一买入",
+                        "name": "军工一号",
+                        "code": "000001",
+                        "trigger": "明日09:50-10:10窗口确认",
+                        "risk_window": "失效价下方退出",
+                    }
+                ],
+                "position_decision": {"target_position_pct": 100, "signal_grade": "100"},
+                "enabled_node_keys": ["overview", "action_table"],
+            }
+        )
+
+        self.assertIn(TWO_B_CONFIRMATION_CLAUSE, "\n".join(lines))
 
     def test_render_action_plan_section_can_enable_candidate_quality_node(self):
         panel = build_daily_quality_decision_panel(
@@ -947,7 +1018,7 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertNotIn("确认后执行预案", rendered_rows)
         self.assertNotIn("和远气体", rendered_rows)
 
-    def test_reused_action_plan_payload_rebuilds_inferred_pending_position_wording(self):
+    def test_reused_action_plan_payload_keeps_inherited_simulated_old_position(self):
         payload = build_action_plan_context_payload(
             {
                 "selection_workflow": {
@@ -965,11 +1036,11 @@ class ActionPlanRendererTest(unittest.TestCase):
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
                 "has_personal_positions": True,
                 "existing_position_summary": {
-                    "has_position": False,
-                    "has_pending_position": True,
+                    "has_position": True,
+                    "has_pending_position": False,
                     "name": "长电科技",
                     "code": "600584",
-                    "summary": "前日报计划推定，待成交确认：长电科技(600584)",
+                    "summary": "持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓",
                     "position_source": "previous_report_target_default_1x",
                     "inferred_from_previous_report": True,
                 },
@@ -1015,10 +1086,10 @@ class ActionPlanRendererTest(unittest.TestCase):
             + payload.get("closing_lines", [])
         )
 
-        self.assertIn("0%不参与；先确认成交事实", rendered)
-        self.assertNotIn("只处理旧仓", rendered)
-        self.assertNotIn("旧仓准备", rendered)
-        self.assertNotIn("已有1x", rendered)
+        self.assertIn("明日裁决**: 🟠 只处理旧仓", rendered)
+        self.assertIn("旧仓准备", rendered)
+        self.assertIn("已有1x", rendered)
+        self.assertNotIn("待成交确认", rendered)
 
     def test_zero_final_context_time_table_keeps_process_candidates_observation_only(self):
         payload = build_action_plan_context_payload(

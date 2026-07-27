@@ -166,6 +166,44 @@ class MarketLanguageTranslationTest(unittest.TestCase):
             [row["candidate_at"][11:16] for row in jcet["timeline"]["events"][:4]],
         )
 
+    def test_next_window_task_bounds_attention_without_promising_notification(self):
+        artifact = self._fixture_artifact("sh603986_20260710")
+        task = artifact["next_window_task"]
+
+        for text in (
+            "低注意力研究目标，不替代正式执行计划",
+            "T+1 09:30-09:35",
+            "固定主动查看只安排在",
+            "开盘按前一晚计划处理B1",
+            "09:50-10:10后台复核",
+            "只核对前一晚已允许的B2",
+            "目前不会自动提醒",
+            "未收到明确提示时B2不执行",
+            "T+2 14:30-14:55",
+            "不生成新决定",
+            "不要求持续盯盘",
+        ):
+            self.assertIn(text, task)
+        self.assertNotIn("09:45-09:50只做前哨观察", task)
+
+    def test_insufficient_facts_keep_b2_inactive_without_a_clear_prompt(self):
+        projection = build_market_language_source_projection(
+            {},
+            target_date="2026-07-10",
+            analysis_mode="replay",
+        )
+        artifact = build_market_language_translation(
+            projection,
+            target_date="2026-07-10",
+            analysis_mode="replay",
+            artifact_origin="reconstructed",
+        )
+
+        self.assertEqual(artifact["evidence_status"], "insufficient")
+        self.assertIn("补齐指数、全市场宽度与板块同步事实", artifact["next_window_task"])
+        self.assertIn("目前不会自动提醒", artifact["next_window_task"])
+        self.assertIn("未收到明确提示时B2不执行", artifact["next_window_task"])
+
     def test_weighted_index_and_market_breadth_conflict_stays_index_weighted_and_unclear(self):
         projection = build_market_language_source_projection(
             {

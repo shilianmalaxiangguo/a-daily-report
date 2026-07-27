@@ -5,7 +5,13 @@ import json
 import re
 import datetime as _dt
 from pathlib import Path
-from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, PREMARKET_FULL_TRIGGER_TEXT
+from report.position_tier_contract import (
+    POSITION_TIER_B1_B2_PCT,
+    POSITION_TIER_B1_PCT,
+    normalize_planned_position_tier_pct,
+)
+from report.selection_workflow import candidate_limit_down_risk_review_reason
 
 
 SCHEMA_VERSION = "elimination_tournament.v1"
@@ -645,7 +651,7 @@ def _workflow_final(selection_workflow):
     workflow = _as_dict(selection_workflow)
     final = _as_dict(workflow.get("final"))
     target = stock_payload(final.get("execution_object"))
-    pct = _safe_int(final.get("position_pct"), default=0)
+    pct = _normalized_position_pct(final.get("position_pct"))
     effective_pct = pct if target and pct > 0 else 0
     action_label = _position_label(effective_pct)
     failure_conditions = [
@@ -682,14 +688,22 @@ def _position_pct_from_decision(position_decision):
     decision = _as_dict(position_decision)
     for key in ("target_position_pct", "position_plan_pct", "position_pct"):
         if key in decision:
-            return _safe_int(decision.get(key), default=0)
+            return _normalized_position_pct(decision.get(key))
     return 0
 
 
+def _normalized_position_pct(value):
+    try:
+        return normalize_planned_position_tier_pct(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _position_label(position_pct):
-    if position_pct >= 100:
+    normalized_pct = _normalized_position_pct(position_pct)
+    if normalized_pct == POSITION_TIER_B1_B2_PCT:
         return "100%核心进攻"
-    if position_pct >= 50:
+    if normalized_pct == POSITION_TIER_B1_PCT:
         return "50%条件执行"
     return "0%不参与"
 
@@ -699,10 +713,11 @@ def _final_action_from_resolution(final_target_resolution, position_decision):
     new_entry = stock_payload(resolution.get("new_entry_target"))
     display = stock_payload(resolution.get("display_target"))
     priority = _as_dict(resolution.get("capital_priority_decision"))
-    priority_value = clean_text(priority.get("capital_priority"))
-    pct = _position_pct_from_decision(position_decision)
-    if priority_value == "same_stock_t" and new_entry and pct <= 0:
-        pct = 50
+    exposure_plan = _as_dict(resolution.get("account_exposure_plan"))
+    if exposure_plan.get("schema_version") == "position_tier_exposure.v2":
+        pct = _normalized_position_pct(exposure_plan.get("new_entry_pct"))
+    else:
+        pct = _position_pct_from_decision(position_decision)
     target = new_entry if new_entry and pct > 0 else {}
     source = "final_target_resolution"
     reason = clean_text(priority.get("reason")) or "最终解析未给出新增参与对象"
@@ -722,7 +737,11 @@ def _final_action_from_resolution(final_target_resolution, position_decision):
 def _final_action(selection_workflow, final_target_resolution, position_decision):
     workflow = _as_dict(selection_workflow)
     workflow_final = _as_dict(workflow.get("final"))
-    resolution_priority = _as_dict(_as_dict(final_target_resolution).get("capital_priority_decision"))
+    resolution = _as_dict(final_target_resolution)
+    exposure_plan = _as_dict(resolution.get("account_exposure_plan"))
+    if exposure_plan.get("schema_version") == "position_tier_exposure.v2":
+        return _final_action_from_resolution(resolution, position_decision)
+    resolution_priority = _as_dict(resolution.get("capital_priority_decision"))
     priority_value = clean_text(resolution_priority.get("capital_priority"))
     if workflow_final:
         final = _workflow_final(workflow)
@@ -766,6 +785,9 @@ def _candidate_layer_entry(candidate, *, status, reason, next_basis="", eliminat
     brooks_price_action_judge = _as_dict(_as_dict(candidate).get("brooks_price_action_judge"))
     if brooks_price_action_judge:
         payload["brooks_price_action_judge"] = dict(brooks_price_action_judge)
+    limit_down_reversal_plan = _as_dict(_as_dict(candidate).get("limit_down_reversal_plan"))
+    if limit_down_reversal_plan:
+        payload["limit_down_reversal_plan"] = dict(limit_down_reversal_plan)
     for key, value in _as_dict(extra).items():
         if value not in (None, "", []):
             payload[key] = value
@@ -888,7 +910,7 @@ def _build_preflight_decision_list(layers, final_action):
     final_action = _as_dict(final_action)
     final_label = clean_text(final_action.get("label"), "0%不参与")
     final_target = stock_label(final_action.get("target")) if final_action.get("target") else "无执行对象"
-    final_position = _safe_int(final_action.get("position_pct"), default=0)
+    final_position = _normalized_position_pct(final_action.get("position_pct"))
 
     sector_layer = by_id.get("sector_capital_diffusion") or by_id.get("sector") or {}
     carrier_layer = by_id.get("capital_carrier") or by_id.get("sector_role") or {}
@@ -1069,8 +1091,12 @@ def _preflight_layers_eliminate_final_target(layers, final_action):
 def _sync_preflight_final_action_layer(layers, final_action):
     final_action = _as_dict(final_action)
     target = stock_payload(final_action.get("target"))
-    if not target:
-        return _normalize_zero_final_action_layer_counts(layers, final_action)
+    position_pct = _normalized_position_pct(final_action.get("position_pct"))
+    if not target or position_pct <= 0:
+        return _normalize_zero_final_action_layer_counts(
+            layers,
+            {"label": "0%不参与", "position_pct": 0, "target": {}},
+        )
     previous_survivors = []
     for layer in reversed(_as_list(layers)):
         layer = _as_dict(layer)
@@ -1095,13 +1121,22 @@ def _sync_preflight_final_action_layer(layers, final_action):
         )
     synced = []
     replaced = False
+    action_label = clean_text(
+        final_action.get("label"),
+        "100%核心进攻" if position_pct == POSITION_TIER_B1_B2_PCT else "50%条件执行",
+    )
+    trigger_text = (
+        PREMARKET_FULL_TRIGGER_TEXT
+        if position_pct == POSITION_TIER_B1_B2_PCT
+        else PREMARKET_50_TRIGGER_TEXT
+    )
     final_entry = {
         "stock": target,
         "stock_label": stock_label(target),
         "status": "final_action",
         "reason": clean_text(final_action.get("reason"), "板块资金扩散链路恢复出唯一主样本"),
-        "action_label": clean_text(final_action.get("label"), "50%条件执行"),
-        "position_pct": _safe_int(final_action.get("position_pct"), default=50),
+        "action_label": action_label,
+        "position_pct": position_pct,
         "source": clean_text(final_action.get("source"), "sector_capital_carrier_strategy"),
     }
     for layer in _as_list(layers):
@@ -1116,7 +1151,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
         layer["survivors"] = [final_entry]
         layer["eliminated"] = []
         layer["input_entries"] = [final_entry]
-        layer["note"] = f"唯一明日动作来自板块资金扩散链路；T+1{PREMARKET_50_TRIGGER_TEXT}。"
+        layer["note"] = f"唯一明日动作来自板块资金扩散链路；T+1{trigger_text}。"
         synced.append(_normalize_preflight_layer(layer))
         replaced = True
     if not replaced:
@@ -1132,7 +1167,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
                     "survivors": [final_entry],
                     "eliminated": [],
                     "input_entries": [final_entry],
-                    "note": f"唯一明日动作来自板块资金扩散链路；T+1{PREMARKET_50_TRIGGER_TEXT}。",
+                    "note": f"唯一明日动作来自板块资金扩散链路；T+1{trigger_text}。",
                 }
             )
         )
@@ -1319,7 +1354,7 @@ def _build_tplus_rehearsal(layers, final_action, source_payloads=None):
     layers = _as_list(layers)
     final_action = _as_dict(final_action)
     source_payloads = _as_dict(source_payloads)
-    final_position = _safe_int(final_action.get("position_pct"), default=0)
+    final_position = _normalized_position_pct(final_action.get("position_pct"))
     final_label = clean_text(final_action.get("label"), "0%不参与")
     final_target = stock_label(final_action.get("target")) if final_action.get("target") else "无执行对象"
     primary_sector = _t0_primary_sector(final_action, source_payloads)
@@ -1328,6 +1363,9 @@ def _build_tplus_rehearsal(layers, final_action, source_payloads=None):
     sector_layer = _preflight_layer_by_id(layers, "sector_capital_diffusion")
     price_layer = _preflight_layer_by_id(layers, "price_action")
     account_layer = _preflight_layer_by_id(layers, "counter_evidence_account") or _preflight_layer_by_id(layers, "account_execution")
+    final_resolution = _as_dict(source_payloads.get("final_target_resolution"))
+    account_exposure_plan = _as_dict(final_resolution.get("account_exposure_plan"))
+    confirmed_old_position = account_exposure_plan.get("position_fact_status") == "confirmed"
     sector_survivors = _preflight_status_labels(sector_layer, "survived")
     price_survivors = _preflight_status_labels(price_layer, "survived")
     has_sector_path = sector_survivors != "无"
@@ -1378,6 +1416,9 @@ def _build_tplus_rehearsal(layers, final_action, source_payloads=None):
         tplus2_sector_emotion = sector_state.get("tplus2") or "无主线"
         tplus2_sector_cycle = sector_state.get("tplus2_cycle") or "不做板块推升假设"
         action_bias = "不参与，等下一条板块资金路径"
+
+    if final_position <= 0 and confirmed_old_position:
+        action_bias = "不新增参与，只按旧仓预案处理"
 
     if final_position > 0:
         buy_windows = [
@@ -1506,7 +1547,7 @@ def _tplus_rehearsal_matches_final_action(rehearsal, final_action):
     rehearsal = _as_dict(rehearsal)
     final_action = _as_dict(final_action)
     target = stock_payload(final_action.get("target"))
-    position_pct = _safe_int(final_action.get("position_pct"), default=0)
+    position_pct = _normalized_position_pct(final_action.get("position_pct"))
     tplus1 = _as_dict(rehearsal.get("tplus1"))
     qualification = clean_text(tplus1.get("participation_qualification"))
     basis = clean_text(rehearsal.get("basis"))
@@ -1666,7 +1707,7 @@ def _account_layer(candidates, trace_by_key, ledger_by_key, final_action):
     entries = []
     survivors = []
     final_key = stock_key(final_action.get("target"))
-    final_pct = _safe_int(final_action.get("position_pct"), default=0)
+    final_pct = _normalized_position_pct(final_action.get("position_pct"))
     for candidate in candidates:
         missing = _candidate_missing_data(candidate, trace_by_key, final_action)
         ledger = _ledger_for_candidate(candidate, ledger_by_key)
@@ -1677,7 +1718,7 @@ def _account_layer(candidates, trace_by_key, ledger_by_key, final_action):
             else participation.get("position_plan_pct")
         )
         has_ledger_position = ledger_position_source is not None
-        ledger_pct = _safe_int(ledger_position_source, default=0) if has_ledger_position else None
+        ledger_pct = _normalized_position_pct(ledger_position_source) if has_ledger_position else None
         same_final = bool(final_key and final_key == stock_key(candidate))
         if same_final and final_pct > 0:
             extra = {}
@@ -1736,7 +1777,7 @@ def _final_layer(final_action, previous_survivors):
         "next_basis": "",
         "elimination_basis": "",
         "source": clean_text(final_action.get("source"), "final_target_resolution"),
-        "position_pct": _safe_int(final_action.get("position_pct"), default=0),
+        "position_pct": _normalized_position_pct(final_action.get("position_pct")),
         "action_label": clean_text(final_action.get("label"), "0%不参与"),
     }
     if observation:
@@ -1823,7 +1864,7 @@ def build_elimination_tournament_payload(
         "variant": clean_text(variant),
         "final_action": {
             "label": clean_text(final_action.get("label"), "0%不参与"),
-            "position_pct": _safe_int(final_action.get("position_pct"), default=0),
+            "position_pct": _normalized_position_pct(final_action.get("position_pct")),
             "target": stock_payload(final_action.get("target")),
             "source": clean_text(final_action.get("source"), "final_target_resolution"),
             "reason": clean_text(final_action.get("reason")),
@@ -2334,10 +2375,51 @@ def _leader_reverse_reason(entry, fact_indexes):
     return f"{facts}；仍需与板块锚和同板块容量核心对照"
 
 
+def _market_capital_price_risk_entry(entry):
+    price_risk_reason = candidate_limit_down_risk_review_reason(entry)
+    if not price_risk_reason:
+        return {}
+    copied = dict(entry)
+    copied.update(
+        {
+            "status": "eliminated",
+            "reason": (
+                f"{price_risk_reason}；热榜、成交容量和席位记录只说明市场仍在集中交易，"
+                "不能证明价格已被资金接受；只作风险复核"
+            ),
+            "next_basis": "",
+            "elimination_basis": "价格否定优先，跌停/接近跌停样本不进入正向资金载体路径",
+            "risk_evidence": price_risk_reason,
+            "candidate_role": "风险复核样本",
+            "sector_role": "风险复核样本",
+            "reversal_decision": "价格否定，停止正向反推",
+            "new_entry_qualified": False,
+        }
+    )
+    return copied
+
+
+def _apply_market_capital_price_risk(layer):
+    copied = dict(_as_dict(layer))
+    for key in ("entries", "input_entries"):
+        if key not in copied:
+            continue
+        copied[key] = [
+            _market_capital_price_risk_entry(entry) or dict(entry)
+            for entry in _as_list(copied.get(key))
+            if isinstance(entry, dict)
+        ]
+    return _normalize_preflight_layer(copied)
+
+
 def _build_market_capital_structure_layer(sector_layer, source_payloads=None):
     fact_indexes = _preflight_fact_indexes(source_payloads)
     entries = []
     for entry in _entries_for_layer(sector_layer):
+        price_risk_entry = _market_capital_price_risk_entry(entry)
+        if price_risk_entry:
+            entries.append(price_risk_entry)
+            continue
         if _is_legacy_signal_entry(entry):
             copied = dict(entry)
             if _has_trend_second_wave_evidence(entry, fact_indexes) and _sector_context_supports_entry(entry, fact_indexes):
@@ -2592,7 +2674,7 @@ def _build_price_action_from_quant_layer(quant_layer):
 
 def _build_cycle_window_layer(price_layer, final_action, account_layer=None):
     final_action = _as_dict(final_action)
-    final_position = _safe_int(final_action.get("position_pct"), default=0)
+    final_position = _normalized_position_pct(final_action.get("position_pct"))
     final_reason = clean_text(final_action.get("reason"))
     failure_conditions = [
         clean_text(item)
@@ -2717,6 +2799,9 @@ def _build_sector_capital_preflight_layers(raw_layers, final_action, source_payl
         "market_capital_structure",
         "sector_capital_diffusion",
     }.issubset(by_id):
+        by_id["market_capital_structure"] = _apply_market_capital_price_risk(
+            by_id["market_capital_structure"]
+        )
         ordered = []
         for layer_id in SECTOR_CAPITAL_PREFLIGHT_LAYER_ORDER:
             layer = by_id.get(layer_id)
@@ -2780,7 +2865,7 @@ def _build_sector_capital_preflight_layers(raw_layers, final_action, source_payl
             "status": "final_action",
             "reason": clean_text(_as_dict(final_action).get("reason"), "最终没有新增参与对象"),
             "action_label": clean_text(_as_dict(final_action).get("label"), "0%不参与"),
-            "position_pct": _safe_int(_as_dict(final_action).get("position_pct"), default=0),
+            "position_pct": _normalized_position_pct(_as_dict(final_action).get("position_pct")),
         }
         final_layer = _normalize_preflight_layer(
             {
@@ -2800,17 +2885,19 @@ def _build_sector_capital_preflight_layers(raw_layers, final_action, source_payl
     cycle_layer = _build_cycle_window_layer(price_layer, final_action, account_layer)
     counter_account_layer = _build_counter_evidence_account_layer(cycle_layer, account_layer, final_action)
 
-    return [
-        market_layer,
-        sector_layer,
-        carrier_layer,
-        role_layer,
-        quant_layer,
-        price_layer,
-        cycle_layer,
-        counter_account_layer,
-        final_layer,
-    ]
+    return _enforce_preflight_monotonic_layers(
+        [
+            market_layer,
+            sector_layer,
+            carrier_layer,
+            role_layer,
+            quant_layer,
+            price_layer,
+            cycle_layer,
+            counter_account_layer,
+            final_layer,
+        ]
+    )
 
 
 def _normalize_zero_final_action_layer_counts(layers, final_action):
@@ -2892,7 +2979,7 @@ def _normalize_preflight_payload(payload):
     final_action = _as_dict(normalized.get("final_action"))
     normalized["final_action"] = {
         "label": clean_text(final_action.get("label"), "0%不参与"),
-        "position_pct": _safe_int(final_action.get("position_pct"), default=0),
+        "position_pct": _normalized_position_pct(final_action.get("position_pct")),
         "target": stock_payload(final_action.get("target")),
         "source": clean_text(final_action.get("source"), "final_target_resolution"),
         "reason": clean_text(final_action.get("reason")),

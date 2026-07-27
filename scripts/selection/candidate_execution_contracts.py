@@ -470,6 +470,13 @@ def build_opportunity_comparison(
         "old_position": {
             "name": _first_text(old_position, "name", "stock_name"),
             "code": _first_text(old_position, "code", "stock_code"),
+            "has_position": old_position.get("has_position"),
+            "has_pending_position": old_position.get("has_pending_position"),
+            "position": _first_number(old_position, "position", "position_pct", default=None),
+            "position_pct": _first_number(old_position, "position_pct", "position", default=None),
+            "position_source": _first_text(old_position, "position_source"),
+            "inferred_from_previous_report": old_position.get("inferred_from_previous_report"),
+            "summary": _first_text(old_position, "summary"),
             "shares": old_position.get("shares"),
             "sellable_shares": old_position.get("sellable_shares"),
             "unsellable_shares": old_position.get("unsellable_shares"),

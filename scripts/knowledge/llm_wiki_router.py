@@ -8,11 +8,18 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from domains.market_activity.new_high_structure import build_new_high_structure_signal
 from knowledge.llm_wiki_manifest import (
     EXPLICIT_FACT_PATHS,
     stable_json_hash,
     validate_knowledge_manifest,
     validate_knowledge_manifest_sources,
+)
+from report.position_tier_contract import (
+    POSITION_TIER_B1_B2_PCT,
+    POSITION_TIER_B1_PCT,
+    normalize_position_tier_pct,
+    position_x_to_tier_pct,
 )
 
 
@@ -67,6 +74,150 @@ KNOWLEDGE_INDEX = [
         "impact": "指数强但赚钱效应弱时，只保留主线核心，不从旧方向强行扩散候选。",
     },
     {
+        "id": "market.new-high-breadth-contraction",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/交易思想/创新高扩散、核心独强与补跌.md",
+        "source_date": "2026-07-13",
+        "capture_date": "2026-07-20",
+        "anchor": "2026-07-13 创新高6只、全A占比0.12%的可见窗口样本",
+        "author_or_publisher": "用户与日报仓库",
+        "title": "创新高扩散收缩、核心独强与补跌",
+        "topics": [
+            "创新高",
+            "趋势生成率",
+            "极致扩散",
+            "有效扩散",
+            "扩散偏冷",
+            "极低扩散",
+            "扩散断层",
+            "扩散收缩",
+            "核心独强",
+            "核心补跌",
+        ],
+        "trigger_terms": [
+            "创新高",
+            "趋势生成率",
+            "个位数",
+            "极致扩散",
+            "有效扩散",
+            "扩散偏冷",
+            "极低扩散",
+            "扩散收缩",
+            "扩散断层",
+            "核心独强",
+            "生态转弱",
+            "核心补跌",
+            "替代主线",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "创新高",
+                        "趋势生成率",
+                        "极致扩散",
+                        "有效扩散",
+                        "扩散偏冷",
+                        "极低扩散",
+                        "扩散收缩",
+                        "扩散断层",
+                        "低位修复",
+                        "核心独强",
+                        "生态转弱",
+                        "核心补跌",
+                        "个位数",
+                    ],
+                    "label": "创新高扩散结构",
+                }
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "创新高绝对水位分为极致扩散、有效扩散、扩散偏冷、极低扩散和扩散断层；绝对水位还要与变化方向、板块成群度、核心板块同步性及来源质量一起解释。首次个位数、快速收缩和板块碎片化只构成结构预警，不直接改变候选、明日对象、仓位、B1/B2或退出动作。",
+    },
+    {
+        "id": "market.historical-prior-live-structure",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/交易思想/历史先验、实时结构与可用窗口.md",
+        "source_date": "1944-06-06",
+        "capture_date": "2026-07-20",
+        "anchor": "1944-06-04至06多来源预报分歧与6月6日边际可用窗口",
+        "url": "https://www.metoffice.gov.uk/weather/learn-about/weather/case-studies/d-day-weather-forecast",
+        "author_or_publisher": "Met Office、Imperial War Museums、Eisenhower Library与James Stagg",
+        "title": "历史先验、实时结构与可用窗口",
+        "topics": [
+            "历史先验",
+            "历史类比",
+            "刻舟求剑",
+            "实时结构",
+            "模型分歧",
+            "竞争解释",
+            "市场急流",
+            "反弹与修复",
+            "稳定修复",
+            "可用窗口",
+        ],
+        "trigger_terms": [
+            "历史先验",
+            "历史类比",
+            "刻舟求剑",
+            "实时结构",
+            "模型分歧",
+            "竞争解释",
+            "市场急流",
+            "高空急流",
+            "短促反弹",
+            "稳定修复",
+            "修复质量",
+            "可用窗口",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "历史先验",
+                        "历史类比",
+                        "刻舟求剑",
+                        "实时结构",
+                        "模型分歧",
+                        "竞争解释",
+                        "可用窗口",
+                    ],
+                    "label": "历史先验与当前结构",
+                },
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "历史类比",
+                        "实时结构",
+                        "短促反弹",
+                        "稳定修复",
+                        "修复质量",
+                    ],
+                    "label": "反弹与稳定修复结构",
+                },
+                {
+                    "path": "market.turnover_distribution",
+                    "contains_any": [
+                        "市场急流",
+                        "实时结构",
+                        "模型分歧",
+                    ],
+                    "label": "资金反馈结构",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "历史样本只限定可能范围，来源明确的指数、宽度、成交分布与板块同步决定当前解释；先区分短促反弹、首次收复与稳定修复，保留竞争解释、主要反证和下一观察窗口，不改变候选、明日对象、仓位、B1/B2、旧仓动作或退出动作。",
+    },
+    {
         "id": "market.sector-grid-first-selection",
         "prior": "market-structure-prior",
         "source_path": "wiki/板块补充/板块中枢与主线延续.md",
@@ -118,6 +269,95 @@ KNOWLEDGE_INDEX = [
         "report_slot": "市场结构判断",
         "confidence": "reviewed",
         "impact": "结构性行情先问资金灌入哪个板块格子，再在格子内区分机构主线、短线题材和边角标的；先选板块不是只看板块名字，而是看成交占比、宽度、核心承接和竞争方向，边角标的不因轮动自动取得参与资格。",
+    },
+    {
+        "id": "market.six-layer-trend-derivation",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/板块补充/板块中枢与主线延续.md",
+        "title": "六层趋势推导与局部领先",
+        "topics": [
+            "市场到个股",
+            "市场趋势",
+            "趋势板块",
+            "板块生态",
+            "板块中趋势个股",
+            "个股确认",
+            "局部领先",
+            "跨日持续",
+            "分歧承接",
+            "内部扩散",
+            "竞争方向对照",
+            "多尺度证据",
+            "王虹",
+            "三维挂谷猜想",
+        ],
+        "trigger_terms": [
+            "市场到个股",
+            "市场->市场趋势",
+            "市场→市场趋势",
+            "市场趋势",
+            "趋势板块",
+            "板块生态",
+            "板块中趋势个股",
+            "板块内趋势个股",
+            "六层推导",
+            "局部领先",
+            "跨日持续",
+            "分歧承接",
+            "内部扩散",
+            "竞争方向对照",
+            "王虹",
+            "三维挂谷猜想",
+            "多尺度",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.selection_order",
+                    "contains_any": [
+                        "市场→市场趋势",
+                        "市场到市场趋势",
+                        "趋势板块",
+                        "板块生态",
+                        "板块中趋势个股",
+                        "六层趋势推导",
+                    ],
+                    "label": "六层推导顺序",
+                },
+                {
+                    "path": "market.sector_grid",
+                    "contains_any": [
+                        "趋势板块",
+                        "跨日持续",
+                        "分歧承接",
+                        "内部扩散",
+                        "竞争方向对照",
+                    ],
+                    "label": "趋势板块证明",
+                },
+            ],
+            "prefer_any": [
+                {
+                    "path": "candidate.quality",
+                    "contains_any": ["方向匹配", "板块中趋势个股", "个股价格确认"],
+                    "label": "个股确认",
+                },
+                {
+                    "path": "decision.b1_role",
+                    "contains_any": ["参与权"],
+                    "label": "B1参与权",
+                },
+                {
+                    "path": "decision.b2_role",
+                    "contains_any": ["确认权"],
+                    "label": "B2确认权",
+                },
+            ],
+        },
+        "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "impact": "推导先从市场和市场趋势限定参与上限，再验证趋势板块的跨日持续、分歧承接、内部扩散和竞争方向对照，随后比较板块生态、板块中趋势个股和个股价格确认。局部领先不反推市场已经全面修复：偏弱市场中的完整局部趋势最多取得B1参与权，B2仍等更广泛确认。王虹三维挂谷猜想只提供多尺度证据逐层传递的方法类比，不直接生成交易动作。",
     },
     {
         "id": "account.unbuyable-core-anchor",
@@ -244,6 +484,9 @@ KNOWLEDGE_INDEX = [
             "主攻点切换",
             "风格切换载体",
             "主线战术资源",
+            "板块标签中性",
+            "周期客观性",
+            "观察参与分离",
         ],
         "trigger_terms": [
             "业绩线",
@@ -264,10 +507,29 @@ KNOWLEDGE_INDEX = [
             "风格切换载体",
             "主线真空",
             "不合理的超额收益",
+            "没有最好的股票",
+            "只有最好的周期",
+            "板块标签",
+            "真实趋势",
+            "真实赚钱效应",
+            "承认变化不等于参与",
+            "科技看不懂时休息也可以",
         ],
         "fact_conditions": {
             "must_any": [
                 {"path": "market.market_form", "contains_any": ["业绩线", "轮动线", "科技线", "风格切换"], "label": "市场风格事实"},
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "板块标签中性",
+                        "没有最好的股票",
+                        "只有最好的周期",
+                        "真实趋势",
+                        "真实赚钱效应",
+                        "承认变化不等于参与",
+                    ],
+                    "label": "板块标签与周期事实",
+                },
                 {"path": "market.sector_grid", "contains_any": ["业绩线", "轮动线", "科技线", "主攻点"], "label": "板块风格事实"},
                 {"path": "market.selection_order", "contains_any": ["主攻点", "牵制点", "同权比较"], "label": "主攻比较"},
                 {"path": "candidate.quality", "contains_any": ["风格切换载体", "超级巨星", "主线真空"], "label": "风格载体"},
@@ -276,7 +538,7 @@ KNOWLEDGE_INDEX = [
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "市场结构判断",
         "confidence": "reviewed",
-        "impact": "主线不是信仰位，而是战术资源；科技线调整或拥挤时可降为牵制点，业绩线、轮动线和低位趋势线若出现走势活跃、板块逻辑、价格结构和资金扩散共振，就要进入同权比较。最终0%后，强势样本还要复核是孤立情绪还是风格切换载体。",
+        "impact": "主线不是信仰位，而是战术资源；科技线调整或拥挤时可降为牵制点，其他方向证据增强时进入同权比较。最终0%后，强势样本还要复核是孤立情绪还是风格切换载体。板块名称没有天然高低；没有最好的股票，只有最好的周期。承认真实趋势和赚钱效应只提高观察与复核优先级，不直接生成买入资格；证据不足或账户不适配时可以不参与。",
     },
     {
         "id": "discipline.fomo-external-stimulus",
@@ -317,13 +579,46 @@ KNOWLEDGE_INDEX = [
         "impact": "FOMO 是外部价格刺激被自己接住后的情绪，不是执行资格；反包先批改情绪反应，不直接批改前一日信息集。必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；卖出后第一天因反包、后悔或怕踏空想买回，默认不执行，只能收盘后重新进入 T0 评估。",
     },
     {
+        "id": "discipline.tomorrow-empty-position-semantics",
+        "prior": "account-execution-prior",
+        "source_path": "wiki/交易思想/日报术语契约.md",
+        "title": "明日空仓与不新增语义分离",
+        "topics": ["明日账户动作", "账户归零", "不新增参与", "当前账户事实", "持仓待确认"],
+        "trigger_terms": [
+            "明日空仓",
+            "明日新仓0%",
+            "明日新仓 0%",
+            "明日标的为空",
+            "集合竞价卖清",
+            "账户归零",
+            "仓位为0",
+            "不买新股",
+            "不做T",
+            "当前空仓",
+            "持仓未知",
+            "持仓未输入",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.position_plan", "contains_any": ["明日空仓", "明日新仓0%", "明日新仓 0%", "明日标的为空"], "label": "明日新仓语义"},
+                {"path": "position.action", "contains_any": ["集合竞价卖清", "账户归零", "不做T"], "label": "明日账户动作"},
+                {"path": "position.state", "contains_any": ["当前空仓", "持仓未知", "持仓未输入"], "label": "当前持仓事实"},
+                {"path": "account.status", "contains_any": ["当前空仓", "持仓未知", "持仓未输入"], "label": "账户事实"},
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "账户动作",
+        "confidence": "verified",
+        "impact": "明日空仓是明日账户归零指令：次日不买新股，集合竞价卖清全部可卖旧仓，成交后账户仓位为0且不做T；未成交继续尽早卖，未清完不能称空仓。只有显式明日空仓才覆盖已经失败、待10:10复核和正常T+2的常规旧仓处理时点。明日新仓0%只表示不新增参与，明日标的为空同理；当前空仓只描述当前账户事实，持仓未知保持待确认，这四种情况都不触发上述覆盖。",
+    },
+    {
         "id": "selection.rhythm-reset-margin-review",
         "prior": "selection-review-prior",
         "source_path": "wiki/交易思想/价格行为与能量框架.md",
-        "title": "节奏复位空仓与边际主线复核",
+        "title": "节奏复位不新增与边际主线复核",
         "topics": [
-            "节奏复位空仓",
-            "延后确认空仓",
+            "节奏复位不新增",
+            "延后确认不新增",
             "错失待批改",
             "公共合理不等于超短边际",
             "边际主线",
@@ -336,6 +631,8 @@ KNOWLEDGE_INDEX = [
             "同手同脚",
             "合理空仓",
             "边际主线",
+            "节奏复位不新增",
+            "延后确认不新增",
             "节奏复位空仓",
             "延后确认空仓",
             "错失待批改",
@@ -368,14 +665,14 @@ KNOWLEDGE_INDEX = [
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "超短边际节奏复核",
         "confidence": "reviewed",
-        "impact": "最终0%不是思考终点；继续批改是防守空仓、节奏复位空仓、延后确认空仓还是错失待批改。周一空仓若来自周五旧信号，必须追溯周五选股、买点、持仓预期和退出纪律；周二再强只算重新比较，不替周五或周一正名。外盘和存储强势默认只作启发，必须完成同链传导和A股确认后才进入T+1复核；过程候选不覆盖最终动作。",
+        "impact": "最终0%不是思考终点；继续批改是防守不新增、节奏复位不新增、延后确认不新增还是错失待批改。周一不新增若来自周五旧信号，必须追溯周五选股、买点、持仓预期和退出纪律；周二再强只算重新比较，不替周五或周一正名。外盘和存储强势默认只作启发，必须完成同链传导和A股确认后才进入T+1复核；过程候选不覆盖最终动作。",
     },
     {
         "id": "discipline.tplus-slot-timeline",
         "prior": "trade-discipline-prior",
         "source_path": "wiki/交易思想/价格行为与能量框架.md",
         "title": "Ta-Te 账户日序时间表",
-        "topics": ["Ta-Te", "Ta/Tb/Tc/Td/Te", "日序", "T+2必卖", "空仓", "Td", "Te"],
+        "topics": ["Ta-Te", "Ta/Tb/Tc/Td/Te", "日序", "T+2必卖", "账户动作", "Td", "Te"],
         "trigger_terms": [
             "Ta",
             "Tb",
@@ -407,7 +704,7 @@ KNOWLEDGE_INDEX = [
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "持仓日序",
         "confidence": "reviewed",
-        "impact": "Ta-Te要表格化呈现账户时间占用：Ta是最远复盘日，Tb/Tc是前两段路径，Td是今日报告日，Te是明日执行日。Te只承接昨晚决定的参与、取消或旧仓降风险；明日标的为空时，Te写只处理旧仓风险或空仓等待B1资格。",
+        "impact": "Ta-Te要表格化呈现账户时间占用：Ta是最远复盘日，Tb/Tc是前两段路径，Td是今日报告日，Te是明日执行日。明日标的为空时，Te按账户事实写已确认旧仓的独立动作、已确认无旧仓等待B1资格或持仓待确认；只有显式明日空仓才要求集合竞价卖清旧仓并把账户归零。",
     },
     {
         "id": "intraday.do-t-risk-control",
@@ -427,6 +724,158 @@ KNOWLEDGE_INDEX = [
         "report_slot": "盘中问股前提",
         "confidence": "verified",
         "impact": "做T先看防守线、止盈线和买回确认，不把更便宜当作更正确。",
+    },
+    {
+        "id": "discipline.unplanned-profit-qualification",
+        "prior": "trade-discipline-prior",
+        "source_path": "wiki/交易思想/做T与风险控制.md",
+        "title": "计划外盈利不为偏离正名",
+        "topics": ["计划外交易", "事前信息集", "独立买入资格", "日报偏离"],
+        "trigger_terms": [
+            "计划外",
+            "计划外买入",
+            "擅自买入",
+            "日报没有标的",
+            "没有明日对象",
+            "涨了8%",
+            "一度盈利",
+            "偏离日报",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.response_script", "contains_any": ["计划外", "计划外买入", "偏离日报", "没有明日对象"], "label": "计划外事实"},
+                {"path": "decision.behavior_traps", "contains_any": ["擅自买入", "计划外买入"], "label": "偏离动作"},
+                {"path": "position.capital_priority_reason", "contains_any": ["计划外", "一度盈利", "偏离日报"], "label": "计划外持仓"},
+                {"path": "candidate.quality", "contains_any": ["计划外", "独立买入资格"], "label": "独立资格"},
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "交易纪律",
+        "confidence": "reviewed",
+        "impact": "计划外交易一度盈利不能证明计划外交易正确；只按下单前信息、买入资格、时间窗口和亏损边界评价。偏离日报后的自主买入必须独立重新取得买入资格，不能继承原日报信用。",
+    },
+    {
+        "id": "position.failed-position-loss-aversion",
+        "prior": "account-execution-prior",
+        "source_path": "wiki/交易思想/做T与风险控制.md",
+        "title": "失败仓加仓与怕卖飞分离",
+        "topics": ["失败仓", "亏损厌恶", "低开加仓", "怕卖飞", "独立买回确认"],
+        "trigger_terms": [
+            "旧仓已经失败",
+            "失败仓",
+            "低开加仓",
+            "低开我又加仓",
+            "加仓做T",
+            "亏损厌恶",
+            "怕卖飞",
+            "卖飞",
+            "卖出后反弹",
+            "继续拿",
+        ],
+        "weak_trigger_terms": ["卖飞", "卖出后反弹", "继续拿"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "position.state", "contains_any": ["旧仓已经失败", "失败仓"], "label": "失败仓事实"},
+                {"path": "position.action", "contains_any": ["低开加仓", "加仓做T", "继续拿"], "label": "失败仓动作"},
+                {"path": "position.capital_priority_reason", "contains_any": ["亏损厌恶", "怕卖飞", "卖出后反弹"], "label": "持仓偏差"},
+                {"path": "decision.response_script", "contains_any": ["低开加仓", "怕卖飞", "独立买回确认"], "label": "失败仓复核"},
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "旧仓处理",
+        "confidence": "reviewed",
+        "impact": "旧仓已失败且没有独立买回确认时，低开加仓不是做T，而是亏损厌恶在证明第一笔。害怕卖飞不能覆盖失败仓退出；后续修复必须作为下一笔独立决策重新取得资格。",
+    },
+    {
+        "id": "evidence.dragon-tiger-list-sample-boundary",
+        "prior": "evidence-boundary-prior",
+        "source_path": "wiki/交易思想/做T与风险控制.md",
+        "title": "龙虎榜只代表上榜席位样本",
+        "topics": ["龙虎榜", "席位样本", "净买净卖", "价格接受", "证据边界"],
+        "trigger_terms": [
+            "龙虎榜",
+            "净买为正",
+            "龙虎榜净买",
+            "上榜席位",
+            "全市场主力",
+            "榜外小额资金",
+            "合力踩踏",
+        ],
+        "weak_trigger_terms": ["龙虎榜"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "market.turnover_distribution", "contains_any": ["龙虎榜", "净买为正", "上榜席位"], "label": "龙虎榜样本"},
+                {"path": "market.market_form", "contains_any": ["龙虎榜", "全市场主力", "合力踩踏"], "label": "市场证据边界"},
+                {"path": "candidate.quality", "contains_any": ["龙虎榜", "净买为正", "价格接受"], "label": "候选证据"},
+                {"path": "decision.response_script", "contains_any": ["龙虎榜", "席位样本", "证据边界"], "label": "证据复核"},
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "资金证据",
+        "confidence": "reviewed",
+        "impact": "龙虎榜只覆盖上榜席位样本；净买不能代表全市场主力方向，也不能推导榜外资金行为。席位口径可能重叠，不能机械相加；净买与跌停并存时，价格接受仍然失败。",
+    },
+    {
+        "id": "discipline.long-thesis-short-failure-separation",
+        "prior": "trade-discipline-prior",
+        "source_path": "wiki/交易思想/做T与风险控制.md",
+        "title": "长期产业研究与短线失败仓分离",
+        "topics": ["长期产业逻辑", "短线失败仓", "叙事续命", "持仓资格", "价格确认"],
+        "trigger_terms": [
+            "2027",
+            "存储",
+            "科技",
+            "长期产业逻辑",
+            "长期逻辑",
+            "短线失败仓",
+            "继续拿",
+            "续命",
+        ],
+        "weak_trigger_terms": ["2027", "存储", "科技", "继续拿"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "position.state", "contains_any": ["短线失败仓", "失败仓"], "label": "短线失败仓"},
+                {"path": "position.action", "contains_any": ["继续拿", "续命"], "label": "持仓动作"},
+                {"path": "position.capital_priority_reason", "contains_any": ["长期产业逻辑", "长期逻辑", "存储", "科技"], "label": "长期叙事"},
+                {"path": "candidate.quality", "contains_any": ["长期产业逻辑", "价格确认", "持仓资格"], "label": "持仓资格"},
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "持仓资格",
+        "confidence": "reviewed",
+        "impact": "存储、科技或其他长期产业逻辑不能给短线失败仓续命。长期判断只进入研究；继续持有必须由当前价格承接、板块同步、相对强弱和失效线重新取得持仓资格。",
+    },
+    {
+        "id": "position.position-tier-exposure-contract",
+        "prior": "account-execution-prior",
+        "source_path": "wiki/交易思想/日报术语契约.md",
+        "title": "0/1x/2x仓位档与当前新增边界",
+        "topics": ["仓位档", "1x/50%", "2x/100%", "B1", "B2", "计划总档", "当前新增档", "账户总暴露"],
+        "trigger_terms": [
+            "1x和2x",
+            "1x/2x仓位",
+            "0/1x/2x",
+            "仓位档",
+            "计划总档",
+            "当前新增档",
+            "planned_new_entry_pct",
+            "new_entry_pct",
+            "1x/50%",
+            "2x/100%",
+            "B1",
+            "B2",
+        ],
+        "weak_trigger_terms": ["1x/50%", "2x/100%", "B1", "B2"],
+        "fact_conditions": {
+            "must_any": [
+                {"path": "decision.position_plan", "contains_any": ["计划总档", "当前新增"], "label": "计划与当前新增档"},
+                {"path": "position.action", "contains_any": ["当前0%新增", "当前只新增1x/50%=B2", "账户合计2x/100%"], "label": "当前账户动作"},
+            ]
+        },
+        "scenarios": ["intraday_question", "daily_report", "review"],
+        "report_slot": "仓位契约",
+        "confidence": "verified",
+        "impact": "0=0%不参与；1x=50%半仓=B1参与权；2x=100%满仓=B1+B2。planned_new_entry_pct/x是计划总档；new_entry_pct/x是当前新增档，表示扣除同股旧仓或账户空间后的本次增量，两者不能互换；两只股票各占1x时，账户合计仍是2x/100%。",
     },
     {
         "id": "intraday.same-stock-t-failure-control",
@@ -466,7 +915,7 @@ KNOWLEDGE_INDEX = [
         "scenarios": ["intraday_question", "daily_report", "review"],
         "report_slot": "同股T处理",
         "confidence": "reviewed",
-        "impact": "已有1x且今日目标仍是同一只票时，只按同股T候选处理；强表态存活才允许临时2x，快速跌破VWAP、昨收或MA7且不能收回时，卖出可卖旧仓，新买仓位次日按失败仓处理。尾盘卖出只适用于正常样本，失败样本先保护亏损边界。",
+        "impact": "已有1x/50%=B1且今日目标仍是同一只票时，只按同股T候选处理；当前只新增1x/50%=B2，强表态确认后总仓位才到2x/100%。快速跌破VWAP、昨收或MA7且不能收回时，不补B2并卖出可卖旧仓，新买仓位次日按失败仓处理。尾盘卖出只适用于正常样本，失败样本先保护亏损边界。",
     },
     {
         "id": "intraday.two-b-confirmation-positioning",
@@ -526,7 +975,7 @@ KNOWLEDGE_INDEX = [
         "scenarios": ["intraday_question", "daily_report", "review"],
         "report_slot": "2B仓位处理",
         "confidence": "reviewed",
-        "impact": "B1只买参与权，B2只买确认权；B2不是任务仓，没有确认就没有补足义务。交易计划不是仓位完成任务，而是确认、取消和降风险的筛选器；B1没赢之前，B2不存在。短线超额来自确认后加速，不来自所有样本开盘买满；坏样本只亏B1，好样本才给B1+B2。少亏不是畏手畏脚，而是长期跑赢的一部分。",
+        "impact": "0=0%不参与；1x=50%半仓=B1参与权；2x=100%满仓=B1+B2。B1只买参与权，B2只买确认权；B2不是任务仓，没有确认就没有补足义务。交易计划不是仓位完成任务，而是确认、取消和降风险的筛选器；B1没赢之前，B2不存在。短线超额来自确认后加速，不来自所有样本开盘买满；坏样本只亏B1，好样本才给B1+B2。",
     },
     {
         "id": "discipline.profit-after-win-control",
@@ -685,6 +1134,14 @@ KNOWLEDGE_INDEX = [
             "布鲁克斯",
             "价格行为",
             "价格趋势",
+            "趋势交易周期",
+            "趋势交易",
+            "图形交易",
+            "叙事交易",
+            "小作文段子交易",
+            "策略身份漂移",
+            "引子和助燃剂",
+            "只交易趋势",
             "叙事后置",
             "按图索因",
             "按因索图",
@@ -1054,12 +1511,17 @@ def _matched_fact_conditions(entry: Dict[str, Any], facts: Dict[str, Any]) -> Li
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
+    parsed = _optional_float(value)
+    return parsed if parsed is not None else default
+
+
+def _optional_float(value: Any) -> float | None:
     try:
         if value not in (None, ""):
             return float(value)
     except (TypeError, ValueError):
-        return default
-    return default
+        return None
+    return None
 
 
 def _first_dict(*values: Any) -> Dict[str, Any]:
@@ -1090,6 +1552,19 @@ def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
         market_facts["selection_order"] = "先选板块"
     if "边角" in combined_text:
         market_facts["corner_sample"] = "边角标的"
+    new_high_snapshot = data.get("new_high_feedback")
+    if isinstance(new_high_snapshot, Mapping):
+        new_high_structure = build_new_high_structure_signal(
+            new_high_snapshot,
+            str(data.get("target_date") or ""),
+        )
+        if new_high_structure.get("state") in {"扩散断层预警", "扩散收缩", "低位修复"}:
+            breadth_text = str(new_high_structure.get("summary") or "").strip()
+            if breadth_text:
+                existing_breadth = str(market_facts.get("breadth") or "").strip()
+                market_facts["breadth"] = "；".join(
+                    item for item in (existing_breadth, breadth_text) if item
+                )
     _merge_rebound_facts(market_facts, _rebound_facts_from_text(combined_text))
     return market_facts
 
@@ -1135,11 +1610,25 @@ def _merge_rebound_facts(target: Dict[str, Any], rebound_facts: Dict[str, List[s
 
 
 def _candidate_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
-    return _first_dict(
+    execution_stage_context = _first_dict(data.get("execution_stage_context"))
+    market_research_snapshot = _first_dict(data.get("market_research_snapshot"))
+    quality_samples = execution_stage_context.get("candidate_quality_samples")
+    if not isinstance(quality_samples, list):
+        quality_samples = market_research_snapshot.get("candidate_quality_samples")
+    quality_sample = next(
+        (item for item in (quality_samples or []) if isinstance(item, dict) and item),
+        {},
+    )
+    candidates = (
         data.get("selected_position_candidate"),
         data.get("selected_candidate"),
         data.get("watch_anchor"),
-        _first_dict(data.get("market_research_snapshot")).get("selected_position_candidate"),
+        market_research_snapshot.get("selected_position_candidate"),
+        quality_sample,
+    )
+    return next(
+        (candidate for candidate in candidates if isinstance(candidate, dict) and candidate),
+        {},
     )
 
 
@@ -1193,13 +1682,13 @@ def _build_account_candidate_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     account_facts: Dict[str, Any] = {}
     candidate_facts: Dict[str, Any] = {}
 
-    cash_available = _safe_float(account.get("cash_available"), default=0.0)
-    one_lot_amount = _safe_float(candidate.get("one_lot_amount"), default=0.0)
-    if cash_available:
+    cash_available = _optional_float(account.get("cash_available"))
+    one_lot_amount = _optional_float(candidate.get("one_lot_amount"))
+    if cash_available is not None:
         account_facts["cash_available"] = cash_available
-    if one_lot_amount:
+    if one_lot_amount is not None:
         candidate_facts["one_lot_amount"] = one_lot_amount
-    if cash_available and one_lot_amount and one_lot_amount > cash_available:
+    if cash_available is not None and one_lot_amount is not None and one_lot_amount > cash_available:
         account_facts["status"] = "实际不可买"
 
     identity = str(candidate.get("identity") or candidate.get("cycle_identity") or candidate.get("market_identity") or "").strip()
@@ -1222,6 +1711,27 @@ def _build_account_candidate_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"account": account_facts, "candidate": candidate_facts}
 
 
+def _exposure_position_tier_pct(exposure_plan: Dict[str, Any], pct_key: str, x_key: str) -> int | None:
+    value = exposure_plan.get(pct_key)
+    try:
+        if value not in (None, ""):
+            return normalize_position_tier_pct(value)
+        x_value = exposure_plan.get(x_key)
+        if x_value not in (None, ""):
+            return position_x_to_tier_pct(x_value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _position_tier_fact_label(position_pct: int | None) -> str:
+    return {
+        0: "0%",
+        POSITION_TIER_B1_PCT: "1x/50%",
+        POSITION_TIER_B1_B2_PCT: "2x/100%",
+    }.get(position_pct, "仓位待确认")
+
+
 def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     resolution = _final_target_resolution_from_data(data)
     decision = _first_dict(resolution.get("capital_priority_decision"))
@@ -1238,6 +1748,7 @@ def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
 
     position_facts: Dict[str, Any] = {}
     candidate_facts: Dict[str, Any] = {}
+    decision_facts: Dict[str, Any] = {}
     capital_priority = str(decision.get("capital_priority") or "").strip()
     reason = str(decision.get("reason") or "").strip()
     old_position_priority = {
@@ -1249,7 +1760,22 @@ def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     }
     switch_priority = {"new_entry_after_old_exit"}
     new_entry_priority = {"new_entry", "tradable_proxy"}
-    has_existing_position = _has_existing_position(existing_position)
+    is_v2_exposure = exposure_plan.get("schema_version") == "position_tier_exposure.v2"
+    old_position_pct = _exposure_position_tier_pct(exposure_plan, "old_position_pct", "old_position_x") if is_v2_exposure else None
+    planned_new_entry_pct = _exposure_position_tier_pct(
+        exposure_plan,
+        "planned_new_entry_pct",
+        "planned_new_entry_x",
+    ) if is_v2_exposure else None
+    current_new_entry_pct = _exposure_position_tier_pct(
+        exposure_plan,
+        "new_entry_pct",
+        "new_entry_x",
+    ) if is_v2_exposure else None
+    has_existing_position = _has_existing_position(existing_position) or bool(
+        is_v2_exposure and old_position_pct and old_position_pct > 0
+    )
+    same_stock_target = bool(exposure_plan.get("same_stock_target"))
     same_stock_t = bool(exposure_plan.get("same_stock_t") or capital_priority == "same_stock_t")
 
     if has_existing_position or capital_priority in old_position_priority or same_stock_t:
@@ -1270,6 +1796,38 @@ def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
         position_facts["capital_priority_reason"] = reason
     if capital_priority and position_facts:
         position_facts["capital_priority"] = capital_priority
+    if is_v2_exposure and planned_new_entry_pct is not None and current_new_entry_pct is not None:
+        planned_label = _position_tier_fact_label(planned_new_entry_pct)
+        current_label = _position_tier_fact_label(current_new_entry_pct)
+        old_label = _position_tier_fact_label(old_position_pct)
+        decision_facts["position_plan"] = f"计划总档{planned_label}；当前新增{current_label}"
+        if same_stock_target and planned_new_entry_pct > 0 and current_new_entry_pct == 0:
+            position_facts["action"] = (
+                f"同股计划总档{planned_label}已由现有{old_label}满足；"
+                "当前0%新增，不重复B1，不追加B2"
+            )
+        elif same_stock_t and current_new_entry_pct == POSITION_TIER_B1_PCT:
+            position_facts["action"] = (
+                "同股T；当前只新增1x/50%=B2；已有1x/50%=B1；"
+                "B2确认后总仓位2x/100%"
+            )
+        elif (
+            not same_stock_target
+            and old_position_pct == POSITION_TIER_B1_PCT
+            and current_new_entry_pct == POSITION_TIER_B1_PCT
+        ):
+            position_facts["action"] = (
+                "不同股旧仓1x/50% + 当前新仓1x/50%；账户合计2x/100%"
+            )
+        elif planned_new_entry_pct > 0 and current_new_entry_pct == 0:
+            action_prefix = "换仓；" if capital_priority in switch_priority else ""
+            position_facts["action"] = (
+                f"{action_prefix}当前0%新增；保留计划总档{planned_label}，等待旧仓释放"
+            )
+        elif current_new_entry_pct == POSITION_TIER_B1_PCT:
+            position_facts["action"] = "当前新增1x/50%=B1参与权"
+        elif current_new_entry_pct == POSITION_TIER_B1_B2_PCT:
+            position_facts["action"] = "当前新增2x/100%=B1+B2；B2只在确认后执行"
     _merge_rebound_facts(candidate_facts, _rebound_facts_from_text(" ".join(_flatten_terms(new_entry))))
     if has_existing_position:
         _merge_rebound_facts(position_facts, _rebound_facts_from_text(" ".join(_flatten_terms([existing_position, reason]))))
@@ -1279,6 +1837,8 @@ def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
         result["position"] = position_facts
     if candidate_facts:
         result["candidate"] = candidate_facts
+    if decision_facts:
+        result["decision"] = decision_facts
     if capital_priority:
         result["capital_priority"] = capital_priority
     return result

@@ -6,6 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import (
+    build_candidate_quality_scorecard_payload,
+)
 from selection.candidate_quality_contracts import (
     ACTION_CEILINGS,
     build_candidate_quality_review_record,
@@ -519,6 +522,47 @@ class CandidateQualityContractsTest(unittest.TestCase):
         self.assertEqual(row["仓位性质"], "持仓未输入")
         self.assertEqual(row["持仓动作"], "持仓未输入，先确认旧仓情况")
         self.assertEqual(contract["single_stock_fields"]["持仓动作"], "持仓未输入，先确认旧仓情况")
+
+    def test_scorecard_maps_confirmed_position_only_to_the_same_candidate(self):
+        payload = build_candidate_quality_scorecard_payload(
+            {
+                "position_context_provided": True,
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "name": "长电科技",
+                        "code": "600584",
+                    }
+                },
+                "candidate_quality_panel_fields": {},
+                "candidate_quality_samples": [
+                    {
+                        "name": "长电科技",
+                        "code": "600584",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                    },
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                    },
+                ],
+            }
+        )
+
+        samples = {sample["code"]: sample for sample in payload["candidate_quality_samples"]}
+        confirmed = evaluate_candidate_quality_sample_contract(samples["600584"])["visible_row"]
+        unrelated = evaluate_candidate_quality_sample_contract(samples["002185"])["visible_row"]
+
+        self.assertEqual(confirmed["当前持仓"], "待确认")
+        self.assertEqual(confirmed["可卖数量"], "待确认")
+        self.assertEqual(confirmed["不可卖数量"], "待确认")
+        self.assertEqual(confirmed["仓位性质"], "已有仓")
+        self.assertEqual(confirmed["持仓动作"], "已确认持有，数量待确认")
+        self.assertEqual(unrelated["仓位性质"], "无仓")
+        self.assertEqual(unrelated["持仓动作"], "无仓")
 
     def test_shengyang_engine_clarification_limits_action(self):
         core_result = evaluate_candidate_quality_sample(

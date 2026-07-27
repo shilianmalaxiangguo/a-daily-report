@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from report.execution_wording import PREMARKET_50_EXECUTION_TEXT, PREMARKET_FULL_EXECUTION_TEXT
 from report.sniper_target_derivation import build_sniper_target_derivation_packet, full_section
 
 
@@ -117,7 +118,104 @@ class SniperTargetDerivationBayesianDiagnosisTest(unittest.TestCase):
         self.assertEqual(packet["final_action"]["position_pct"], 0)
         self.assertEqual(packet["final_action"]["action"], "只观察，不新增参与")
 
-    def test_full_section_renders_full_position_action_without_50_percent_label(self):
+    def test_two_layer_object_requires_valid_structured_position_tier(self):
+        target = {"name": "太极实业", "code": "600667", "sector": "半导体"}
+        invalid_front_decisions = (
+            {
+                "execution_identity": "明日执行对象",
+                "position_plan": "33%条件执行",
+                "position_pct": 33,
+            },
+            {
+                "execution_identity": "明日执行对象",
+                "position_plan": "75%条件执行",
+                "position_pct": 75,
+            },
+            {
+                "execution_identity": "明日执行对象",
+                "position_plan": "50%条件执行",
+            },
+        )
+        for front_decision in invalid_front_decisions:
+            with self.subTest(front_decision=front_decision):
+                packet = build_sniper_target_derivation_packet(
+                    final_target_resolution={
+                        "capital_priority_decision": {
+                            "capital_priority": "wait",
+                        },
+                    },
+                    position_decision={"target_position_pct": 0},
+                    two_layer_decision_payload={
+                        "front_decision": {
+                            **front_decision,
+                            "execution_object": target,
+                        },
+                    },
+                    target_date="2026-07-19",
+                )
+
+                self.assertEqual(packet["canonical_target"], {})
+                self.assertEqual(packet["canonical_role"], "观察对象")
+                self.assertEqual(packet["final_action"]["position_pct"], 0)
+                self.assertNotEqual(
+                    packet["canonical_source"],
+                    "two_layer_decision_payload.front_decision.execution_object",
+                )
+
+    def test_two_layer_object_propagates_valid_structured_position_tier(self):
+        target = {"name": "太极实业", "code": "600667", "sector": "半导体"}
+        for position_pct, expected_action in (
+            (50, PREMARKET_50_EXECUTION_TEXT),
+            (100, PREMARKET_FULL_EXECUTION_TEXT),
+        ):
+            with self.subTest(position_pct=position_pct):
+                packet = build_sniper_target_derivation_packet(
+                    final_target_resolution={
+                        "capital_priority_decision": {
+                            "capital_priority": "wait",
+                        },
+                    },
+                    position_decision={"target_position_pct": 0},
+                    two_layer_decision_payload={
+                        "front_decision": {
+                            "execution_identity": "明日执行对象",
+                            "execution_object": target,
+                            "position_pct": position_pct,
+                        },
+                    },
+                    target_date="2026-07-19",
+                )
+
+                self.assertEqual(packet["canonical_target"]["code"], "600667")
+                self.assertEqual(packet["canonical_role"], "执行对象")
+                self.assertEqual(packet["final_action"]["position_pct"], position_pct)
+                self.assertEqual(packet["final_action"]["action"], expected_action)
+
+    def test_selection_workflow_rejects_non_tier_final_position(self):
+        target = {"name": "太极实业", "code": "600667", "sector": "半导体"}
+        for position_pct in (33, 75, None):
+            with self.subTest(position_pct=position_pct):
+                packet = build_sniper_target_derivation_packet(
+                    data={
+                        "selection_workflow": {
+                            "schema_version": "selection_workflow.v1",
+                            "final": {
+                                "execution_object": target,
+                                "position_pct": position_pct,
+                                "action_text": "旧文案不能替代结构化仓位",
+                            },
+                            "candidate_pool": [],
+                        },
+                    },
+                    position_decision={"target_position_pct": 50},
+                    target_date="2026-07-19",
+                )
+
+                self.assertEqual(packet["canonical_target"], {})
+                self.assertEqual(packet["canonical_role"], "无")
+                self.assertEqual(packet["final_action"]["position_pct"], 0)
+
+    def test_full_section_keeps_structured_50_percent_when_legacy_action_says_full_position(self):
         packet = build_sniper_target_derivation_packet(
             data={
                 "selection_workflow": {
@@ -151,10 +249,10 @@ class SniperTargetDerivationBayesianDiagnosisTest(unittest.TestCase):
 
         rendered = "\n".join(full_section(packet))
 
-        self.assertIn("仓位=满仓 动作=满仓条件执行", rendered)
-        self.assertNotIn("仓位=50% 动作=满仓条件执行", rendered)
+        self.assertIn("仓位=50% 动作=满仓条件执行", rendered)
+        self.assertNotIn("仓位=满仓 动作=满仓条件执行", rendered)
 
-    def test_full_section_normalizes_cached_full_position_ascii(self):
+    def test_full_section_keeps_cached_structured_50_percent_visible(self):
         packet = {
             "canonical_target": {"name": "华天科技", "code": "002185", "sector": "半导体"},
             "full_ascii": [
@@ -168,8 +266,8 @@ class SniperTargetDerivationBayesianDiagnosisTest(unittest.TestCase):
 
         rendered = "\n".join(full_section(packet))
 
-        self.assertIn("仓位=满仓 动作=满仓条件执行", rendered)
-        self.assertNotIn("仓位=50% 动作=满仓条件执行", rendered)
+        self.assertIn("仓位=50% 动作=满仓条件执行", rendered)
+        self.assertNotIn("仓位=满仓 动作=满仓条件执行", rendered)
 
 
 if __name__ == "__main__":

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
 from dataclasses import dataclass
+from datetime import date
 from html import escape, unescape
 from pathlib import Path
 from string import Template
-from typing import Iterable
+from typing import Iterable, Mapping
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from domains.market_activity.new_high_structure import build_new_high_breadth_thresholds
+from market_data.daily_price_runtime import get_limit_up_pct
 from report.surface_wording import sanitize_user_visible_text
 
 
@@ -89,6 +93,292 @@ def _mermaid_loader_html(output_path: str | Path | None = None, *, enabled: bool
 
 def _html(value: object) -> str:
     return escape(str(value if value is not None else ""), quote=True)
+
+
+def _tomorrow_action_calendar_pct(value: object) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(number):
+        return ""
+    if abs(number) < 0.005:
+        number = 0.0
+    return f"{number:+.2f}%" if number else "0.00%"
+
+
+def _tomorrow_action_calendar_metric(value: object, status: str) -> tuple[str, str]:
+    if status == "future":
+        return "待发生", "is-pending"
+    if status != "complete":
+        return "事实不足", "is-incomplete"
+    text = _tomorrow_action_calendar_pct(value)
+    if not text:
+        return "事实不足", "is-incomplete"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    tone = "is-positive" if number > 0 else "is-negative" if number < 0 else "is-flat"
+    return text, tone
+
+
+def _tomorrow_action_calendar_rows(
+    records: list[Mapping[str, object]],
+    calendar_notes: Iterable[Mapping[str, object]] = (),
+) -> list[list[Mapping[str, object] | None]]:
+    rows: list[list[Mapping[str, object] | None]] = []
+    row_week_keys: list[tuple[int, int] | None] = []
+    week_row_indexes: dict[tuple[int, int], list[int]] = {}
+    undated: list[Mapping[str, object]] = []
+    dated_records: list[date] = []
+    for record in records:
+        execution_date = str(record.get("execution_date") or "").strip()[:10]
+        try:
+            parsed_date = date.fromisoformat(execution_date)
+        except ValueError:
+            undated.append(record)
+            continue
+        weekday = parsed_date.weekday()
+        if weekday > 4:
+            undated.append(record)
+            continue
+        dated_records.append(parsed_date)
+        iso_calendar = parsed_date.isocalendar()
+        week_key = (iso_calendar.year, iso_calendar.week)
+        target_row = None
+        for row_index in reversed(week_row_indexes.get(week_key, [])):
+            if rows[row_index][weekday] is None:
+                target_row = row_index
+                break
+        if target_row is None:
+            target_row = len(rows)
+            rows.append([None] * 5)
+            row_week_keys.append(week_key)
+            week_row_indexes.setdefault(week_key, []).append(target_row)
+        rows[target_row][weekday] = record
+    for offset in range(0, len(undated), 5):
+        row = list(undated[offset : offset + 5])
+        rows.append(row + [None] * (5 - len(row)))
+        row_week_keys.append(None)
+    if dated_records:
+        range_start = min(dated_records)
+        range_end = max(dated_records)
+        notes_by_date: dict[str, Mapping[str, object]] = {}
+        for raw_note in calendar_notes or []:
+            if not isinstance(raw_note, Mapping):
+                continue
+            note_date = str(raw_note.get("date") or "").strip()[:10]
+            if note_date:
+                notes_by_date[note_date] = raw_note
+        for row_index, week_key in enumerate(row_week_keys):
+            if week_key is None:
+                continue
+            for weekday in range(5):
+                if rows[row_index][weekday] is not None:
+                    continue
+                cell_date = date.fromisocalendar(week_key[0], week_key[1], weekday + 1)
+                cell_date_text = cell_date.isoformat()
+                note = notes_by_date.get(cell_date_text)
+                if note is not None:
+                    cell_kind = str(note.get("kind") or "holiday").strip()
+                    label = str(note.get("label") or "休市").strip()
+                elif cell_date < range_start or cell_date > range_end:
+                    cell_kind = "sample_outside"
+                    label = "样本外"
+                else:
+                    cell_kind = "missing"
+                    label = "记录缺失"
+                rows[row_index][weekday] = {
+                    "calendar_cell_kind": cell_kind,
+                    "execution_date": cell_date_text,
+                    "weekday_label": ("周一", "周二", "周三", "周四", "周五")[weekday],
+                    "action_label": label,
+                }
+    return rows
+
+
+def _render_tomorrow_action_calendar_cell(record: Mapping[str, object] | None) -> str:
+    if record is None:
+        return '<td class="tomorrow-action-calendar-cell is-blank" aria-label="无明日操作记录"></td>'
+    execution_date = str(record.get("execution_date") or "").strip()[:10]
+    report_date = str(record.get("report_date") or "").strip()[:10]
+    weekday_label = str(record.get("weekday_label") or "星期待确认").strip()
+    calendar_cell_kind = str(record.get("calendar_cell_kind") or "").strip()
+    action_kind = str(record.get("action_kind") or "incomplete").strip()
+    action_label = str(record.get("action_label") or "事实不足").strip()
+    if calendar_cell_kind:
+        note_detail = {
+            "holiday": "非交易日",
+            "sample_outside": "样本区间外",
+            "missing": "PostgreSQL 记录缺失",
+        }.get(calendar_cell_kind, "周历注释")
+        return (
+            f'<td class="tomorrow-action-calendar-cell is-calendar-note is-{_html(calendar_cell_kind)}" '
+            f'aria-label="{_html(execution_date)} {_html(weekday_label)} {_html(action_label)}">'
+            '<article class="tomorrow-action-calendar-entry tomorrow-action-calendar-note">'
+            '<header class="tomorrow-action-calendar-date">'
+            f'<time datetime="{_html(execution_date)}">{_html(execution_date)}</time>'
+            f'<span>{_html(weekday_label)}</span></header>'
+            f'<strong>{_html(action_label)}</strong><span>{_html(note_detail)}</span>'
+            '</article></td>'
+        )
+    raw_action_items = record.get("action_items")
+    action_items = [item for item in raw_action_items or [] if isinstance(item, Mapping)]
+    plan_action_kind = str(record.get("plan_action_kind") or "").strip()
+    plan_action_label = str(record.get("plan_action_label") or "").strip()
+    status = str(record.get("performance_status") or "incomplete").strip()
+    daily_return, daily_tone = _tomorrow_action_calendar_metric(record.get("daily_return_pct"), status)
+    excess_return, excess_tone = _tomorrow_action_calendar_metric(record.get("excess_shanghai_pct"), status)
+    date_label = execution_date or "执行日待确认"
+    time_html = (
+        f'<time datetime="{_html(execution_date)}">{_html(execution_date)}</time>'
+        if execution_date
+        else '<span class="tomorrow-action-calendar-date-missing">执行日待确认</span>'
+    )
+    report_date_html = (
+        f'<span class="tomorrow-action-calendar-report-date">本格计划日报 {_html(report_date)}</span>'
+        if report_date
+        else ""
+    )
+    if action_items:
+        action_html = '<div class="tomorrow-action-calendar-actions">' + "".join(
+            '<div class="tomorrow-action-calendar-action-item">'
+            f'<strong>{_html(item.get("label") or "事实不足")}</strong>'
+            f'<span>{_html(item.get("position_label") or "")} · {_html(item.get("holding_label") or "")}'
+            + (
+                f' · 计划日报 {_html(item.get("plan_date_label"))}'
+                if item.get("plan_date_label")
+                else ""
+            )
+            + '</span>'
+            '</div>'
+            for item in action_items
+        ) + '</div>'
+    else:
+        action_html = f'<strong class="tomorrow-action-calendar-action">{_html(action_label)}</strong>'
+    plan_note_html = ""
+    if action_items and plan_action_kind in {"no_new_entry", "empty"}:
+        plan_note_html = (
+            f'<span class="tomorrow-action-calendar-plan-note">本日计划：{_html(plan_action_label)}</span>'
+        )
+    return (
+        f'<td class="tomorrow-action-calendar-cell is-{_html(action_kind)} is-{_html(status)}" '
+        f'aria-label="{_html(date_label)} {_html(weekday_label)} {_html(action_label)}">'
+        '<article class="tomorrow-action-calendar-entry">'
+        '<header class="tomorrow-action-calendar-date">'
+        f'{time_html}<span>{_html(weekday_label)}</span>'
+        '</header>'
+        f'{action_html}{plan_note_html}{report_date_html}'
+        '<dl class="tomorrow-action-calendar-metrics">'
+        '<div><dt>当日涨幅</dt>'
+        f'<dd class="{daily_tone}">{_html(daily_return)}</dd></div>'
+        '<div><dt>跑赢上证</dt>'
+        f'<dd class="{excess_tone}">{_html(excess_return)}</dd></div>'
+        '</dl>'
+        '</article></td>'
+    )
+
+
+def _render_tomorrow_action_calendar(payload: Mapping[str, object] | None) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    raw_records = payload.get("records")
+    records = [record for record in raw_records or [] if isinstance(record, Mapping)]
+    raw_calendar_notes = payload.get("calendar_notes")
+    calendar_notes = [note for note in raw_calendar_notes or [] if isinstance(note, Mapping)]
+    requested_count = max(int(payload.get("requested_count") or 25), 1)
+    record_count = int(payload.get("record_count") or len(records))
+    start_date = str(payload.get("execution_date_start") or "").strip()
+    end_date = str(payload.get("execution_date_end") or "").strip()
+    range_text = f" · {start_date} 至 {end_date}" if start_date and end_date else ""
+    heading = (
+        '<section class="tomorrow-action-calendar" aria-labelledby="tomorrow-action-calendar-title">'
+        '<header class="tomorrow-action-calendar-header">'
+        '<div><span class="tomorrow-action-calendar-eyebrow">账户日序</span>'
+        '<h2 id="tomorrow-action-calendar-title">最近25条明日操作日历</h2></div>'
+        f'<p>样本 {record_count}/{requested_count}{_html(range_text)}</p>'
+        '</header>'
+    )
+    if not records:
+        return (
+            heading
+            + '<p class="tomorrow-action-calendar-empty">PostgreSQL 明日操作事实不足</p>'
+            + '</section>'
+        )
+    body_rows = "".join(
+        '<tr>' + "".join(_render_tomorrow_action_calendar_cell(record) for record in row) + '</tr>'
+        for row in _tomorrow_action_calendar_rows(records, calendar_notes)
+    )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
+    valid_count = int(summary.get("valid_count") or 0)
+    outperform_count = int(summary.get("outperform_count") or 0)
+    average_daily = _tomorrow_action_calendar_pct(summary.get("average_daily_return_pct")) or "事实不足"
+    average_excess = _tomorrow_action_calendar_pct(summary.get("average_excess_shanghai_pct")) or "事实不足"
+    cumulative_daily = _tomorrow_action_calendar_pct(summary.get("cumulative_daily_return_pct")) or "事实不足"
+    cumulative_returns = (
+        payload.get("cumulative_returns")
+        if isinstance(payload.get("cumulative_returns"), Mapping)
+        else {}
+    )
+    rolling_scope = (
+        cumulative_returns.get("rolling_25")
+        if isinstance(cumulative_returns.get("rolling_25"), Mapping)
+        else {}
+    )
+    current_month_scope = (
+        cumulative_returns.get("current_month")
+        if isinstance(cumulative_returns.get("current_month"), Mapping)
+        else {}
+    )
+    since_start_scope = (
+        cumulative_returns.get("since_start")
+        if isinstance(cumulative_returns.get("since_start"), Mapping)
+        else {}
+    )
+    rolling_cumulative = _tomorrow_action_calendar_pct(
+        rolling_scope.get("cumulative_daily_return_pct")
+    ) or cumulative_daily
+    current_month_cumulative = "事实不足"
+    if current_month_scope.get("coverage_status") in (None, "", "complete"):
+        current_month_cumulative = (
+            _tomorrow_action_calendar_pct(current_month_scope.get("cumulative_daily_return_pct"))
+            or "事实不足"
+        )
+    since_start_cumulative = "事实不足"
+    if since_start_scope.get("coverage_status") in (None, "", "complete"):
+        since_start_cumulative = (
+            _tomorrow_action_calendar_pct(since_start_scope.get("cumulative_daily_return_pct"))
+            or "事实不足"
+        )
+    summary_items = (
+        f'<span>有效 {valid_count} 日</span>'
+        f'<span>明日标的计划 {int(summary.get("plan_target_count", summary.get("target_count")) or 0)} 日</span>'
+        f'<span>账户持仓 {int(summary.get("holding_count", summary.get("target_count")) or 0)} 日</span>'
+        f'<span>空仓 {int(summary.get("empty_count") or 0)} 日</span>'
+        f'<span>不新增计划 {int(summary.get("no_new_entry_count") or 0)} 日</span>'
+        f'<span>平均当日涨幅 {_html(average_daily)}</span>'
+        f'<span>平均跑赢上证 {_html(average_excess)}</span>'
+        f'<span>滚动25天累计收益 {_html(rolling_cumulative)}</span>'
+        f'<span>当前月累计收益 {_html(current_month_cumulative)}</span>'
+        f'<span>2026-06-17起累计收益 {_html(since_start_cumulative)}</span>'
+        f'<span>跑赢 {outperform_count}/{valid_count} 日</span>'
+        f'<span>事实不足 {int(summary.get("incomplete_count") or 0)} 日</span>'
+        f'<span>待发生 {int(summary.get("future_count") or 0)} 日</span>'
+    )
+    return (
+        heading
+        + '<div class="tomorrow-action-calendar-scroll" role="region" '
+        'aria-label="最近25条明日操作周历" tabindex="0">'
+        '<table class="tomorrow-action-calendar-table">'
+        '<thead><tr>'
+        '<th scope="col">周一</th><th scope="col">周二</th><th scope="col">周三</th>'
+        '<th scope="col">周四</th><th scope="col">周五</th>'
+        '</tr></thead>'
+        f'<tbody>{body_rows}</tbody></table></div>'
+        f'<footer class="tomorrow-action-calendar-summary" aria-label="明日操作汇总">{summary_items}</footer>'
+        '</section>'
+    )
 
 
 def _json_for_html_script(value: object) -> str:
@@ -387,7 +677,7 @@ def _is_front_position_conclusion_cell(
     if cell_index >= len(headers) or _table_header_text(headers[cell_index]) != "结论":
         return False
     label = _plain_cell_text(row[0]) if row else ""
-    return label in {"仓位姿态", "明日仓位"}
+    return label in {"仓位姿态", "明日仓位", "明日新仓"}
 
 
 def _front_position_conclusion_cell_inline(text: str, stock_refs: tuple[str, ...]) -> str:
@@ -761,6 +1051,32 @@ def _position_timeline_axis_state_label(value: str) -> str:
     return text
 
 
+def _position_timeline_unknown_account_text(value: str) -> bool:
+    text = _plain_cell_text(value)
+    return any(
+        marker in text
+        for marker in (
+            "持仓未输入",
+            "先确认是否已有旧仓",
+            "旧仓事实不清",
+            "先核对实际持仓",
+            "账户仓位待确认",
+        )
+    )
+
+
+_POSITION_TIMELINE_PENDING_MARKERS = (
+    "外部交易待核实",
+    "外部交易记录待核实",
+    "外部成交记录待核实",
+    "待成交确认",
+    "未确认成交，不视为B1",
+    "确认已成交才视为B1",
+    "核实已成交才视为B1",
+    "B1事实待确认",
+)
+
+
 def _position_timeline_date_html(value: str) -> str:
     text = _plain_cell_text(value)
     match = re.match(r"^(.+?)（(.+?)）$", text)
@@ -774,23 +1090,22 @@ def _position_timeline_date_html(value: str) -> str:
 
 def _position_timeline_action_badges(value: str) -> list[tuple[str, str]]:
     text = _plain_cell_text(value)
-    if ("0%不参与" in text or "只核实成交记录" in text) and (
-        "待成交确认" in text or "确认已成交才视为B1" in text
+    if _position_timeline_unknown_account_text(text):
+        return [("待确认", "is-check")]
+    if any(marker in text for marker in ("0%不参与", "只核实成交记录", "只核实外部交易记录")) and any(
+        marker in text for marker in _POSITION_TIMELINE_PENDING_MARKERS
     ):
         return [("只核实", "is-check")]
+    b2_cancelled = "取消B2" in text or "B2取消" in text
+    old_position_action = any(marker in text for marker in ("只处理旧仓", "旧仓处理", "旧仓进入复核"))
+    if old_position_action and b2_cancelled:
+        return [("取消B2", "is-cancel")]
+    if old_position_action:
+        return [("持仓处理", "is-hold")]
     if any(marker in text for marker in ("没有B1/B2", "不生成B1/B2", "无B1占用", "没有B1", "没有B2")):
         return [("空仓", "is-empty")]
-    if any(
-        marker in text
-        for marker in (
-            "待成交确认",
-            "未确认成交，不视为B1",
-            "确认已成交才视为B1",
-            "B1事实待确认",
-        )
-    ):
+    if any(marker in text for marker in _POSITION_TIMELINE_PENDING_MARKERS):
         return [("待确认", "is-check")]
-    b2_cancelled = "取消B2" in text or "B2取消" in text
     if any(marker in text for marker in ("B1不成立", "不参与", "不新增参与")):
         if b2_cancelled:
             return [("取消B2", "is-cancel")]
@@ -854,6 +1169,7 @@ def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_cou
     day_texts: list[str] = []
     ta_text = ""
     tb_text = ""
+    te_text = ""
     for row in rows:
         cells = row[2 : 2 + date_count]
         if index < len(cells):
@@ -864,23 +1180,43 @@ def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_cou
                 ta_text = text
             elif lane.startswith("Tb"):
                 tb_text = text
+            elif lane.startswith("Te"):
+                te_text = text
     has_ta_exit = any("Ta+2" in text or "尽早卖出" in text for text in day_texts)
     has_tb_hold = any(text.startswith("Tb+1") for text in day_texts)
     has_tb_buy = any(text.startswith("Tb+0") for text in day_texts)
     has_no_tb = tb_text.startswith("没有Tb")
     has_empty_ta = ta_text in {"空仓", "Ta+0 空仓"}
-    pending_verification_only = any(
-        ("0%不参与" in text or "只核实成交记录" in text)
-        and ("待成交确认" in text or "确认已成交才视为B1" in text)
-        for text in day_texts
+    intent_texts = [te_text] if te_text else day_texts
+    pending_confirmation = any(
+        any(marker in text for marker in _POSITION_TIMELINE_PENDING_MARKERS)
+        for text in intent_texts
     )
+    pending_verification_only = any(
+        any(marker in text for marker in ("0%不参与", "只核实成交记录", "只核实外部交易记录"))
+        for text in intent_texts
+    ) and pending_confirmation
+    explicit_participation = any(
+        "B1参与权" in text or "参与权" in text
+        for text in intent_texts
+    )
+    if any(_position_timeline_unknown_account_text(text) for text in intent_texts):
+        return "待确认"
     if pending_verification_only:
         return "空仓执行"
-    if any("取消B2" in text or "B2取消" in text for text in day_texts):
+    if pending_confirmation and not explicit_participation:
+        return "待确认"
+    if any(
+        marker in text
+        for text in intent_texts
+        for marker in ("没有B1/B2", "空仓等待B1资格", "明日空仓")
+    ):
+        return "空仓执行"
+    if any("取消B2" in text or "B2取消" in text for text in intent_texts):
         return "取消B2"
     if any(
         any(marker in text for marker in ("B1不成立", "不参与", "不新增参与"))
-        for text in day_texts
+        for text in intent_texts
     ):
         return "空仓执行"
     if has_ta_exit and has_no_tb and not has_tb_hold and not has_tb_buy:
@@ -895,18 +1231,30 @@ def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_cou
         return "条件买入"
     if has_no_tb and has_empty_ta and not has_tb_hold and not has_tb_buy:
         return "空仓执行"
-    if any("确认权" in text for text in day_texts):
-        return "确认权"
-    if any("参与权" in text or "B1" in text for text in day_texts):
-        return "参与权"
-    if any("只处理旧仓" in text or "旧仓" in text for text in day_texts):
+    if any(
+        any(marker in text for marker in ("只处理旧仓", "旧仓处理", "旧仓进入复核"))
+        for text in intent_texts
+    ):
         return "持仓处理"
-    if any("不新增参与" in text or "没有B2" in text for text in day_texts):
+    if explicit_participation:
+        return "参与权"
+    if any(
+        any(marker in text for marker in ("没有B1/B2", "不生成B1/B2", "无B1占用", "没有B1", "没有B2"))
+        for text in intent_texts
+    ):
+        return "空仓执行"
+    if any("确认权" in text for text in intent_texts):
+        return "确认权"
+    if any("参与权" in text or "B1" in text for text in intent_texts):
+        return "参与权"
+    if any("不新增参与" in text or "没有B2" in text for text in intent_texts):
         return "空仓执行"
     return ""
 
 
 def _position_timeline_execution_tag_class(tag: str) -> str:
+    if "待确认" in tag:
+        return "is-check"
     if "空仓" in tag:
         return "is-empty"
     if "确认权" in tag:
@@ -953,7 +1301,12 @@ def _position_timeline_axis_state_tags(rows: list[list[str]], date_count: int) -
             cells = row[2 : 2 + date_count]
             if index >= len(cells) or not _plain_cell_text(cells[index]):
                 continue
-            label = _position_timeline_axis_state_label(row[1] if len(row) > 1 else "")
+            cell_text = _plain_cell_text(cells[index])
+            label = (
+                "持仓未输入"
+                if _position_timeline_unknown_account_text(cell_text)
+                else _position_timeline_axis_state_label(row[1] if len(row) > 1 else "")
+            )
             if label and label != "空仓":
                 tags[index] = label
                 break
@@ -1365,16 +1718,27 @@ def _cell_at(row: list[str], index: int) -> str:
     return row[index] if 0 <= index < len(row) else ""
 
 
-def _limit_status_from_turnover_row(change_pct: float | None, candle_text: str) -> str:
+def _limit_status_from_turnover_row(
+    change_pct: float | None,
+    candle_text: str,
+    stock_code: str = "",
+    stock_name: str = "",
+) -> str:
     text = _plain_cell_text(candle_text)
-    if change_pct is not None and change_pct >= 9.8:
-        return "涨停"
-    if change_pct is not None and change_pct <= -9.8:
-        return "跌停"
     if "涨停" in text:
         return "涨停"
     if "跌停" in text:
         return "跌停"
+    if change_pct is None:
+        return ""
+
+    limit_threshold_pct = get_limit_up_pct(stock_code, stock_name) * 100
+    if change_pct >= limit_threshold_pct:
+        return "涨停"
+    if change_pct <= -limit_threshold_pct:
+        return "跌停"
+    if change_pct <= -10:
+        return "大幅回撤"
     return ""
 
 
@@ -1506,7 +1870,12 @@ def _collect_turnover_top_items(lines: list[str], limit: int = 30) -> list[dict[
                     "turnover": turnover,
                     "sector": _plain_cell_text(_cell_at(row, sector_index)),
                     "change_pct": change_pct,
-                    "status": _limit_status_from_turnover_row(change_pct, _cell_at(row, candle_index)),
+                    "status": _limit_status_from_turnover_row(
+                        change_pct,
+                        _cell_at(row, candle_index),
+                        stock_code=_plain_cell_text(_cell_at(row, code_index)),
+                        stock_name=_plain_cell_text(_cell_at(row, name_index)),
+                    ),
                 }
             )
         return items
@@ -1657,7 +2026,7 @@ def _collect_market_turnover_top50_items(lines: list[str], limit: int = 25) -> l
     return []
 
 
-def _collect_new_high_share_by_date(lines: list[str], limit: int = 25) -> dict[str, float]:
+def _collect_new_high_share_items(lines: list[str], limit: int = 25) -> list[dict[str, object]]:
     index = 0
     while index < len(lines):
         if not _table_has_headers(lines, index, "日期", "新高数", "全A占比"):
@@ -1666,15 +2035,25 @@ def _collect_new_high_share_by_date(lines: list[str], limit: int = 25) -> dict[s
 
         headers, rows, _next_index = _collect_table(lines, index)
         date_index = _header_index(headers, "日期")
+        count_index = _header_index(headers, "新高数")
         share_index = _header_index(headers, "全A占比")
-        share_by_date: dict[str, float] = {}
+        signal_index = _header_index(headers, "趋势信号")
+        items: list[dict[str, object]] = []
         for row in rows[:limit]:
             date = _plain_cell_text(_cell_at(row, date_index))
+            count = _numeric_count(_cell_at(row, count_index))
             share_pct = _numeric_percent(_cell_at(row, share_index))
             if date and share_pct is not None:
-                share_by_date[date] = share_pct
-        return share_by_date
-    return {}
+                items.append(
+                    {
+                        "date": date,
+                        "new_high_count": int(count) if count is not None else None,
+                        "new_high_share_pct": share_pct,
+                        "breadth_level_label": _plain_cell_text(_cell_at(row, signal_index)),
+                    }
+                )
+        return list(reversed(items))
+    return []
 
 
 def _is_lhb_side_heading(heading: str, side: str) -> bool:
@@ -1730,7 +2109,12 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
             change_pct = _numeric_percent(_cell_at(row, change_index))
             status = _plain_cell_text(_cell_at(row, status_index))
             if not status:
-                status = _limit_status_from_turnover_row(change_pct, _cell_at(row, candle_index))
+                status = _limit_status_from_turnover_row(
+                    change_pct,
+                    _cell_at(row, candle_index),
+                    stock_code=_plain_cell_text(_cell_at(row, code_index)),
+                    stock_name=_plain_cell_text(_cell_at(row, name_index)),
+                )
             rank_text = _plain_cell_text(_cell_at(row, rank_index))
             try:
                 rank = int(rank_text)
@@ -1938,12 +2322,7 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
     lines = markdown_text.splitlines()
     sector_items = _collect_sector_turnover_chart_items(lines, trade_date)
     market_turnover_items = _collect_market_turnover_top50_items(lines)
-    new_high_share_by_date = _collect_new_high_share_by_date(lines)
-    if market_turnover_items and new_high_share_by_date:
-        for item in market_turnover_items:
-            share_pct = new_high_share_by_date.get(str(item.get("date") or ""))
-            if share_pct is not None:
-                item["new_high_share_pct"] = share_pct
+    new_high_share_items = _collect_new_high_share_items(lines)
     turnover_items = _collect_turnover_top_items(lines, limit=30)
     turnover_sector_items = _collect_turnover_sector_share_items(turnover_items)
     board_tag_items = _collect_board_tag_rank_items(lines)
@@ -1959,8 +2338,15 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
     if market_turnover_items:
         payload["market_turnover_top50_trend"] = {
             "items": market_turnover_items,
-            "title": "两市成交额、Top50占比与创新高全A占比",
-            "subtitle": "柱看两市成交额，线看头部成交集中度和趋势扩散",
+            "title": "两市成交额与Top50占比",
+            "subtitle": "柱看两市成交额，线看头部成交集中度",
+        }
+    if new_high_share_items:
+        payload["new_high_share_trend"] = {
+            "items": new_high_share_items,
+            "title": "创新高全A占比",
+            "subtitle": "5%及以上为极致扩散，2%到5%为有效扩散，1%到2%为扩散偏冷，0.2%到1%为极低扩散；低于0.2%或个位数为扩散断层。",
+            "thresholds": build_new_high_breadth_thresholds(),
         }
     if sector_items:
         payload["sector_turnover_share"] = {
@@ -1993,6 +2379,60 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
             "subtitle": "正轴为净买入，负轴为净流出",
         }
     return payload
+
+
+def _chart_number_or_none(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _normalize_t0_market_breadth_payload(
+    value: Mapping[str, object] | None,
+    trade_date: str,
+    *,
+    limit: int = 25,
+) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    raw_items = value.get("items")
+    if not isinstance(raw_items, list):
+        return {}
+    target_date = str(trade_date or "").strip()[:10]
+    items_by_date: dict[str, dict[str, object]] = {}
+    for raw_item in raw_items:
+        if not isinstance(raw_item, Mapping):
+            continue
+        item_date = str(raw_item.get("date") or raw_item.get("trade_date") or "").strip()[:10]
+        try:
+            parsed_date = date.fromisoformat(item_date)
+        except ValueError:
+            continue
+        if target_date and item_date > target_date:
+            continue
+        up_count = _chart_number_or_none(raw_item.get("up_count"))
+        down_count = _chart_number_or_none(raw_item.get("down_count"))
+        items_by_date[parsed_date.isoformat()] = {
+            "date": parsed_date.isoformat(),
+            "up_count": int(up_count) if up_count is not None and up_count >= 0 else None,
+            "down_count": int(down_count) if down_count is not None and down_count >= 0 else None,
+            "all_a_change_pct": _chart_number_or_none(raw_item.get("all_a_change_pct")),
+            "new_high_share_pct": _chart_number_or_none(raw_item.get("new_high_share_pct")),
+        }
+    items = [items_by_date[item_date] for item_date in sorted(items_by_date)][-max(int(limit or 25), 1) :]
+    if not items:
+        return {}
+    return {
+        "schema": "t0_market_breadth.v1",
+        "items": items,
+        "title": str(value.get("title") or "T0市场底色"),
+        "subtitle": str(
+            value.get("subtitle")
+            or "上涨和下跌家数看市场宽度，双线看全A涨跌幅与创新高扩散。"
+        ),
+    }
 
 
 def _bear_chart_card_html(
@@ -2473,15 +2913,21 @@ def render_markdown_report_html(
     trade_date: str = "",
     source_label: str = "Markdown日报",
     output_path: str | Path | None = None,
+    tomorrow_action_calendar: Mapping[str, object] | None = None,
+    t0_market_breadth: Mapping[str, object] | None = None,
 ) -> str:
     markdown_text = _sanitize_reader_markdown_text(markdown_text)
     lines = markdown_text.splitlines()
     stock_refs = _collect_stock_refs(markdown_text)
     limit_pools = _collect_limit_pools(markdown_text)
     bear_chart_payload = _collect_bear_chart_payload(markdown_text, trade_date)
+    normalized_market_breadth = _normalize_t0_market_breadth_payload(t0_market_breadth, trade_date)
+    if normalized_market_breadth:
+        bear_chart_payload["t0_market_breadth"] = normalized_market_breadth
     used_anchors: dict[str, int] = {}
     headings: list[Heading] = []
-    fragments: list[str] = []
+    calendar_html = _render_tomorrow_action_calendar(tomorrow_action_calendar)
+    fragments: list[str] = [calendar_html] if calendar_html else []
     inserted_charts: set[str] = set()
     has_mermaid_diagram = False
     index = 0
@@ -2520,6 +2966,31 @@ def render_markdown_report_html(
                 f'<h{level}{class_attr} id="{_html(anchor)}">'
                 f'{_heading_inline(heading_match.group(2), stock_refs, section_title=heading_title)}</h{level}>'
             )
+            market_breadth_chart = bear_chart_payload.get("t0_market_breadth")
+            if (
+                re.fullmatch(r"(?:\d+[.、]\s*)?指数与市场底色", heading_title)
+                and isinstance(market_breadth_chart, dict)
+                and "t0_market_breadth" not in inserted_charts
+            ):
+                items = (
+                    market_breadth_chart.get("items")
+                    if isinstance(market_breadth_chart.get("items"), list)
+                    else []
+                )
+                fragments.append(
+                    _bear_chart_card_html(
+                        "t0_market_breadth",
+                        eyebrow="市场宽度",
+                        title="T0市场底色",
+                        subtitle=str(
+                            market_breadth_chart.get("subtitle")
+                            or "上涨和下跌家数看市场宽度，双线看全A涨跌幅与创新高扩散。"
+                        ),
+                        footnote="图表来自截至报告日的历史市场事实",
+                        item_count=len(items),
+                    )
+                )
+                inserted_charts.add("t0_market_breadth")
             sector_chart = bear_chart_payload.get("sector_turnover_share")
             if (
                 "主线成交额占比趋势" in heading_title
@@ -2617,17 +3088,52 @@ def render_markdown_report_html(
                 and _table_has_headers(lines, index, "日期", "Top50占比", "Top50成交额", "两市成交额")
             ):
                 items = market_turnover_chart.get("items") if isinstance(market_turnover_chart.get("items"), list) else []
+                fragments.extend(
+                    [
+                        _bear_chart_card_html(
+                            "market_turnover_trend",
+                            eyebrow="市场容量",
+                            title="两市成交额趋势",
+                            subtitle="柱形只看市场总成交水位。",
+                            footnote="图表来自Top50成交额占比趋势表",
+                            item_count=len(items),
+                        ),
+                        _bear_chart_card_html(
+                            "top50_share_trend",
+                            eyebrow="头部集中度",
+                            title="Top50成交占比趋势",
+                            subtitle="折线只看头部成交集中度。",
+                            footnote="图表来自Top50成交额占比趋势表",
+                            item_count=len(items),
+                        ),
+                    ]
+                )
+                inserted_charts.add("market_turnover_top50_trend")
+            new_high_share_chart = bear_chart_payload.get("new_high_share_trend")
+            if (
+                isinstance(new_high_share_chart, dict)
+                and "new_high_share_trend" not in inserted_charts
+                and _table_has_headers(lines, index, "日期", "新高数", "全A占比")
+            ):
+                items = (
+                    new_high_share_chart.get("items")
+                    if isinstance(new_high_share_chart.get("items"), list)
+                    else []
+                )
                 fragments.append(
                     _bear_chart_card_html(
-                        "market_turnover_top50_trend",
-                        eyebrow="容量温度",
-                        title="两市成交额 + Top50占比",
-                        subtitle="柱形看总水位，红线看头部成交集中度，青线辅助看趋势扩散。",
-                        footnote="图表来自Top50成交额占比趋势表",
+                        "new_high_share_trend",
+                        eyebrow="趋势扩散",
+                        title="创新高全A占比",
+                        subtitle=str(
+                            new_high_share_chart.get("subtitle")
+                            or "创新高绝对水位分层；同一低值还要看变化方向。"
+                        ),
+                        footnote="图表来自创新高趋势反馈表",
                         item_count=len(items),
                     )
                 )
-                inserted_charts.add("market_turnover_top50_trend")
+                inserted_charts.add("new_high_share_trend")
             turnover_chart = bear_chart_payload.get("turnover_top30")
             turnover_sector_chart = bear_chart_payload.get("turnover_sector_share")
             if (
@@ -2756,6 +3262,8 @@ def render_markdown_report_file(
     trade_date: str = "",
     source_label: str = "Markdown日报",
     prepend_markdown: str = "",
+    tomorrow_action_calendar: Mapping[str, object] | None = None,
+    t0_market_breadth: Mapping[str, object] | None = None,
 ) -> Path:
     source = Path(markdown_path)
     output = Path(html_path) if html_path is not None else source.with_suffix(".html")
@@ -2768,6 +3276,8 @@ def render_markdown_report_file(
         trade_date=trade_date,
         source_label=source_label,
         output_path=output,
+        tomorrow_action_calendar=tomorrow_action_calendar,
+        t0_market_breadth=t0_market_breadth,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")

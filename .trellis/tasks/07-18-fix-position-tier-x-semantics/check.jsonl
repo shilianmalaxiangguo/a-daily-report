@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Verify the implementation matches the canonical position contract"}
+{"file":".trellis/tasks/07-18-fix-position-tier-x-semantics/research/root-cause.md","reason":"Verify the proven failure paths and prevention mechanisms are covered"}
+{"file":"tests/test_position_tier_contract.py","reason":"Verify bidirectional tier conversion and invalid input handling"}
+{"file":"tests/test_position_action_semantics.py","reason":"Verify inheritance, explicit full position, exposure v2, and selection isolation"}
+{"file":"tests/test_front_page_v2_renderer.py","reason":"Verify current increment text while preserving object, window, execution condition, and cancellation condition"}
+{"file":"tests/test_report_acceptance_audit.py","reason":"Verify the three semantic conflicts are rejected under both position headers"}
+{"file":"tests/test_llm_wiki_router.py","reason":"Verify planned/current field separation and direct 1x/2x answers"}

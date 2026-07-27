@@ -182,6 +182,31 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         self.assertIn("新开仓不做日内回转；旧仓只按持仓策略处理", rendered)
         self.assertNotIn("禁止做T：次日不做日内回转", rendered)
 
+    def test_build_prohibition_section_does_not_call_confirmed_old_position_empty(self):
+        result = build_prohibition_section_contract(
+            display_position_level="0%不参与",
+            display_operation_state="观察态",
+            environment_headline="环境关闭，只做等待",
+            has_personal_positions=True,
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("不新增参与：先处理旧仓，不新增仓位", rendered)
+        self.assertNotIn("保持空仓：当前不新增参与", rendered)
+
+    def test_build_prohibition_section_keeps_empty_account_wording_without_old_position(self):
+        result = build_prohibition_section_contract(
+            display_position_level="0%不参与",
+            display_operation_state="观察态",
+            environment_headline="环境关闭，只做等待",
+            has_personal_positions=False,
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("保持空仓：当前不新增参与", rendered)
+
     def test_build_prohibition_section_contract_maps_conditional_defense_to_zero_or_50_model(self):
         result = build_prohibition_section_contract(
             display_position_level="0%不参与",

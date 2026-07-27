@@ -8,11 +8,332 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.markdown_report_html import render_markdown_report_file, render_markdown_report_html
+from report.markdown_report_html import (
+    _position_timeline_execution_tag,
+    render_markdown_report_file,
+    render_markdown_report_html,
+)
 from report.market_overview_builder import build_market_trend_sections_contract
 
 
 class DailyReportMarkdownHtmlTest(unittest.TestCase):
+    def test_render_tomorrow_action_calendar_before_position_timeline(self):
+        calendar = {
+            "schema": "tomorrow_action_calendar.v1",
+            "mode": "frozen",
+            "requested_count": 25,
+            "record_count": 4,
+            "execution_date_start": "2026-06-01",
+            "execution_date_end": "2026-06-04",
+            "source": "postgresql.strategy_performance_ledger",
+            "records": [
+                {
+                    "report_date": "2026-05-29",
+                    "execution_date": "2026-06-01",
+                    "weekday_label": "周一",
+                    "action_kind": "empty",
+                    "action_label": "空仓",
+                    "plan_action_kind": "empty",
+                    "plan_action_label": "空仓",
+                    "daily_return_pct": 0.0,
+                    "excess_shanghai_pct": 1.2,
+                    "performance_status": "complete",
+                },
+                {
+                    "report_date": "2026-06-01",
+                    "execution_date": "2026-06-02",
+                    "weekday_label": "周二",
+                    "action_kind": "target",
+                    "action_label": "长电科技<script>(600584)",
+                    "action_items": [
+                        {
+                            "label": "长电科技<script>(600584)",
+                            "position_label": "1x/50%",
+                            "holding_label": "第2日",
+                            "plan_date_label": "2026-05-29",
+                        },
+                        {
+                            "label": "华天科技&验证(002185)",
+                            "position_label": "1x/50%",
+                            "holding_label": "第1日",
+                            "plan_date_label": "2026-06-01",
+                        },
+                    ],
+                    "plan_action_kind": "target",
+                    "plan_action_label": "华天科技(002185)",
+                    "daily_return_pct": 3.2,
+                    "excess_shanghai_pct": 2.5,
+                    "performance_status": "complete",
+                },
+                {
+                    "report_date": "2026-06-02",
+                    "execution_date": "2026-06-03",
+                    "weekday_label": "周三",
+                    "action_kind": "target",
+                    "action_label": "长电科技(600584)",
+                    "action_items": [
+                        {
+                            "label": "长电科技(600584)",
+                            "position_label": "2x/100%",
+                            "holding_label": "第1+2日",
+                            "plan_date_label": "2026-06-01/2026-06-02",
+                        }
+                    ],
+                    "plan_action_kind": "target",
+                    "plan_action_label": "长电科技(600584)",
+                    "daily_return_pct": None,
+                    "excess_shanghai_pct": None,
+                    "performance_status": "future",
+                },
+                {
+                    "report_date": "2026-06-03",
+                    "execution_date": "2026-06-04",
+                    "weekday_label": "周四",
+                    "action_kind": "target",
+                    "action_label": "长电科技(600584)",
+                    "action_items": [
+                        {
+                            "label": "长电科技(600584)",
+                            "position_label": "1x/50%",
+                            "holding_label": "第2日",
+                            "plan_date_label": "2026-06-02",
+                        }
+                    ],
+                    "plan_action_kind": "no_new_entry",
+                    "plan_action_label": "不新增<计划>",
+                    "daily_return_pct": None,
+                    "excess_shanghai_pct": None,
+                    "performance_status": "incomplete",
+                },
+            ],
+            "summary": {
+                "valid_count": 2,
+                "plan_target_count": 2,
+                "holding_count": 3,
+                "target_count": 3,
+                "empty_count": 1,
+                "no_new_entry_count": 1,
+                "incomplete_count": 1,
+                "future_count": 1,
+                "outperform_count": 2,
+                "average_daily_return_pct": 1.6,
+                "average_excess_shanghai_pct": 1.85,
+                "cumulative_daily_return_pct": 3.2,
+                "cumulative_shanghai_return_pct": -0.27,
+                "cumulative_excess_shanghai_pct": 3.47,
+            },
+            "cumulative_returns": {
+                "rolling_25": {"coverage_status": "complete", "cumulative_daily_return_pct": 3.2},
+                "current_month": {"coverage_status": "complete", "cumulative_daily_return_pct": 2.5},
+                "since_start": {"coverage_status": "complete", "cumulative_daily_return_pct": 8.75},
+            },
+        }
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-06-01（周一） | 最远复盘日 | - | 不生成B1/B2 | 只作路径校对 |",
+                    "| Tb | 2026-06-02（周二） | 历史复盘日 | - | 不生成B1/B2 | 只作路径校对 |",
+                    "| Tc | 2026-06-03（周三） | 上一交易日路径 | - | 不生成B1/B2 | 进入复核 |",
+                    "| Td | 2026-06-04（周四） | 报告日 | 无 | 只定Te预案 | 写清条件 |",
+                    "| Te | 2026-06-05（周五） | 明日路径 | 无 | 不生成B1/B2 | 不新增 |",
+                    "",
+                    "# 测试日报",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-06-04",
+            tomorrow_action_calendar=calendar,
+        )
+
+        calendar_index = html.index('class="tomorrow-action-calendar"')
+        timeline_index = html.index('class="position-timeline-shell is-day-order"')
+        self.assertLess(calendar_index, timeline_index)
+        self.assertIn("最近25条明日操作日历", html)
+        for weekday in ("周一", "周二", "周三", "周四", "周五"):
+            self.assertIn(f'<th scope="col">{weekday}</th>', html)
+        self.assertIn("2026-06-02", html)
+        self.assertIn("当日涨幅", html)
+        self.assertIn("+3.20%", html)
+        self.assertIn("跑赢上证", html)
+        self.assertIn("+2.50%", html)
+        self.assertIn("事实不足", html)
+        self.assertIn("有效 2 日", html)
+        self.assertIn("平均当日涨幅 +1.60%", html)
+        self.assertIn("平均跑赢上证 +1.85%", html)
+        self.assertIn("明日标的计划 2 日", html)
+        self.assertIn("账户持仓 3 日", html)
+        self.assertIn("滚动25天累计收益 +3.20%", html)
+        self.assertIn("当前月累计收益 +2.50%", html)
+        self.assertIn("2026-06-17起累计收益 +8.75%", html)
+        self.assertIn("跑赢 2/2 日", html)
+        self.assertIn("1x/50% · 第2日 · 计划日报 2026-05-29", html)
+        self.assertIn("1x/50% · 第1日 · 计划日报 2026-06-01", html)
+        self.assertIn("2x/100% · 第1+2日 · 计划日报 2026-06-01/2026-06-02", html)
+        self.assertIn("本日计划：不新增&lt;计划&gt;", html)
+        self.assertIn("本格计划日报 2026-06-03", html)
+        self.assertIn("长电科技&lt;script&gt;(600584)", html)
+        self.assertIn("华天科技&amp;验证(002185)", html)
+        self.assertNotIn("长电科技<script>", html)
+        self.assertNotIn("不新增<计划>", html)
+
+    def test_render_empty_tomorrow_action_calendar_as_database_fact_incomplete(self):
+        html = render_markdown_report_html(
+            "# 测试日报",
+            tomorrow_action_calendar={
+                "schema": "tomorrow_action_calendar.v1",
+                "mode": "replay",
+                "requested_count": 25,
+                "record_count": 0,
+                "status": "source_incomplete",
+                "records": [],
+                "summary": {},
+            },
+        )
+
+        self.assertIn("最近25条明日操作日历", html)
+        self.assertIn("PostgreSQL 明日操作事实不足", html)
+        self.assertNotIn('class="tomorrow-action-calendar-table"', html)
+
+    def test_render_tomorrow_action_calendar_rejects_non_finite_returns(self):
+        html = render_markdown_report_html(
+            "# 测试日报",
+            tomorrow_action_calendar={
+                "schema": "tomorrow_action_calendar.v1",
+                "mode": "frozen",
+                "requested_count": 25,
+                "record_count": 1,
+                "execution_date_start": "2026-06-01",
+                "execution_date_end": "2026-06-01",
+                "records": [
+                    {
+                        "report_date": "2026-05-29",
+                        "execution_date": "2026-06-01",
+                        "weekday_label": "周一",
+                        "action_kind": "empty",
+                        "action_label": "空仓",
+                        "plan_action_kind": "no_new_entry",
+                        "plan_action_label": "不新增",
+                        "daily_return_pct": float("nan"),
+                        "excess_shanghai_pct": float("inf"),
+                        "performance_status": "complete",
+                    }
+                ],
+                "summary": {
+                    "valid_count": 1,
+                    "average_daily_return_pct": float("nan"),
+                    "average_excess_shanghai_pct": float("inf"),
+                    "cumulative_daily_return_pct": float("-inf"),
+                    "cumulative_shanghai_return_pct": float("nan"),
+                    "cumulative_excess_shanghai_pct": float("inf"),
+                },
+                "cumulative_returns": {
+                    "rolling_25": {"coverage_status": "complete", "cumulative_daily_return_pct": float("nan")},
+                    "current_month": {"coverage_status": "complete", "cumulative_daily_return_pct": float("inf")},
+                    "since_start": {"coverage_status": "source_incomplete", "cumulative_daily_return_pct": 9.9},
+                },
+            },
+        )
+
+        self.assertGreaterEqual(
+            html.count('<dd class="is-incomplete">事实不足</dd>'),
+            2,
+        )
+        self.assertIn("平均当日涨幅 事实不足", html)
+        self.assertIn("滚动25天累计收益 事实不足", html)
+        self.assertIn("当前月累计收益 事实不足", html)
+        self.assertIn("2026-06-17起累计收益 事实不足", html)
+        self.assertNotIn("nan%", html.lower())
+        self.assertNotIn("inf%", html.lower())
+
+    def test_render_calendar_labels_holiday_and_sample_outside_cells(self):
+        html = render_markdown_report_html(
+            "# 测试日报",
+            tomorrow_action_calendar={
+                "schema": "tomorrow_action_calendar.v1",
+                "mode": "frozen",
+                "requested_count": 25,
+                "record_count": 2,
+                "execution_date_start": "2026-06-17",
+                "execution_date_end": "2026-06-18",
+                "records": [
+                    {
+                        "report_date": "2026-06-16",
+                        "execution_date": "2026-06-17",
+                        "weekday_label": "周三",
+                        "action_kind": "empty",
+                        "action_label": "空仓",
+                        "plan_action_kind": "no_new_entry",
+                        "plan_action_label": "不新增",
+                        "daily_return_pct": 0.0,
+                        "excess_shanghai_pct": 0.0,
+                        "performance_status": "complete",
+                    },
+                    {
+                        "report_date": "2026-06-17",
+                        "execution_date": "2026-06-18",
+                        "weekday_label": "周四",
+                        "action_kind": "empty",
+                        "action_label": "空仓",
+                        "plan_action_kind": "no_new_entry",
+                        "plan_action_label": "不新增",
+                        "daily_return_pct": 0.0,
+                        "excess_shanghai_pct": 0.0,
+                        "performance_status": "complete",
+                    },
+                ],
+                "calendar_notes": [
+                    {
+                        "date": "2026-06-19",
+                        "weekday_label": "周五",
+                        "kind": "holiday",
+                        "label": "端午休假",
+                        "source": "market_holiday_schedule",
+                    }
+                ],
+                "summary": {
+                    "valid_count": 2,
+                    "plan_target_count": 0,
+                    "holding_count": 0,
+                    "empty_count": 2,
+                    "no_new_entry_count": 2,
+                },
+            },
+        )
+
+        self.assertIn('aria-label="2026-06-15 周一 样本外"', html)
+        self.assertIn('aria-label="2026-06-16 周二 样本外"', html)
+        self.assertIn('aria-label="2026-06-19 周五 端午休假"', html)
+        self.assertIn("端午休假", html)
+        self.assertIn("非交易日", html)
+        self.assertIn("空仓 2 日", html)
+        self.assertIn("不新增计划 2 日", html)
+        self.assertEqual(2, html.count('class="tomorrow-action-calendar-cell is-empty is-complete"'))
+
+    def test_bear_html_preserves_new_high_structure_evidence_without_page_overflow(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 2026-07-13 A股日报",
+                    "",
+                    "### 4. 创新高趋势反馈",
+                    "> 当前非ST阶段新高 6 只，占全A约 0.12%。",
+                    "> 结构判断：扩散断层预警：首次进入个位数，板块呈碎片化。",
+                    "> 风险含义：只作结构观察，不改变明日对象和仓位。",
+                    "> 主要反证：同源数据连续回升、新板块成群时，收缩判断降级。",
+                    "> 下一窗口：复核创新高是否连续回升以及核心与板块是否同步。",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-13",
+        )
+
+        self.assertIn("结构判断：扩散断层预警", html)
+        self.assertIn("主要反证：同源数据连续回升", html)
+        self.assertIn("下一窗口：复核创新高是否连续回升", html)
+        self.assertIn("overflow-x: auto;", html)
+
     def test_render_ta_te_day_order_table_as_first_bear_html_block(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -99,6 +420,99 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertEqual(["1", "2", "3", "4", "5"], re.findall(r"--bar-start: (\d+);", day_order_html))
         self.assertEqual(["1", "1", "1", "1", "1"], re.findall(r"--bar-span: (\d+);", day_order_html))
 
+    def test_day_order_lane_and_asset_columns_remain_sticky_during_horizontal_scroll(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
+                    "| Td | 2026-07-13（周一） | 报告日：空仓 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-14（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-13",
+        )
+
+        style = html.split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertRegex(
+            style,
+            r"(?s)\.position-timeline-table\s*\{[^}]*overflow:\s*visible;",
+        )
+        self.assertRegex(
+            style,
+            r"(?s)\.timeline-axis-origin,\s*\.timeline-lane\s*\{[^}]*"
+            r"width:\s*var\(--timeline-lane-width\);[^}]*"
+            r"min-width:\s*var\(--timeline-lane-width\);[^}]*"
+            r"max-width:\s*var\(--timeline-lane-width\);",
+        )
+        self.assertRegex(
+            style,
+            r"(?s)\.timeline-axis-asset,\s*\.timeline-asset\s*\{[^}]*"
+            r"width:\s*var\(--timeline-asset-width\);[^}]*"
+            r"min-width:\s*var\(--timeline-asset-width\);[^}]*"
+            r"max-width:\s*var\(--timeline-asset-width\);",
+        )
+        self.assertIn(".timeline-axis-origin,", style)
+        self.assertIn(".timeline-axis-asset {\n      position: sticky;", style)
+        self.assertIn(".timeline-lane,\n    .timeline-asset {\n      position: sticky;", style)
+        self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
+        self.assertNotIn('<span class="timeline-date-intent is-buy">参与权</span>', html)
+
+    def test_mermaid_diagram_keeps_horizontal_overflow_inside_its_container(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 测试日报",
+                    "",
+                    "```mermaid",
+                    "flowchart LR",
+                    "A[账户事实] --> B[明日账户动作]",
+                    "```",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-15",
+        )
+
+        style = html.split("<style>", 1)[1].split("</style>", 1)[0]
+        self.assertIn('<div class="fenced-code mermaid" data-mermaid-diagram="true">', html)
+        self.assertRegex(
+            style,
+            r"(?s)\.markdown-body \.mermaid\s*\{[^}]*"
+            r"width:\s*100%;[^}]*"
+            r"max-width:\s*100%;[^}]*"
+            r"min-width:\s*0;[^}]*"
+            r"box-sizing:\s*border-box;[^}]*"
+            r"overflow-x:\s*auto;",
+        )
+        self.assertNotRegex(
+            style,
+            r"(?s)\.markdown-body \.mermaid\s*\{[^}]*min-width:\s*1040px;",
+        )
+    def test_render_current_empty_te_without_b1_as_empty_day_intent(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-10（周五） | 最远复盘日计划待成交确认：长电科技(600584) | 长电科技(600584) | 未确认成交，不视为B1 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-13（周一） | 历史复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-14（周二） | 前一交易日持仓未输入 | - | B1事实待确认 | 先确认账户事实，不从当前计划反推历史持仓 |",
+                    "| Td | 2026-07-15（周三） | 报告日：空仓 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-16（周四） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-15",
+        )
+
+        self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
+        self.assertNotIn('<span class="timeline-date-intent is-buy">参与权</span>', html)
+
     def test_render_day_order_axis_state_tags_show_each_account_day(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -145,6 +559,33 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         )
         self.assertEqual(html.count('<span class="timeline-asset-name">持仓未输入</span>'), 2)
 
+    def test_render_day_order_keeps_unknown_te_badges_pending(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-09（周四） | 最远复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对 |",
+                    "| Tb | 2026-07-10（周五） | 历史复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对 |",
+                    "| Tc | 2026-07-13（周一） | 前一交易日持仓未输入 | - | B1事实待确认 | 先确认账户事实 |",
+                    "| Td | 2026-07-14（周二） | 报告日：持仓未输入 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-15（周三） | 先确认是否已有旧仓 | 无 | 先确认是否已有B1；未确认不新增B2 | 旧仓事实不清时不新增参与 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-14",
+        )
+
+        te_row = re.search(r'<tr class="timeline-row timeline-row-te">(.*?)</tr>', html, re.S).group(1)
+        self.assertIn('<span class="timeline-action-badge is-check">待确认</span>', te_row)
+        self.assertNotIn('<span class="timeline-action-badge is-empty">空仓</span>', te_row)
+        self.assertIn(
+            '<span class="timeline-date-state is-unknown">持仓未输入</span>'
+            '<span class="timeline-date-action">执行日</span>'
+            '<span class="timeline-date-intent is-check">待确认</span>',
+            html,
+        )
+
     def test_render_day_order_keeps_pending_asset_in_td_and_te_execution_target_empty(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -154,8 +595,8 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
                     "| Tb | 2026-07-08（周三） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
                     "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
-                    "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
-                    "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |",
+                    "| Td | 2026-07-10（周五） | 报告日：外部交易待核实：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-13（周一） | 外部交易记录待核实（只核实记录）：长电科技(600584) | 无 | 核实已成交才视为B1；未核实不新增B2 | 0%不参与；只核实外部交易记录 |",
                 ]
             ),
             title="测试日报",
@@ -199,6 +640,54 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('is-participate">参与权', te_row)
         self.assertIn('is-check">只核实', te_row)
 
+    def test_render_day_order_pending_b1_explanation_never_sets_buy_intent(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
+                    "| Td | 2026-07-10（周五） | 报告日：前日报计划推定 | 无 | 只定Te预案，不下单 | 报告日确认明日目标 |",
+                    "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认：长电科技(600584) | 无 | 确认已成交才视为B1 | 只核实记录 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-10",
+        )
+
+        self.assertIn('<span class="timeline-date-intent is-check">待确认</span>', html)
+        self.assertNotIn('<span class="timeline-date-intent is-buy">参与权</span>', html)
+
+    def test_execution_intent_uses_te_text_before_historical_participation_text(self):
+        rows = [
+            ["Ta最远", "历史对象", "B1参与权；B2确认权"],
+            ["Te明日", "无", "确认已成交才视为B1；未确认不新增B2"],
+        ]
+
+        self.assertEqual(_position_timeline_execution_tag(rows, 0, 1), "待确认")
+
+    def test_execution_intent_uses_te_text_before_historical_unknown_text(self):
+        historical_unknown = ["Ta最远", "历史对象", "持仓未输入；B1事实待确认"]
+
+        self.assertEqual(
+            _position_timeline_execution_tag(
+                [historical_unknown, ["Te明日", "明日对象", "B1参与权；B2确认权"]],
+                0,
+                1,
+            ),
+            "参与权",
+        )
+        self.assertEqual(
+            _position_timeline_execution_tag(
+                [historical_unknown, ["Te明日", "无", "明日空仓；没有B1/B2；不买新股、不做T"]],
+                0,
+                1,
+            ),
+            "空仓执行",
+        )
+
     def test_render_day_order_b1_not_established_is_empty_execution(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -220,6 +709,28 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('is-participate">参与权', te_row)
         self.assertIn('is-empty">空仓', te_row)
         self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
+
+    def test_render_day_order_confirmed_old_position_without_b2_uses_holding_badge(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-10（周五） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-13（周一） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-14（周二） | 上一交易日路径待确认 | - | B1事实待确认 | 进入Td复核 |",
+                    "| Td | 2026-07-15（周三） | 报告日：旧仓进入复核：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-16（周四） | 只处理旧仓风险 | 长电科技(600584) | 没有B2 | 只处理旧仓风险；旧仓未修复则继续降风险 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-15",
+        )
+
+        te_row = re.search(r'<tr class="timeline-row timeline-row-te">(.*?)</tr>', html, re.S).group(1)
+        self.assertIn('<span class="timeline-action-badge is-hold">持仓处理</span>', te_row)
+        self.assertNotIn('<span class="timeline-action-badge is-empty">空仓</span>', te_row)
+        self.assertIn('<span class="timeline-date-intent is-hold">持仓处理</span>', html)
 
     def test_render_empty_execution_day_intent_when_no_tb_path(self):
         html = render_markdown_report_html(
@@ -299,6 +810,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("data-market-structure-chart", html)
         self.assertIn("renderMarketStructureChart", html)
         self.assertIn('"latestDate":"2026-07-06"', html)
+        self.assertIn('"volumes":[600000000,590000000]', html)
         self.assertIn("2026-07-06 上证指数日线中枢", html)
         self.assertIn('red: "#C20C0C"', html)
         self.assertIn('green: "#089981"', html)
@@ -476,6 +988,27 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
 
         self.assertIn("当前日报", html)
         self.assertIn("outline-sticky", html)
+        self.assertIn('id="outline-sidebar"', html)
+        self.assertIn('data-outline-toggle', html)
+        self.assertIn('aria-controls="outline-sticky"', html)
+        self.assertIn('aria-expanded="true"', html)
+        self.assertIn('aria-label="收起侧边栏"', html)
+        self.assertIn('title="收起侧边栏"', html)
+        self.assertIn("--outline-toggle-rail-width: 64px", html)
+        self.assertIn("--outline-toggle-size: 44px", html)
+        self.assertIn(".bear-shell.is-outline-collapsed .outline-sidebar", html)
+        self.assertIn(".bear-shell.is-outline-collapsed .editor-pane", html)
+        self.assertIn("@media (min-width: 761px)", html)
+        self.assertIn(".bear-shell.is-outline-collapsed .reader-document", html)
+        self.assertIn(
+            "max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width))",
+            html,
+        )
+        self.assertIn('const setOutlineCollapsed = (collapsed) =>', html)
+        self.assertIn('shell.classList.toggle("is-outline-collapsed", collapsed)', html)
+        self.assertIn('window.dispatchEvent(new Event("resize"))', html)
+        self.assertIn('outlineToggle.addEventListener("click"', html)
+        self.assertIn('const label = collapsed ? "展开侧边栏" : "收起侧边栏"', html)
         self.assertIn("--outline-rail-width: calc(var(--outline-width) + 36px)", html)
         self.assertIn("position: fixed", html)
         self.assertIn("width: var(--outline-rail-width)", html)
@@ -543,7 +1076,9 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('red: cssValue("--accent-red", "#e73922")', html)
         self.assertIn('green: cssValue("--signal-green", "#176e54")', html)
         self.assertIn('surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)")', html)
-        self.assertIn('color: ["rgba(231,57,34,0.58)", chartTone.red, "rgba(23,110,84,0.5)"]', html)
+        self.assertIn('color: ["rgba(231,57,34,0.58)"]', html)
+        self.assertIn("color: [chartTone.red]", html)
+        self.assertIn("color: [chartTone.green]", html)
         self.assertIn("font-size: 15px", html)
         self.assertIn("pre.fenced-code", html)
         self.assertIn('<pre class="fenced-code"><code class="fenced-code-content" lang="sql">', html)
@@ -577,6 +1112,10 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
             "\n".join(
                 [
                     "# 图表日报",
+                    "",
+                    "### 1. 指数与市场底色补充",
+                    "",
+                    "补充说明。",
                     "",
                     "### 1. 指数与市场底色",
                     "> 近25个交易日Top50成交额占比趋势。",
@@ -723,7 +1262,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "## 明日执行结论",
                     "| 项目 | 结论 |",
                     "|------|------|",
-                    f"| 明日仓位 | {position_text} |",
+                    f"| 明日新仓 | {position_text} |",
                     "| 明日执行对象 | 长电科技(600584) |",
                     "",
                     "## 明日账户建议",
@@ -743,6 +1282,34 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         )
         self.assertEqual(html.count(wrapped), 2)
         self.assertIn(f"<td>{position_text}</td>", html)
+
+    def test_bear_html_preserves_the_five_account_action_rows(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 2026-07-14 A股日报",
+                    "",
+                    "## 明日账户建议",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 明日新仓 | 0%不参与 |",
+                    "| 旧仓事实 | 已确认持有长电科技(600584) |",
+                    "| 旧仓判断 | 待10:10复核 |",
+                    "| 旧仓动作 | 09:50-10:10只复核一次；三层承接成立才保留到14:30-14:55 |",
+                    "| 收盘目标仓位 | 待10:10复核后确定 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-14",
+        )
+
+        for label in ("明日新仓", "旧仓事实", "旧仓判断", "旧仓动作", "收盘目标仓位"):
+            self.assertIn(f"<td>{label}</td>", html)
+        self.assertIn("0%不参与", html)
+        self.assertIn("已确认持有长电科技(600584)", html)
+        self.assertIn("待10:10复核", html)
+        self.assertIn("09:50-10:10只复核一次；三层承接成立才保留到14:30-14:55", html)
+        self.assertIn("待10:10复核后确定", html)
 
     def test_render_marks_action_and_evidence_sections_for_bear_reader(self):
         html = render_markdown_report_html(
@@ -964,7 +1531,34 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         )
         self.assertIn("柱尾直接显示涨跌幅", html)
 
-    def test_render_adds_bear_echarts_for_top50_trend_and_lhb_flow(self):
+    def test_turnover_top30_uses_code_specific_limit_status_labels(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 附录：五、成交核心结果",
+                    "| 排名 | 股票 | 代码 | 成交额 | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 | 隔日判断 | 蜡烛图形态 |",
+                    "|------|------|------|--------|----------|--------|--------|--------|--------|--------|----------|------------|",
+                    "| 1 | 华虹宏力 | 688347 | 133.64亿 | 半导体 | -12.58% | 389.50 | 331.12 | 383.96 | 341.00 | 关注 | 下跌趋势(0分) |",
+                    "| 2 | 主板示例 | 002432 | 100.00亿 | 半导体 | -10.00% | 10.00 | 9.00 | 10.00 | 9.00 | 谨慎 | 下跌趋势(0分) |",
+                    "| 3 | 科创示例 | 688001 | 90.00亿 | 半导体 | -20.00% | 10.00 | 8.00 | 10.00 | 8.00 | 谨慎 | 下跌趋势(0分) |",
+                    "| 4 | 明确跌停 | 688002 | 80.00亿 | 半导体 | -12.58% | 10.00 | 8.74 | 10.00 | 8.74 | 谨慎 | 跌停(0分) |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-07-23",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+        items_by_code = {str(item["code"]): item for item in payload["turnover_top30"]["items"]}
+
+        self.assertEqual(items_by_code["688347"]["status"], "大幅回撤")
+        self.assertEqual(items_by_code["002432"]["status"], "跌停")
+        self.assertEqual(items_by_code["688001"]["status"], "跌停")
+        self.assertEqual(items_by_code["688002"]["status"], "跌停")
+
+    def test_render_splits_market_turnover_and_top50_share_into_separate_charts(self):
         html = render_markdown_report_html(
             "\n".join(
                 [
@@ -1005,24 +1599,94 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
         payload = json.loads(payload_text)
 
-        self.assertIn('data-bear-chart="market_turnover_top50_trend"', html)
+        self.assertIn('data-bear-chart="market_turnover_trend"', html)
+        self.assertIn('data-bear-chart="top50_share_trend"', html)
+        self.assertNotIn('data-bear-chart="market_turnover_top50_trend"', html)
+        self.assertIn("两市成交额趋势", html)
+        self.assertIn("Top50成交占比趋势", html)
+        self.assertNotIn("两市成交额 + Top50占比", html)
+        self.assertIn('data-bear-chart="new_high_share_trend"', html)
         self.assertIn('data-bear-chart="lhb_net_flow"', html)
-        self.assertIn("renderMarketTurnoverTop50TrendChart", html)
+        self.assertIn("renderMarketTurnoverTrendChart", html)
+        self.assertIn("renderTop50ShareTrendChart", html)
+        self.assertNotIn("renderMarketTurnoverTop50TrendChart", html)
+        self.assertIn("renderNewHighShareTrendChart", html)
         self.assertIn("renderLhbNetFlowChart", html)
         self.assertIn('formatter: (value) => value === 0 ? "" : `${Math.abs(value)}亿`', html)
         self.assertIn("创新高全A占比", html)
         self.assertIn("item.new_high_share_pct", html)
-        self.assertIn("hasNewHighShare", html)
-        self.assertRegex(html, r'name: "创新高全A占比",\s+type: "line",\s+yAxisIndex: 1')
-        self.assertIn("青线辅助看趋势扩散", html)
+        market_turnover_renderer = html.split("const renderMarketTurnoverTrendChart", 1)[1].split(
+            "const renderTop50ShareTrendChart", 1
+        )[0]
+        top50_share_renderer = html.split("const renderTop50ShareTrendChart", 1)[1].split(
+            "const renderNewHighShareTrendChart", 1
+        )[0]
+        new_high_share_renderer = html.split("const renderNewHighShareTrendChart", 1)[1].split(
+            "const renderSectorTurnoverShareChart", 1
+        )[0]
+        self.assertIn('name: "两市成交额"', market_turnover_renderer)
+        self.assertEqual(market_turnover_renderer.count('type: "bar"'), 1)
+        self.assertNotIn('type: "line"', market_turnover_renderer)
+        self.assertIn("markLine:", market_turnover_renderer)
+        self.assertIn("min: 0", market_turnover_renderer)
+        self.assertIn(
+            "max: (value) => Math.max(40000, Math.ceil(value.max / 5000) * 5000)",
+            market_turnover_renderer,
+        )
+        self.assertEqual(
+            re.findall(r'yAxis: (15000|20000|25000|30000|35000),\s+name: "([^"]+)"', market_turnover_renderer),
+            [
+                ("15000", "1.5万亿以下"),
+                ("20000", "2万亿以下"),
+                ("25000", "2.5万亿以下"),
+                ("30000", "3万亿以下"),
+                ("35000", "3.5万亿以上·极致沸点"),
+            ],
+        )
+        self.assertIn("lineStyle: { color: chartTone.extremeRed, width: 1.6, opacity: 1 }", market_turnover_renderer)
+        self.assertNotIn("极致沸点", top50_share_renderer)
+        self.assertNotIn("top50_share_pct", market_turnover_renderer)
+        self.assertNotIn('name: "Top50占比"', market_turnover_renderer)
+        self.assertIn('name: "Top50占比"', top50_share_renderer)
+        self.assertEqual(top50_share_renderer.count('type: "line"'), 1)
+        self.assertNotIn('type: "bar"', top50_share_renderer)
+        self.assertIn("top50_share_pct", top50_share_renderer)
+        self.assertNotIn("total_turnover", top50_share_renderer)
+        self.assertNotIn('name: "两市成交额"', top50_share_renderer)
+        self.assertNotIn("创新高全A占比", market_turnover_renderer)
+        self.assertNotIn("new_high_share_pct", market_turnover_renderer)
+        self.assertRegex(new_high_share_renderer, r'name: "创新高全A占比",\s+type: "line"')
+        self.assertIn("payload?.thresholds?.mark_lines", new_high_share_renderer)
+        self.assertIn("thresholdTone[line.tone]", new_high_share_renderer)
+        self.assertIn("extreme: { color: chartTone.extremeRed", new_high_share_renderer)
+        self.assertIn("cold: { color: chartTone.iceBlue", new_high_share_renderer)
+        self.assertIn("fracture: { color: chartTone.deepIceBlue", new_high_share_renderer)
+        self.assertNotIn('name: "2% 冰点"', new_high_share_renderer)
+        self.assertNotIn('name: "1%以下 极冰"', new_high_share_renderer)
+        self.assertIn("formatPct(item.new_high_share_pct)", new_high_share_renderer)
+        self.assertIn('formatter: (value) => `${value}%`', new_high_share_renderer)
         self.assertIn('symbol: "circle"', html)
         self.assertIn("showSymbol: false", html)
         self.assertIn('lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 }', html)
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][0]["date"], "2026-06-08")
-        self.assertEqual(payload["market_turnover_top50_trend"]["items"][0]["new_high_share_pct"], 1.16)
+        self.assertNotIn("new_high_share_pct", payload["market_turnover_top50_trend"]["items"][0])
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["top50_share_pct"], 21.86)
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["total_turnover"], 26667.33)
-        self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["new_high_share_pct"], 1.64)
+        self.assertEqual(payload["new_high_share_trend"]["items"][0]["date"], "2026-06-08")
+        self.assertEqual(payload["new_high_share_trend"]["items"][0]["new_high_count"], 58)
+        self.assertEqual(payload["new_high_share_trend"]["items"][0]["new_high_share_pct"], 1.16)
+        self.assertEqual(payload["new_high_share_trend"]["items"][1]["date"], "2026-06-09")
+        self.assertEqual(payload["new_high_share_trend"]["items"][1]["new_high_share_pct"], 1.64)
+        self.assertEqual(
+            [(item["value"], item["label"]) for item in payload["new_high_share_trend"]["thresholds"]["mark_lines"]],
+            [
+                (5.0, "5% 极致扩散线"),
+                (2.0, "2% 有效扩散分界"),
+                (1.0, "1% 极低扩散分界"),
+                (0.2, "0.2% 断层观察线"),
+            ],
+        )
+        self.assertIn("0.2%到1%为极低扩散", payload["new_high_share_trend"]["subtitle"])
         self.assertEqual(payload["lhb_net_flow"]["items"][0]["name"], "英维克")
         self.assertEqual(payload["lhb_net_flow"]["items"][0]["amount"], 8.01)
         self.assertEqual(payload["lhb_net_flow"]["items"][1]["name"], "科泰电源")
@@ -1031,6 +1695,124 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertEqual(payload["lhb_net_flow"]["items"][2]["amount"], -0.12)
         self.assertEqual(payload["lhb_net_flow"]["items"][3]["name"], "北玻股份")
         self.assertEqual(payload["lhb_net_flow"]["items"][3]["amount"], -2.31)
+
+    def test_render_adds_recent_25_day_t0_market_breadth_chart_after_heading(self):
+        raw_items = [
+            {
+                "date": f"2026-06-{day:02d}",
+                "up_count": None if day == 2 else 2500 + day,
+                "down_count": None if day == 2 else 2400 - day,
+                "all_a_change_pct": None if day == 2 else day / 100,
+                "new_high_share_pct": None if day == 2 else day / 10,
+            }
+            for day in range(1, 28)
+        ]
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 指数与市场底色补充",
+                    "",
+                    "这里只是补充标题，不应插入图卡。",
+                    "",
+                    "### 1. 指数与市场底色",
+                    "",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 原始事实 | 保留 |",
+                    "",
+                    "### 指数与市场底色",
+                    "",
+                    "重复正式标题不应再次插入图卡。",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-06-26",
+            t0_market_breadth={"items": list(reversed(raw_items))},
+        )
+        payload_text = re.search(
+            r'<script type="application/json" id="bear-chart-payload">(.*?)</script>',
+            html,
+        ).group(1)
+        payload = json.loads(payload_text)
+        items = payload["t0_market_breadth"]["items"]
+
+        self.assertEqual(html.count('data-bear-chart="t0_market_breadth"'), 1)
+        self.assertEqual(len(items), 25)
+        self.assertEqual([item["date"] for item in items], [f"2026-06-{day:02d}" for day in range(2, 27)])
+        self.assertNotIn("2026-06-27", [item["date"] for item in items])
+        self.assertIsNone(items[0]["up_count"])
+        self.assertIsNone(items[0]["down_count"])
+        self.assertIsNone(items[0]["all_a_change_pct"])
+        self.assertIsNone(items[0]["new_high_share_pct"])
+
+        supplemental_heading_index = html.index("指数与市场底色补充")
+        heading_index = html.index('id="1-指数与市场底色"')
+        chart_index = html.index('data-bear-chart-card="t0_market_breadth"')
+        fact_table_index = html.index("<table", heading_index)
+        self.assertLess(supplemental_heading_index, heading_index)
+        self.assertLess(heading_index, chart_index)
+        self.assertLess(chart_index, fact_table_index)
+        self.assertIn('aria-label="T0市场底色"', html)
+
+        renderer = html.split("const renderT0MarketBreadthChart", 1)[1].split(
+            "const renderMarketTurnoverTrendChart",
+            1,
+        )[0]
+        self.assertIn('name: "上涨家数"', renderer)
+        self.assertIn('name: "下跌家数"', renderer)
+        self.assertIn('name: "全A涨跌幅"', renderer)
+        self.assertIn('name: "创新高占比"', renderer)
+        self.assertIn('const breadthDownTone = "#07C160";', renderer)
+        self.assertIn('color: [chartTone.red, breadthDownTone, chartTone.iceBlue, chartTone.gold]', renderer)
+        self.assertEqual(renderer.count('type: "bar"'), 2)
+        self.assertEqual(renderer.count('type: "line"'), 2)
+        self.assertIn('min: (value) => Math.min(-4200, value.min)', renderer)
+
+        up_series = renderer.split('name: "上涨家数"', 1)[1].split('name: "下跌家数"', 1)[0]
+        down_series = renderer.split('name: "下跌家数"', 1)[1].split('name: "全A涨跌幅"', 1)[0]
+        self.assertNotIn("markLine", up_series)
+        self.assertIn("markLine", down_series)
+        self.assertIn('formatter: "4000+下跌"', down_series)
+        self.assertIn(
+            'lineStyle: { color: breadthDownTone, type: "dashed", width: 1.5, opacity: 0.82 }',
+            down_series,
+        )
+        self.assertIn('data: [{ yAxis: -4000 }]', down_series)
+        self.assertIn("return value === null ? null : -Math.abs(value);", down_series)
+        self.assertIn("nullableNumber(item.up_count)", renderer)
+        self.assertNotIn("numberValue(item.up_count)", renderer)
+
+    def test_render_adds_new_high_share_chart_without_top50_table(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 创新高趋势反馈",
+                    "",
+                    "| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |",
+                    "|------|--------|---------|----------|--------|----------|",
+                    "| 2026-06-09 | 250 | 5.00% | 极致扩散 | +150 | 半导体 |",
+                    "| 2026-06-08 | 100 | 2.00% | 有效扩散 | +55 | 元器件 |",
+                    "| 2026-06-05 | 45 | 0.90% | 极低扩散 | -10 | 通信设备 |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-06-09",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+
+        self.assertIn('data-bear-chart="new_high_share_trend"', html)
+        self.assertEqual(html.count('data-bear-chart="new_high_share_trend"'), 1)
+        self.assertNotIn('data-bear-chart="market_turnover_top50_trend"', html)
+        self.assertNotIn("market_turnover_top50_trend", payload)
+        self.assertEqual(
+            [item["new_high_share_pct"] for item in payload["new_high_share_trend"]["items"]],
+            [0.9, 2.0, 5.0],
+        )
 
     def test_render_skips_lhb_net_flow_chart_when_amounts_are_zero(self):
         html = render_markdown_report_html(
@@ -1149,7 +1931,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "# 图表日报",
                     "",
                     "### 盘面反馈复盘",
-                    "账户结论：1x满仓二选一；旧仓弱于指数，优先释放资金。",
+                    "账户结论：1x/50%半仓；旧仓弱于指数，优先释放资金。",
                     "",
                     "#### 盘面反馈分时点",
                     "| 时间 | 对象 | 代码 | 角色 | 涨跌幅 | 相对上证 |",
@@ -1179,7 +1961,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('data-bear-chart="intraday_feedback_review"', html)
         self.assertIn("renderIntradayFeedbackReviewChart", html)
         self.assertIn("markPoint", html)
-        self.assertIn("1x满仓二选一；旧仓弱于指数，优先释放资金。", html)
+        self.assertIn("1x/50%半仓；旧仓弱于指数，优先释放资金。", html)
         self.assertNotIn("各50%", html)
         self.assertEqual(series_keys, {"上证指数", "600667", "600584"})
         self.assertEqual(
@@ -1188,7 +1970,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         )
         self.assertEqual(len([item for item in review_payload["items"] if item["series_key"] == "600584"]), 2)
         self.assertEqual(review_payload["events"][0]["event"], "跌破昨低")
-        self.assertEqual(review_payload["account_conclusion"], "1x满仓二选一；旧仓弱于指数，优先释放资金。")
+        self.assertEqual(review_payload["account_conclusion"], "1x/50%半仓；旧仓弱于指数，优先释放资金。")
 
     def test_render_omits_intraday_feedback_chart_without_valid_points(self):
         html = render_markdown_report_html(
@@ -1197,7 +1979,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "# 图表日报",
                     "",
                     "### 盘面反馈复盘",
-                    "账户结论：2x满仓并行；这里还没有分时事实。",
+                    "账户结论：2x/100%满仓；这里还没有分时事实。",
                     "",
                     "| 时间 | 对象 | 事件 | 价格 | 说明 |",
                     "|------|------|------|------|------|",

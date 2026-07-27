@@ -111,12 +111,22 @@ def _position_context_unknown(candidate):
     return candidate.get("position_context_provided") is False and not _has_position_quantity(candidate)
 
 
+def _confirmed_position_quantity_unknown(candidate):
+    candidate = candidate or {}
+    return (
+        str(candidate.get("position_fact_status") or "").strip() == "confirmed"
+        and _as_number(candidate.get("current_position_shares", candidate.get("当前持仓", 0))) <= 0
+    )
+
+
 def _position_nature(candidate):
     explicit = candidate.get("position_nature", candidate.get("仓位性质"))
     if explicit not in (None, ""):
         return explicit
     if _position_context_unknown(candidate):
         return "持仓未输入"
+    if str(candidate.get("position_fact_status") or "").strip() == "confirmed":
+        return "已有仓"
     current_position = _as_number(candidate.get("current_position_shares", candidate.get("当前持仓", 0)))
     return "已有仓" if current_position > 0 else "无仓"
 
@@ -211,7 +221,7 @@ def _account_base_cash(candidate):
 
 def _resolve_actual_position_pct(candidate, target_position_pct):
     candidate = candidate or {}
-    if _position_context_unknown(candidate):
+    if _position_context_unknown(candidate) or _confirmed_position_quantity_unknown(candidate):
         return None
     for key in ("actual_position_pct", "实际仓位", "actual_position", "当前仓位"):
         parsed = _parse_pct(candidate.get(key))
@@ -361,7 +371,8 @@ def build_candidate_quality_contract(
         action_ceiling = "不参与"
         new_entry_action = "只观察，不新增参与"
     position_unknown = _position_context_unknown(candidate)
-    if position_unknown:
+    confirmed_quantity_unknown = _confirmed_position_quantity_unknown(candidate)
+    if position_unknown or confirmed_quantity_unknown:
         current_position = "待确认"
         sellable = "待确认"
         locked = "待确认"
@@ -382,7 +393,7 @@ def build_candidate_quality_contract(
         "仓位性质": _position_nature(candidate),
         "账户状态": account_trade_status,
         "计划仓位档": _format_pct(target_position_pct),
-        "实际仓位": _format_pct(actual_position_pct),
+        "实际仓位": "待确认" if confirmed_quantity_unknown else _format_pct(actual_position_pct),
         "仓位偏离": position_deviation,
         "周期身份": candidate.get("cycle_identity", candidate.get("周期身份", "")),
         "选股质量": selection_quality_label,
@@ -473,6 +484,7 @@ def evaluate_candidate_quality_sample(candidate):
     quality_role = str(candidate.get("quality_role") or "").strip()
     is_core = bool(candidate.get("is_core"))
     position_unknown = _position_context_unknown(candidate)
+    confirmed_quantity_unknown = _confirmed_position_quantity_unknown(candidate)
     current_position = _as_number(candidate.get("current_position_shares", 0))
     sellable = _as_number(candidate.get("sellable_shares", 0))
     locked = _as_number(candidate.get("locked_shares", 0))
@@ -485,7 +497,12 @@ def evaluate_candidate_quality_sample(candidate):
 
     action_ceiling = "补位"
     entry_quality_label = "等确认"
-    holding_action = "持仓未输入，先确认旧仓情况" if position_unknown else "无仓"
+    if position_unknown:
+        holding_action = "持仓未输入，先确认旧仓情况"
+    elif confirmed_quantity_unknown:
+        holding_action = "已确认持有，数量待确认"
+    else:
+        holding_action = "无仓"
     new_entry_action = "等触发条件成立"
     reasons = []
 

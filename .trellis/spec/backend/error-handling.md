@@ -23,15 +23,16 @@ full terminal trace in `logs/runs/<run-key>.log`.
 - Bear HTML that omits the complete account day-order section uses
   `position_timeline_html_missing`; a non-Bear companion without that section
   must not be rejected by this check.
-- Inferred-plan provenance failures use
+- External-pending provenance failures keep the existing stable compatibility codes
   `position_day_order_inferred_confirmation_missing`,
   `position_inferred_rendered_as_confirmed_holding`, and
   `position_day_order_html_inferred_confirmation_missing`.
 - Te execution-target conflicts use stable, surface-specific codes:
   `position_day_order_inferred_target_conflict` when Markdown Te promotes a
-  pending previous-report plan; `position_day_order_html_inferred_target_conflict`
+  pending external record; `position_day_order_html_inferred_target_conflict`
   when Bear does so; and `position_day_order_html_target_conflict` for a general
-  Bear/Markdown Te mismatch without a pending plan.
+  Bear/Markdown Te mismatch. The historical code names remain stable, but a
+  simulated previous-report target is confirmed 1x and must not trigger them.
 
 ---
 

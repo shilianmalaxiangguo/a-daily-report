@@ -378,7 +378,7 @@ class DailyReportRenderTest(unittest.TestCase):
         )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
 
-    def test_build_report_outputs_normalizes_inferred_previous_target_before_render(self):
+    def test_build_report_outputs_normalizes_inferred_previous_target_as_simulated_old_position(self):
         inferred_summary = {
             "has_position": True,
             "name": "长电科技",
@@ -398,12 +398,14 @@ class DailyReportRenderTest(unittest.TestCase):
             build_report_outputs(data, "2026-07-10", emit_preflight=False)
 
         for summary in (inferred_summary, nested_copy):
-            self.assertFalse(summary["has_position"])
-            self.assertTrue(summary["has_pending_position"])
+            self.assertTrue(summary["has_position"])
+            self.assertFalse(summary["has_pending_position"])
             self.assertTrue(summary["inferred_from_previous_report"])
-            self.assertEqual(summary["position"], 0.0)
-            self.assertEqual(summary["position_pct"], 0.0)
-            self.assertIn("前日报计划推定，待成交确认：长电科技(600584)", summary["summary"])
+            self.assertEqual(summary["position"], 50.0)
+            self.assertEqual(summary["position_pct"], 50.0)
+            self.assertEqual(summary["default_position_pct"], 50.0)
+            self.assertIn("持有长电科技(600584)，1x/50%半仓，上一份日报明日标的默认1x旧仓", summary["summary"])
+            self.assertEqual(summary["holding_note"], "上一份日报明日标的默认1x旧仓")
 
     def test_build_report_outputs_prepends_position_timeline_to_full_report(self):
         data = _complete_report_facts({"foo": "bar"})
@@ -925,6 +927,52 @@ Top50长趋势表不该进入轻量版
         self.assertLess(bear_html.index("明日执行结论"), bear_html.index("经验库命中"))
         self.assertIn("bear-section-action", bear_html)
         self.assertIn("bear-section-evidence", bear_html)
+
+    def test_build_report_outputs_keeps_market_language_after_actions_in_both_variants(self):
+        from report.front_page_v2_renderer import render_front_page_v2
+        from report.markdown_report_html import render_markdown_report_html
+
+        data = _complete_report_facts()
+        artifact = _market_language_test_artifact()
+
+        def render(display_mode, payload, target_date, **kwargs):
+            return "\n".join(
+                render_front_page_v2(
+                    [],
+                    target_date=target_date,
+                    market_research_snapshot={},
+                    market_language_translation=kwargs["market_language_translation"],
+                )
+            )
+
+        with patch(
+            "daily_report_render._render_report_with_display_mode",
+            side_effect=render,
+        ):
+            outputs = build_report_outputs(
+                data,
+                "2026-07-10",
+                emit_preflight=False,
+                market_language_translation=artifact,
+            )
+
+        for variant in (REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY):
+            report = outputs[variant]
+            self.assertLess(
+                report.index("### 明日行动清单"),
+                report.index("## 市场语言翻译（研究证据）"),
+            )
+
+        bear_html = render_markdown_report_html(
+            outputs[REPORT_VARIANT_FULL],
+            title="日报",
+            trade_date="2026-07-10",
+        )
+        self.assertLess(
+            bear_html.index("明日行动清单"),
+            bear_html.index("市场语言翻译（研究证据）"),
+        )
+
     def test_build_report_outputs_can_enable_decision_ledger_separately(self):
         data = _complete_report_facts({"foo": "bar"})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
@@ -2238,6 +2286,35 @@ Top50长趋势表不该进入轻量版
 
         self.assertEqual(preflight["status"], "failed")
         self.assertIn("板块共振结果", preflight["failures"])
+
+    def test_report_preflight_allows_computed_empty_resonance_result(self):
+        data = _complete_report_facts(
+            {
+                "zt_pool": [{"code": "000001"}],
+                "sector_fund_flow": {"inflow": [{"name": "机器人"}]},
+                "stocks_with_history": [{"code": "000001", "turnover": 80.0}],
+                "resonance_scores": {},
+                "trade_signals": [],
+            }
+        )
+        data["module_logs"].append(
+            {
+                "step": "infer.quant_signals",
+                "status": "success",
+                "details": {
+                    "volume_anomaly_count": 2,
+                    "lhb_count": 0,
+                    "resonance_count": 0,
+                    "resonance_input_count": 1,
+                    "resonance_computed": True,
+                    "signal_count": 0,
+                },
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertNotIn("板块共振结果", preflight["failures"])
 
     def test_build_report_outputs_emits_preflight_by_default_before_abort(self):
         data = {

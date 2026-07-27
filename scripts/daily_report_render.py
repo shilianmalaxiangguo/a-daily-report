@@ -654,7 +654,10 @@ def _build_quant_factor_checks(data):
     details = latest.get("details") or {}
     checks = []
     resonance_count = int(_safe_float(details.get("resonance_count"), 0))
-    if _has_quant_signal_inputs(data) and resonance_count <= 0:
+    resonance_input_count = int(_safe_float(details.get("resonance_input_count"), 0))
+    resonance_computed = details.get("resonance_computed") is True
+    resonance_missing = resonance_count <= 0 and not (resonance_computed and resonance_input_count > 0)
+    if _has_quant_signal_inputs(data) and resonance_missing:
         checks.append(
             {
                 "label": "板块共振结果",

@@ -132,27 +132,21 @@ the compounded month series without defaulting missing returns to zero.
   the finding in the run error record.
 - Bear HTML omits the PostgreSQL current position while Markdown contains it ->
   stop generation with `position_day_order_html_current_position_missing`.
-- PostgreSQL summary is marked as inferred from the previous report -> normalize
-  every structured copy to `has_position=false`, `has_pending_position=true`,
-  set actual `position` / `position_pct` to `0`, keep stock/source identity, and
-  calculate exposure as 0x until成交 confirmation. A nonzero
-  `default_position_pct` may remain only as the post-confirmation scenario.
-- PostgreSQL load, snapshot save, or fact import sees a legacy inferred summary
-  with nonzero actual position fields -> migrate the nonzero value to
-  `default_position_pct`, zero the actual fields, then continue with the
-  normalized payload.
-- PostgreSQL inferred summary appears in a later Ta/Tb/Tc lookup -> return an
-  inferred account state, not a confirmed target state; render the historical
-  plan as waiting for成交 confirmation.
-- A pending previous-report plan is created after an earlier recursive
-  normalization pass -> set `role=前日报计划待成交确认`,
-  `has_position=false`, and `has_pending_position=true` on the new summary and
-  every new position copy immediately, or normalize again before any consumer.
-- Markdown or Bear contains the correct inferred stock code but drops the
-  pending-confirmation wording -> stop with
-  `position_day_order_inferred_confirmation_missing`,
-  `position_inferred_rendered_as_confirmed_holding`, or
-  `position_day_order_html_inferred_confirmation_missing` as applicable.
+- PostgreSQL summary is marked as inherited from the previous report ->
+  normalize every structured copy to `has_position=true`,
+  `has_pending_position=false`, actual `position=50`, `position_pct=50`,
+  `default_position_pct=50`, and role `旧仓处理`; calculate confirmed 1x/50%
+  old-position exposure.
+- PostgreSQL load, snapshot save, or fact import sees a legacy inherited summary
+  with pending or zero fields -> repair it to the confirmed 1x/50% payload before any
+  consumer or write boundary.
+- PostgreSQL inherited summary appears in a later Ta/Tb/Tc lookup -> preserve it
+  as a historical confirmed simulated old position.
+- Explicit empty input, an executed tomorrow-empty instruction, or an explicit
+  exit fact overrides inherited PostgreSQL records. A report with no new target
+  does not clear the most recent unfinished inherited old position.
+- An explicitly external pending trade record also carries
+  `has_pending_position=true`, remains 0x, and only verifies its trade record.
 - Existing official snapshot is hundreds of MB and `_save_data_snapshot()` needs
   only `supplementary_perspective` -> read tail metadata only; do not parse the
   full archive.
@@ -202,9 +196,12 @@ the compounded month series without defaulting missing returns to zero.
 - Integration verification for a real replay date must include SQL counts for
   dedicated structured tables and a precise low-value-field query that returns
   zero.
-- Unit test PostgreSQL load/save/import boundaries normalize an inferred
-  previous-report plan to `position=0`, `position_pct=0`, while preserving its
-  nonzero `default_position_pct` scenario value.
+- Unit test PostgreSQL load/save/import boundaries normalize an inherited
+  previous-report target to `has_position=true`, `has_pending_position=false`,
+  actual `position=50`, `position_pct=50`, and
+  `default_position_pct=50`, while preserving source date and identity.
+- Unit test `external_trade_pending` remains `has_position=false`,
+  `has_pending_position=true`, and actual 0 after the same boundaries.
 - Unit test the same normalization leaves an explicit confirmed position
   byte-for-byte unchanged.
 - Unit test the real empty-load shape (`{"data": {}}`), not only a mocked
@@ -543,6 +540,10 @@ Same-sector history is the only valid basis for turnover-share change.
 - Structured PostgreSQL rows should overwrite stale generic fact-field rows
   during PostgreSQL-only enrichment. Do not keep a generic JSON-shaped value
   when a dedicated table has a cleaner replay row for the same concept.
+- `new_high_feedback_daily` must preserve `source_date`, `query_date`, and
+  `requested_trade_date` through insert and query. A source without an explicit
+  target-date capability, such as a current ranking endpoint, must not be saved
+  under a historical `trade_date`; keep the historical fact missing instead.
 - When the explicit replay series has fewer than 25 trading days, import must
   record `structured_counts.recent_replay_window_status` with `status`,
   `available_days`, `required_days`, `min_trade_date`, and `max_trade_date`.
@@ -639,3 +640,129 @@ return build_turnover_history(rows)
 ```
 
 The 25-day import is only the seed; PostgreSQL is the replay source after that.
+
+## Scenario: Bear Tomorrow-Action Calendar History
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the Bear calendar that reviews recent report-day
+  tomorrow decisions and their planned account performance over the next two
+  trading days.
+
+### 2. Signatures
+
+- Repository:
+  `PostgresDailyFactDb.query_tomorrow_action_history(end_date, *, mode="frozen", limit=25)`.
+- Facade:
+  `DatabaseService.query_tomorrow_action_history(end_date, *, mode="frozen", limit=25)`.
+- Source tables: `strategy_factor_snapshots` and
+  `strategy_factor_snapshot_fields`.
+
+### 3. Contracts
+
+- Select the latest `limit` snapshot report dates where
+  `mode = <requested mode>` and `report_date <= end_date`, then restore them in
+  ascending report-date order.
+- Read only final tomorrow-decision fields:
+  `two_layer_decision_payload.next_day_action.final_object_identity`,
+  `position_stance`, `stock.code`, `stock.name`, and
+  `two_layer_decision_payload.tomorrow_account_action.action`.
+- A stock identity produces `action_type="execute"`. `无` together with
+  `0%不参与` produces `action_type="no_trade"` and `can_new_entry=false`.
+- Only an explicit account action `empty` or `明日空仓` produces
+  `tomorrow_account_empty=true`. An empty account-action object and a missing
+  stock identity do not prove an empty account.
+- The calendar path is read-only. It must never call
+  `save_strategy_performance_ledger()`: that writer deletes all ledger and
+  factor-snapshot rows for the mode before replacing them.
+- If final snapshot history is absent, the calendar builder may read the legacy
+  strategy ledger for compatibility. It must not scan Markdown, HTML, or JSON.
+- The calendar builder requests one report before the displayed window because
+  that plan can still contribute its second-day `1x/50%` leg to the first
+  displayed execution date.
+- Each concrete target creates a `1x/50%` leg on each of the next two actual
+  trading days. A no-new-entry decision creates no new leg but preserves a
+  prior target's second-day leg. An explicit tomorrow-empty action clears every
+  leg on that execution date.
+- Keep plan action and account result separate. If a no-new-entry plan has no
+  active leg on its execution date, the account result is `empty` while the
+  plan remains `no_new_entry`; if a prior second-day leg exists, the account
+  result is the target and the UI adds a no-new-entry plan note.
+- Derive actual trading dates from the presence of Shanghai Composite daily-bar
+  rows. Do not drop a date merely because its `open` or `close` is missing;
+  preserve the execution date and mark only its return as incomplete.
+- Calculate every stock leg and the Shanghai benchmark from the same day's
+  `open` and `close`. A missing, non-finite, or conflicting same-day price fact
+  is incomplete and must not become zero or silently select the last row.
+- At most two `1x/50%` legs may be active on one day. More than two is an
+  incomplete account fact, not a displayed position above `2x/100%`.
+- Calendar-only holiday notes (for example, `2026-06-19` `端午休假`) and
+  sample-outside notes are not report records and never enter holdings,
+  valid-day, or return counts.
+
+### 4. Validation & Error Matrix
+
+- Invalid `end_date` -> return an empty history list without querying rows.
+- Missing repository method -> the facade returns an empty list.
+- No final snapshot history -> use the same-mode legacy ledger only.
+- Snapshot says `无 + 0%不参与` without explicit account empty -> return
+  `no_trade`, never `tomorrow_account_empty=true`.
+- Requested `replay` mode -> query only replay rows; never fill from frozen rows.
+- One active stock leg lacks a valid target-day open or close -> preserve all
+  actions and the execution date, but exclude that day from every return total.
+- Duplicate Shanghai rows disagree on the target-day open or close -> preserve
+  the trading date and mark the benchmark return incomplete.
+- Calendar generation attempts a full strategy-ledger save -> reject the
+  implementation because it can erase the existing snapshot history.
+
+### 5. Good/Base/Bad Cases
+
+- Good: 25 frozen snapshots restore 11 stock targets and 14 no-new-entry days
+  while preserving all 25 report dates; target plans expand into first- and
+  second-day `1x/50%` account legs without creating extra report records.
+- Good: a no-new-entry day still shows and evaluates the prior target's
+  second-day leg.
+- Base: no snapshot rows but a legacy same-mode ledger exists; the calendar
+  uses the legacy records and exposes that source.
+- Bad: an empty `tomorrow_account_action` mapping is rendered as an empty
+  account.
+- Bad: the report entry rewrites the complete strategy ledger solely to make
+  the current calendar row visible.
+
+### 6. Tests Required
+
+- Repository SQL test asserts the selected field paths, `LIMIT %s`, mode/date
+  parameters, ascending restored dates, target identity, no-new-entry, and
+  explicit account-empty handling.
+- Service-builder test asserts final snapshot history wins when the legacy
+  ledger is empty and exposes
+  `source="postgresql.strategy_factor_snapshot_fields"`.
+- Integration check against the configured PostgreSQL database reports record,
+  target-plan, account-holding, no-new-entry, and explicit-empty counts plus the
+  independently compounded account, Shanghai, and excess returns without
+  writing any table.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+update_strategy_performance_book(...)
+calendar = service.load_strategy_performance_ledger(mode=mode)
+```
+
+This can route through a full-replacement writer and remove older factor
+snapshots.
+
+#### Correct
+
+```python
+records = service.query_tomorrow_action_history(
+    target_report_date,
+    mode=mode,
+    limit=25,
+)
+```
+
+This keeps the review surface read-only and uses the durable final-decision
+facts already present in PostgreSQL.

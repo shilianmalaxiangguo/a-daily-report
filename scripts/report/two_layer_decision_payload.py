@@ -4,10 +4,23 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import c
 from report.execution_wording import (
     PREMARKET_50_EXECUTION_TEXT,
     PREMARKET_50_TRIGGER_TEXT,
+    PREMARKET_FULL_EXECUTION_TEXT,
+    PREMARKET_FULL_TRIGGER_TEXT,
     SAME_STOCK_T_CONFIRMATION_CLAUSE,
     TWO_B_CONFIRMATION_CLAUSE,
 )
-from report.position_context import is_inferred_previous_report_position
+from report.position_context import (
+    build_old_position_plan,
+    is_tomorrow_empty_account_action,
+    old_position_action_rows,
+    position_fact_status,
+    resolve_tomorrow_account_action,
+)
+from report.position_tier_contract import (
+    POSITION_TIER_B1_PCT,
+    POSITION_TIER_B1_B2_PCT,
+    normalize_planned_position_tier_pct,
+)
 from report.selection_workflow import render_selection_workflow_mermaid
 from report.sniper_target_derivation import clean_text, normalize_stock_code
 
@@ -96,7 +109,7 @@ def _execution_priority_allows_b_level(priority, position_decision):
         return False
     if priority in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
         return True
-    return _position_pct(position_decision) >= 50
+    return _position_pct(position_decision) > 0
 
 
 def _position_pct(position_decision):
@@ -104,22 +117,65 @@ def _position_pct(position_decision):
     for key in ("target_position_pct", "position_pct", "position_plan_pct"):
         if key not in position_decision:
             continue
+        value = position_decision.get(key)
+        if value in (None, ""):
+            return 0
         try:
-            return int(float(str(position_decision.get(key)).replace("%", "").strip()))
+            return normalize_planned_position_tier_pct(value)
         except (TypeError, ValueError):
-            continue
+            return 0
     return 0
 
 
 def _position_plan_from_pct(position_pct):
-    try:
-        pct = int(float(str(position_pct or 0).replace("%", "").strip() or 0))
-    except (TypeError, ValueError):
-        pct = 0
-    if pct >= 100:
+    pct = _normalized_position_pct(position_pct)
+    if pct == POSITION_TIER_B1_B2_PCT:
         return "100%核心进攻"
-    if pct >= 50:
+    if pct == POSITION_TIER_B1_PCT:
         return "50%条件执行"
+    return "0%不参与"
+
+
+def _position_tier_exposure_plan(final_target_resolution):
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    plan = resolution.get("account_exposure_plan")
+    return plan if isinstance(plan, dict) else {}
+
+
+def _position_tier_exposure_v2(plan):
+    return isinstance(plan, dict) and plan.get("schema_version") == "position_tier_exposure.v2"
+
+
+def _normalized_position_pct(value):
+    try:
+        return normalize_planned_position_tier_pct(value)
+    except ValueError:
+        return 0
+
+
+def _new_entry_display_text(front, exposure_plan):
+    front = front if isinstance(front, dict) else {}
+    exposure_plan = exposure_plan if isinstance(exposure_plan, dict) else {}
+    current_pct = _normalized_position_pct(front.get("position_pct", 0))
+    if _position_tier_exposure_v2(exposure_plan):
+        current_pct = _normalized_position_pct(exposure_plan.get("new_entry_pct", current_pct))
+        planned_pct = _normalized_position_pct(
+            exposure_plan.get("planned_new_entry_pct", front.get("planned_position_pct", current_pct))
+        )
+        if current_pct <= 0 and exposure_plan.get("same_stock_target") and planned_pct > 0:
+            if planned_pct == POSITION_TIER_B1_B2_PCT:
+                return "0%新增；现有2x/100%已满足计划总档2x/100%，不新增参与"
+            return "0%新增；现有1x/50%已满足计划总档1x/50%，不追加B2"
+        if current_pct <= 0 and planned_pct > 0:
+            if planned_pct == POSITION_TIER_B1_B2_PCT:
+                return "0%新增；保留计划总档2x/100%，旧仓释放后执行"
+            return "0%新增；保留计划总档1x/50%，旧仓释放后执行"
+        if exposure_plan.get("same_stock_t") and current_pct == POSITION_TIER_B1_PCT:
+            return "新增1x/50%=B2；已有1x/50%视为B1，B2确认后总仓位到2x/100%"
+    if current_pct >= POSITION_TIER_B1_B2_PCT:
+        return PREMARKET_FULL_EXECUTION_TEXT
+    if current_pct >= POSITION_TIER_B1_PCT:
+        return PREMARKET_50_EXECUTION_TEXT
     return "0%不参与"
 
 
@@ -548,7 +604,17 @@ def _position_stance_payload(target, observation_target, priority, position_deci
         or (position_decision.get("capital_priority_decision") or {}).get("reason")
     )
     if target:
-        stance = clean_text(position_plan, "50%条件执行")
+        stance = clean_text(position_plan, "0%不参与")
+        if stance not in {"50%条件执行", "100%核心进攻"}:
+            return {
+                "stance": "0%不参与",
+                "reason_from_market": f"市场状态：{clean_text(market_state.get('market_state'), '待补事实')}",
+                "reason_from_funds": "结构化仓位缺失或不合法",
+                "reason_from_sector_window": f"主方向：{mainline}",
+                "reason_from_leader_validation": "对象缺少合法结构化仓位，只保留观察",
+                "not_participate_reason": final_action or "对象缺少合法结构化仓位",
+                "passes_forward": "仓位档未明确，不生成执行条件",
+            }
         return {
             "stance": stance,
             "reason_from_market": f"市场状态：{clean_text(market_state.get('market_state'), '待补事实')}",
@@ -841,11 +907,20 @@ def _why_this_not_others(final_stock, final_identity, candidate_pool_verdict, ob
     return f"{label}是当前唯一保留对象，明日只按条件校验"
 
 
-def _final_object_payload(target, observation_target, position_stance, b_level_conditions, candidate_pool_verdict, position_plan=""):
+def _final_object_payload(
+    target,
+    observation_target,
+    position_stance,
+    b_level_conditions,
+    candidate_pool_verdict,
+    position_plan="",
+    target_identity="明日执行对象",
+    target_execution_type="",
+):
     final_stock = target or observation_target
     if target:
-        identity = "明日执行对象"
-        execution_type = clean_text(position_plan, "50%条件执行")
+        identity = clean_text(target_identity, "明日执行对象")
+        execution_type = clean_text(target_execution_type or position_plan, "0%不参与")
     elif observation_target:
         identity = "观察对象"
         execution_type = "只观察，不新增参与"
@@ -878,6 +953,8 @@ def _next_day_action_payload(
     *,
     pending_position_confirmation=False,
     has_confirmed_position=False,
+    old_position_rows=None,
+    tomorrow_account_action=None,
 ):
     final_object = final_object if isinstance(final_object, dict) else {}
     stock = final_object.get("stock") if isinstance(final_object.get("stock"), dict) else {}
@@ -888,6 +965,8 @@ def _next_day_action_payload(
         checklist = [f"确认{label}仍满足最终对象条件"]
         checklist.extend(f"执行条件：{condition}" for condition in execution_conditions)
         checklist.extend(f"不参与条件：{condition}" for condition in failure_conditions)
+    elif final_object.get("identity") == "明日计划对象":
+        checklist = [f"保留{label}为明日计划对象", clean_text(final_object.get("execution_type"), "当前不新增参与")]
     elif final_object.get("identity") == "观察对象":
         checklist = [
             f"只观察{label}，不新增参与",
@@ -896,6 +975,25 @@ def _next_day_action_payload(
         ]
     else:
         checklist = ["无明日执行对象，0%不参与", "关键数据不完整时不生成新增参与计划"]
+    old_position_rows = old_position_rows if isinstance(old_position_rows, dict) else {}
+    if is_tomorrow_empty_account_action(tomorrow_account_action):
+        return {
+            "stock": {},
+            "final_object_identity": "无",
+            "position_stance": "0%不参与",
+            "checklist": [
+                "不买任何新股",
+                "集合竞价卖清全部可卖旧仓",
+                "当天不做T",
+                "成交后账户仓位为0",
+                "未全部成交继续尽早卖，未清完不能称空仓",
+            ],
+            "time_windows": ["集合竞价"],
+            "buy_conditions": [],
+            "no_buy_conditions": ["明日空仓，不新增参与"],
+            "old_position_handling": clean_text(old_position_rows.get("旧仓动作")),
+            "review_points": ["核对全部可卖旧仓是否卖清", "未清完继续尽早卖"],
+        }
     return {
         "stock": dict(stock),
         "final_object_identity": clean_text(final_object.get("identity"), "无"),
@@ -905,7 +1003,7 @@ def _next_day_action_payload(
         "buy_conditions": execution_conditions,
         "no_buy_conditions": failure_conditions,
         "old_position_handling": (
-            "只核实成交记录；未确认成交前按0x"
+            "只核实外部交易记录；未核实成交前按0x"
             if pending_position_confirmation
             else "旧仓优先时，新机会只观察，不新增参与"
             if has_confirmed_position
@@ -995,22 +1093,36 @@ def build_two_layer_decision_payload(
 ):
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     position_decision = position_decision if isinstance(position_decision, dict) else {}
+    tomorrow_account_action = resolve_tomorrow_account_action(resolution, position_decision)
+    tomorrow_empty = is_tomorrow_empty_account_action(tomorrow_account_action)
     workflow = _selection_workflow_from_context(execution_stage_context)
     workflow_present = bool(workflow)
     workflow_target = _workflow_final_target(workflow)
     workflow_pct = _workflow_position_pct(workflow)
     workflow_controls_target = _workflow_final_controls_target(workflow)
     workflow_zero_position = bool(_workflow_final(workflow)) and (workflow_pct <= 0 or not workflow_target)
-    priority = _capital_priority(resolution)
+    priority = "tomorrow_empty" if tomorrow_empty else _capital_priority(resolution)
+    exposure_plan = _position_tier_exposure_plan(resolution)
+    uses_position_tier_exposure = _position_tier_exposure_v2(exposure_plan)
+    position_pct = _position_pct(position_decision)
+    planned_position_pct = (
+        _normalized_position_pct(exposure_plan.get("planned_new_entry_pct", 0))
+        if uses_position_tier_exposure
+        else _normalized_position_pct(workflow_pct if workflow_controls_target else position_pct)
+    )
     wait_without_current_object = _wait_priority_has_no_current_object(priority)
-    final_empty_without_current_object = workflow_zero_position or wait_without_current_object
-    pool_resolution = {} if (workflow_present and workflow_zero_position) or wait_without_current_object else resolution
+    final_empty_without_current_object = tomorrow_empty or workflow_zero_position or wait_without_current_object
+    pool_resolution = (
+        {}
+        if tomorrow_empty or (workflow_present and workflow_zero_position) or wait_without_current_object
+        else resolution
+    )
     target = {}
     if final_empty_without_current_object:
         target = {}
     elif workflow_controls_target:
         target = _stock_payload(workflow_target) if workflow_target and workflow_pct > 0 else {}
-    elif _execution_priority_allows_b_level(priority, position_decision):
+    elif _execution_priority_allows_b_level(priority, position_decision) and planned_position_pct > 0:
         if priority == "tradable_proxy":
             target = _first_stock(
                 resolution.get("display_target"),
@@ -1029,38 +1141,63 @@ def build_two_layer_decision_payload(
                 resolution.get("new_entry_target"),
                 resolution.get("tradable_proxy_target"),
             )
-    position_pct = _position_pct(position_decision)
-    resolved_position_pct = workflow_pct if workflow_controls_target else ((position_pct if position_pct >= 50 else 50) if target else 0)
+    resolved_position_pct = (
+        0
+        if tomorrow_empty
+        else _normalized_position_pct(exposure_plan.get("new_entry_pct", 0))
+        if uses_position_tier_exposure
+        else _normalized_position_pct(workflow_pct)
+        if workflow_controls_target
+        else _normalized_position_pct(position_pct)
+        if target
+        else 0
+    )
     position_plan = _position_plan_from_pct(resolved_position_pct)
     existing_position_target = (
         resolution.get("existing_position_target")
         if isinstance(resolution.get("existing_position_target"), dict)
         else {}
     )
-    inferred_pending_position = bool(
+    fact_status = clean_text(exposure_plan.get("position_fact_status")) or position_fact_status(
+        existing_position_target,
+        context_provided=bool(existing_position_target),
+    )
+    old_position_plan = (
+        dict(resolution.get("old_position_plan"))
+        if isinstance(resolution.get("old_position_plan"), dict)
+        else build_old_position_plan(existing_position_target)
+    )
+    old_position_rows = old_position_action_rows(
+        position_fact_status=fact_status,
+        existing_position=existing_position_target,
+        old_position_plan=old_position_plan,
+        tomorrow_account_action=tomorrow_account_action,
+    )
+    pending_external_trade = bool(
         not target
         and resolved_position_pct <= 0
         and priority == "wait"
-        and is_inferred_previous_report_position(existing_position_target)
+        and fact_status == "pending_confirmation"
     )
     has_confirmed_position = bool(
-        not inferred_pending_position
+        not pending_external_trade
         and (
-            priority in {"old_position_t", "same_stock_t"}
-            or (
-                bool(existing_position_target)
-                and existing_position_target.get("has_position") is not False
-                and not is_inferred_previous_report_position(existing_position_target)
-            )
+            fact_status == "confirmed"
+            or priority in {"old_position_t", "old_position", "same_stock_t"}
         )
     )
     workflow_final = _workflow_final(workflow)
     capital_reason = clean_text((resolution.get("capital_priority_decision") or {}).get("reason"))
-    if inferred_pending_position:
-        zero_basis = "前日报计划对象尚未确认成交；未确认前不视为B1，不新增B2。"
-        zero_reason = "新开仓没有执行对象；先确认前日报计划对象是否成交"
+    if tomorrow_empty:
+        zero_basis = "明日空仓，不买新股、不做T；集合竞价卖清全部可卖旧仓。"
+        zero_reason = "显式明日空仓要求成交后账户仓位为0；未全部成交继续尽早卖"
         zero_attribution = "账户问题"
-        zero_action_text = "0%不参与；只核实成交记录"
+        zero_action_text = "明日空仓；集合竞价卖清全部可卖旧仓"
+    elif pending_external_trade:
+        zero_basis = "外部交易记录待核实；未核实成交前不视为B1，不新增B2。"
+        zero_reason = "新开仓没有执行对象；只核实外部交易是否成交"
+        zero_attribution = "账户问题"
+        zero_action_text = "0%不参与；只核实外部交易记录"
     else:
         zero_basis = clean_text(
             position_decision.get("sizing_reason")
@@ -1091,7 +1228,7 @@ def build_two_layer_decision_payload(
     observation_target = {}
     if not target and not workflow_controls_target:
         observation_target = {} if final_empty_without_current_object else _first_stock(resolution.get("watch_target"))
-    b_level_conditions = _build_b_level_conditions(target) if target else {}
+    b_level_conditions = _build_b_level_conditions(target) if target and resolved_position_pct > 0 else {}
     position_stance = _position_stance_payload(
         target,
         observation_target,
@@ -1100,8 +1237,15 @@ def build_two_layer_decision_payload(
         execution_stage_context,
         position_plan,
     )
+    target_identity = (
+        "明日执行对象"
+        if target and resolved_position_pct > 0
+        else "明日计划对象"
+        if target
+        else ""
+    )
     final_stock = target or observation_target
-    final_identity = "明日执行对象" if target else ("观察对象" if observation_target else "无")
+    final_identity = target_identity if target else ("观察对象" if observation_target else "无")
     candidate_pool_verdict = _candidate_pool_verdict(
         final_target_resolution=pool_resolution,
         execution_stage_context=execution_stage_context,
@@ -1117,12 +1261,20 @@ def build_two_layer_decision_payload(
         b_level_conditions,
         candidate_pool_verdict,
         position_plan,
+        target_identity=target_identity,
+        target_execution_type=(
+            clean_text(exposure_plan.get("policy"), _position_plan_from_pct(planned_position_pct))
+            if target_identity == "明日计划对象"
+            else position_plan
+        ),
     )
     next_day_action = _next_day_action_payload(
         final_object,
         b_level_conditions,
-        pending_position_confirmation=inferred_pending_position,
+        pending_position_confirmation=pending_external_trade,
         has_confirmed_position=has_confirmed_position,
+        old_position_rows=old_position_rows,
+        tomorrow_account_action=tomorrow_account_action,
     )
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -1140,8 +1292,10 @@ def build_two_layer_decision_payload(
         "front_decision": {
             "position_plan": position_plan,
             "position_pct": resolved_position_pct,
+            "planned_position_plan": _position_plan_from_pct(planned_position_pct),
+            "planned_position_pct": planned_position_pct,
             "execution_object": target,
-            "execution_identity": "明日执行对象" if target else "无明日执行对象",
+            "execution_identity": target_identity if target else "无明日执行对象",
             "if_fail": "不参与",
             "no_participation_basis": zero_basis,
             "no_execution_reason": zero_reason,
@@ -1151,10 +1305,15 @@ def build_two_layer_decision_payload(
         "b_level_conditions": b_level_conditions,
         "capital_priority": priority,
         "selection_workflow": workflow,
+        "position_fact_status": fact_status,
+        "old_position_plan": old_position_plan,
+        "old_position_action_rows": old_position_rows,
+        "tomorrow_account_action": tomorrow_account_action,
+        "account_exposure_plan": dict(exposure_plan),
     }
     if final_empty_without_current_object:
         payload["workflow_zero_position"] = True
-    if inferred_pending_position:
+    if pending_external_trade:
         payload["pending_position_confirmation"] = True
     payload["derivation_steps"] = _step_payloads(
         target,
@@ -1229,33 +1388,63 @@ def render_front_decision_layer(payload):
         if account_first_action and not account_first_action.startswith("无旧仓需要处理")
         else []
     )
+    old_position_rows = payload.get("old_position_action_rows") if isinstance(payload.get("old_position_action_rows"), dict) else {}
+    old_position_lines = [
+        f"| {label} | {clean_text(old_position_rows.get(label), '待确认')} |"
+        for label in ("旧仓事实", "旧仓判断", "旧仓动作", "收盘目标仓位")
+    ]
+    tomorrow_account_action = resolve_tomorrow_account_action(payload)
+    tomorrow_empty = is_tomorrow_empty_account_action(tomorrow_account_action)
+    tomorrow_result_lines = ["| 明日账户结果 | 明日空仓 |"] if tomorrow_empty else []
     low_open = conditions.get("low_open_acceptance") if isinstance(conditions.get("low_open_acceptance"), dict) else {}
     active = conditions.get("active_attack") if isinstance(conditions.get("active_attack"), dict) else {}
-    position_plan = clean_text(front.get("position_plan"), "50%条件执行")
+    position_plan = clean_text(front.get("position_plan"), "0%不参与")
+    planned_position_plan = clean_text(front.get("planned_position_plan"), position_plan)
     priority_value = clean_text(payload.get("capital_priority"))
-    same_stock_t = priority_value == "same_stock_t"
-    if same_stock_t:
-        position_text = f"同股T候选；{SAME_STOCK_T_CONFIRMATION_CLAUSE}"
-        condition_action = SAME_STOCK_T_CONFIRMATION_CLAUSE
-    elif position_plan == "50%条件执行":
-        position_text = PREMARKET_50_EXECUTION_TEXT
-        condition_action = PREMARKET_50_TRIGGER_TEXT
-    elif "100%" in position_plan or "满仓" in position_plan or "核心进攻" in position_plan:
-        position_text = f"已决定{position_plan}；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0%"
-        condition_action = PREMARKET_50_TRIGGER_TEXT
-    else:
-        position_text = f"已决定{position_plan}；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0%"
-        condition_action = PREMARKET_50_TRIGGER_TEXT
+    exposure_plan = payload.get("account_exposure_plan") if isinstance(payload.get("account_exposure_plan"), dict) else {}
+    same_stock_t = priority_value == "same_stock_t" or bool(exposure_plan.get("same_stock_t"))
+    new_entry_text = _new_entry_display_text(front, exposure_plan)
+    execution_identity = clean_text(front.get("execution_identity"), "无明日执行对象")
     opening_lines = _render_opening_verdict_lines(payload)
+    if target and execution_identity == "明日计划对象":
+        policy = clean_text(exposure_plan.get("policy"), planned_position_plan)
+        lines = [
+            "## 明日执行结论",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            *tomorrow_result_lines,
+            f"| 明日新仓 | {new_entry_text} |",
+            f"| 明日计划对象 | {target_label} |",
+            *account_first_action_line,
+            *old_position_lines,
+            f"| 执行性质 | {policy} |",
+            f"| 当前条件 | {policy} |",
+            f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",
+        ]
+        return opening_lines + ([""] if opening_lines else []) + lines
+    if same_stock_t:
+        position_text = new_entry_text
+        condition_action = SAME_STOCK_T_CONFIRMATION_CLAUSE
+    elif _normalized_position_pct(front.get("position_pct", 0)) == POSITION_TIER_B1_PCT:
+        position_text = new_entry_text
+        condition_action = PREMARKET_50_TRIGGER_TEXT
+    elif _normalized_position_pct(front.get("position_pct", 0)) == POSITION_TIER_B1_B2_PCT:
+        position_text = new_entry_text
+        condition_action = PREMARKET_FULL_TRIGGER_TEXT
+    else:
+        position_text = "仓位档未明确时不新增参与"
+        condition_action = "仓位档未明确时不新增参与"
     if not target:
         lines = [
             "## 明日执行结论",
             "| 项目 | 结论 |",
             "|------|------|",
-            "| 明日仓位 | 0%不参与 |",
+            *tomorrow_result_lines,
+            "| 明日新仓 | 0%不参与 |",
             "| 明日执行对象 | 无 |",
             *account_first_action_line,
-            "| 执行性质 | 无明日执行对象 |",
+            *old_position_lines,
+            f"| 执行性质 | {'明日空仓账户归零' if tomorrow_empty else '无明日执行对象'} |",
             f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",
             f"| 不参与依据 | {clean_text(front.get('no_participation_basis'), '候选全部未达参与资格，需要复盘候选筛选。')} |",
             f"| 无执行目标原因 | {clean_text(front.get('no_execution_reason'), '候选池没有选出足够强的核心')} |",
@@ -1266,13 +1455,15 @@ def render_front_decision_layer(payload):
         "## 明日执行结论",
         "| 项目 | 结论 |",
         "|------|------|",
-        f"| 明日仓位 | {position_text} |",
+        *tomorrow_result_lines,
+        f"| 明日新仓 | {position_text} |",
         f"| 明日执行对象 | {target_label} |",
         *account_first_action_line,
-        f"| 执行性质 | {position_plan} |",
+        *old_position_lines,
+        f"| 执行性质 | {planned_position_plan if same_stock_t else position_plan} |",
         f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",
         "",
-        "## 50%条件执行条件",
+        "## B2确认条件" if same_stock_t else "## 50%条件执行条件",
         "| 触发类型 | 必须满足 | 窗口 | 动作 |",
         "|----------|----------|------|------|",
         "| 低开承接型 | {daily}；{intraday} | {window} | {action} |".format(

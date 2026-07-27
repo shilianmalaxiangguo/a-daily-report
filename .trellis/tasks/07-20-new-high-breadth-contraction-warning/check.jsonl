@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/llm-wiki-provenance.md","reason":"Audit Wiki source and decision-scope boundaries"}
+{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Audit that decision outputs remain unchanged"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Audit Bear HTML ordering and responsive rendering"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit cross-layer field flow"}
+{"file":".trellis/tasks/07-20-new-high-breadth-contraction-warning/research/2026-07-new-high-breadth-calibration.md","reason":"Audit sample evidence and source limitations"}

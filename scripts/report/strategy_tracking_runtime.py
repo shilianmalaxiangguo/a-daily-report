@@ -5,6 +5,10 @@ from report.monitoring_pool_support import (
     collect_monitoring_pool_candidates,
 )
 from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
+from report.position_context import (
+    is_tomorrow_empty_account_action,
+    resolve_tomorrow_account_action,
+)
 
 __all__ = [
     "append_strategy_performance_section",
@@ -474,6 +478,9 @@ def _build_strategy_plan_context_legacy_body(
         'operation_state': final_gate.get('operation_state', ''),
         'gate_status': final_gate.get('gate_status', ''),
         'can_new_entry': bool(final_gate.get('can_new_entry')),
+        'tomorrow_account_empty': is_tomorrow_empty_account_action(
+            resolve_tomorrow_account_action(data)
+        ),
         'gate_reason': final_gate.get('gate_reason', ''),
         'final_action': final_gate.get('final_action', ''),
         'position_reason': position_reason,

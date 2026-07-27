@@ -8,8 +8,11 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
 from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 from report.position_context import (
     existing_position_summary_from_context,
-    is_inferred_previous_report_position,
+    is_tomorrow_empty_account_action,
+    position_fact_status,
+    resolve_tomorrow_account_action,
 )
+from report.position_tier_contract import normalize_planned_position_tier_pct
 
 
 def get_watch_anchor_note(watch_anchor):
@@ -28,9 +31,14 @@ def format_stock_label(stock):
 
 def existing_position_summary_text(context):
     summary = existing_position_summary_from_context(context)
-    if is_inferred_previous_report_position(summary) or not summary.get("has_position"):
+    if position_fact_status(summary, context_provided=True) != "confirmed":
         return ""
     return str(summary.get("summary") or "").strip()
+
+
+def pending_position_confirmation_active(context):
+    summary = existing_position_summary_from_context(context)
+    return position_fact_status(summary, context_provided=True) == "pending_confirmation"
 
 
 def existing_position_should_lead(context):
@@ -127,8 +135,6 @@ def resolve_watch_anchor(context):
 
 
 def _old_position_priority_active(context):
-    if is_inferred_previous_report_position(existing_position_summary_from_context(context)):
-        return False
     return _capital_priority(context) in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
 
 
@@ -167,10 +173,50 @@ def _resolved_target_position_pct(target, fallback=0):
         if value in (None, ""):
             continue
         try:
-            return int(float(str(value).replace("%", "").strip()))
+            return normalize_planned_position_tier_pct(value)
         except (TypeError, ValueError):
-            continue
+            return 0
     return fallback
+
+
+def resolve_target_position_pct(context, candidate=None):
+    context = context or {}
+    position_decision = context.get("position_decision") or {}
+    if isinstance(position_decision, dict) and "target_position_pct" in position_decision:
+        return _resolved_target_position_pct(position_decision, fallback=None)
+
+    for source in (
+        context,
+        context.get("market_research_snapshot"),
+        context.get("execution_stage_context"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if not isinstance(workflow, dict):
+            continue
+        final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+        if "position_pct" in final:
+            return _resolved_target_position_pct(final, fallback=None)
+
+    resolution = _final_target_resolution(context)
+    for key in ("new_entry_target", "display_target", "tradable_proxy_target"):
+        target = resolution.get(key) if isinstance(resolution.get(key), dict) else {}
+        resolved = _resolved_target_position_pct(target, fallback=None)
+        if resolved is not None:
+            return resolved
+
+    for target in (
+        candidate,
+        context.get("selected_position_candidate"),
+        context.get("best_stock"),
+    ):
+        if not isinstance(target, dict):
+            continue
+        resolved = _resolved_target_position_pct(target, fallback=None)
+        if resolved is not None:
+            return resolved
+    return None
 
 
 def resolve_selected_position_candidate(context):
@@ -202,13 +248,11 @@ def selected_target_is_attack_ready(context):
     if _tradable_proxy_priority_active(context):
         resolution = _final_target_resolution(context)
         proxy_target = _resolution_target(resolution, "display_target", "tradable_proxy_target")
-        return bool(proxy_target) and _resolved_target_position_pct(proxy_target, fallback=50) >= 50
+        target_pct = resolve_target_position_pct(context, candidate=proxy_target)
+        return bool(proxy_target) and target_pct in (50, 100)
     position_decision = context.get("position_decision") or {}
-    try:
-        target_pct = int(float(position_decision.get("target_position_pct") or 0))
-    except (TypeError, ValueError):
-        target_pct = 0
-    return target_pct >= 50
+    target_pct = _resolved_target_position_pct(position_decision, fallback=0)
+    return target_pct in (50, 100)
 
 
 def resolve_today_focus_items(context):
@@ -224,6 +268,12 @@ def build_market_outlook_text(context):
     action_text = str(context.get("step0_action", "") or "").strip()
     final_gate = context.get("final_gate") or {}
     selected = resolve_selected_position_candidate(context)
+    if pending_position_confirmation_active(context) and any(
+        marker in f"{prediction_text}；{action_text}"
+        for marker in ("只处理旧仓", "已有旧仓", "旧仓先处理")
+    ):
+        prediction_text = "0%不参与；先确认成交事实"
+        action_text = ""
     if _old_position_priority_active(context):
         final_action = str(final_gate.get("final_action", "") or "").strip()
         parts = [part for part in (prediction_text, final_action) if part]
@@ -297,7 +347,9 @@ def build_focus_recap_text(context):
             parts.append(f"{stock_label}：{state_text}")
         return "；".join(parts)
 
-    return "今天没有新增可信关注对象，明天先空仓观察"
+    if is_tomorrow_empty_account_action(resolve_tomorrow_account_action(context)):
+        return "今天没有新增可信关注对象；明日空仓，集合竞价卖清全部可卖旧仓且不买新股"
+    return "今天没有新增可信关注对象，明天只观察、不新增参与"
 
 
 def build_candidate_trade_directive(context):
@@ -341,8 +393,10 @@ def derive_trade_style(context):
         return "旧仓处理"
     if selected and selected_target_is_attack_ready(context):
         return "条件进攻"
+    if is_tomorrow_empty_account_action(resolve_tomorrow_account_action(context)):
+        return "明日空仓"
     if "空仓" in position_level:
-        return "空仓"
+        return "0%不参与"
     best_stock = resolve_best_stock(context)
     watch_anchor = resolve_watch_anchor(context)
     style_switch = context.get("style_switch", {}) or {}
@@ -353,14 +407,14 @@ def derive_trade_style(context):
         or ""
     ).strip()
     if final_gate and final_gate.get("can_new_entry") is False:
-        return "空仓"
+        return "0%不参与"
     if style_label and any(keyword in style_label for keyword in ("趋势", "波段")) and (best_stock or watch_anchor):
         return "波段"
     if best_stock:
         return "短线"
     if watch_anchor:
         return "观察"
-    return "空仓"
+    return "0%不参与"
 
 
 def build_risk_trade_note(context):

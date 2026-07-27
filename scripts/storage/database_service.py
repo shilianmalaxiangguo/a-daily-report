@@ -363,6 +363,12 @@ class DatabaseService:
             return {}
         return reader(mode=mode)
 
+    def query_tomorrow_action_history(self, end_date, *, mode="frozen", limit=25):
+        reader = getattr(self.repository, "query_tomorrow_action_history", None)
+        if not callable(reader):
+            return []
+        return reader(end_date, mode=mode, limit=limit)
+
     def save_strategy_performance_ledger(self, ledger, mode="frozen"):
         writer = getattr(self.repository, "save_strategy_performance_ledger", None)
         if not callable(writer):

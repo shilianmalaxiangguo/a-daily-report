@@ -1,5 +1,7 @@
 from report.surface_wording import sanitize_user_visible_text
-from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
+from report.conclusion_support import resolve_target_position_pct
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, execution_clause_for_position_pct
+from report.position_tier_contract import position_tier_label
 
 
 def build_pk_overview_node(context, node_meta=None, node_lookup=None):
@@ -50,6 +52,8 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
 
     best_stock = pk_candidates[0]
     signal = best_stock.get("signal")
+    position_pct = resolve_target_position_pct(context, candidate=best_stock)
+    execution_clause = execution_clause_for_position_pct(position_pct)
     lines = [f"**✅ 明日执行对象**: {best_stock.get('name')}({best_stock.get('code')})"]
     if signal:
         lines.append(f"> **买点**: {signal.signal_type}")
@@ -59,9 +63,10 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
         )
         lines.append(f"> **这笔值不值得做**: {best_stock.get('ev', 0):.2f}元/股")
         lines.append(f"> **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-        lines.append(f"> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；买后用失效价和单笔-5%底线处理风险")
+        lines.append(f"> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{execution_clause}；买后用失效价和单笔-5%底线处理风险")
     else:
-        lines.append(f"> **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后用失效价和单笔-5%底线处理风险")
+        action_text = PREMARKET_50_TRIGGER_TEXT if position_pct in (None, 50) else execution_clause
+        lines.append(f"> **真到盘中怎么做**: {action_text}；买后用失效价和单笔-5%底线处理风险")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 
@@ -97,6 +102,8 @@ def build_pk_multi_candidate_node(context, node_meta=None, node_lookup=None):
     best_stock = pk_candidates[0]
     runner_up = pk_candidates[1] if len(pk_candidates) > 1 else None
     best_signal = best_stock.get("signal")
+    position_pct = resolve_target_position_pct(context, candidate=best_stock)
+    execution_clause = execution_clause_for_position_pct(position_pct)
     lines.extend(["", f"**🏆 PK结果**: **{best_stock.get('name')}({best_stock.get('code')})** 胜出！", "", "**胜出者详细分析**:"])
     if best_signal:
         profit = best_stock.get("profit_space", 0)
@@ -115,8 +122,9 @@ def build_pk_multi_candidate_node(context, node_meta=None, node_lookup=None):
             f"({win_rate * 100:.0f}% × {profit:.2f}) - ({(1 - win_rate) * 100:.0f}% × {loss:.2f})"
         )
         lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-        lines.append(f"- **仓位放多少**: {float(best_stock.get('position_pct', 0) or 0):.0f}%")
-        lines.append(f"- **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后立刻按失效价和单笔-5%底线处理风险")
+        lines.append(f"- **仓位放多少**: {position_tier_label(position_pct or 0)}")
+        action_text = PREMARKET_50_TRIGGER_TEXT if position_pct in (None, 50) else execution_clause
+        lines.append(f"- **真到盘中怎么做**: {action_text}；买后立刻按失效价和单笔-5%底线处理风险")
     if runner_up:
         lines.append(
             f"- **领先差距**: 比第二名高{best_stock.get('composite_score', 0) - runner_up.get('composite_score', 0):.2f}分"

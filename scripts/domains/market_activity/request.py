@@ -255,8 +255,8 @@ def _market_stats_with_fallback_counts(primary, fallback, fallback_stats):
     fallback = dict(fallback or {})
     if not _market_breadth_counts_complete(market_stats):
         market_stats.update(fallback)
-    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+    market_stats["zt_count"] = fallback_stats["zt_count"]
+    market_stats["dt_count"] = fallback_stats["dt_count"]
     return market_stats
 
 
@@ -471,6 +471,8 @@ def _has_limit_pool_snapshot_payload(snapshot):
 
 def _has_limit_pool_rows(snapshot):
     snapshot = snapshot or {}
+    if snapshot.get("source_status") == "partial":
+        return False
     return bool(snapshot.get("zt_pool") or snapshot.get("dt_pool"))
 
 
@@ -631,8 +633,8 @@ def collect_market_activity_pool_request_bundle(
         fact_db_market_stats = _load_market_breadth_from_fact_db(target_date, request_registry=request_registry)
         if not realtime_market_activity_allowed and _market_breadth_counts_complete(fact_db_market_stats):
             market_stats = dict(fact_db_market_stats)
-            market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-            market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+            market_stats["zt_count"] = fallback_stats["zt_count"]
+            market_stats["dt_count"] = fallback_stats["dt_count"]
             results["market_stats"] = market_stats
             data_status["大盘涨跌统计"] = True
             emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
@@ -651,8 +653,8 @@ def collect_market_activity_pool_request_bundle(
             )
         elif not realtime_market_activity_allowed and _market_breadth_counts_complete(snapshot_market_stats):
             market_stats = dict(snapshot_market_stats)
-            market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-            market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+            market_stats["zt_count"] = fallback_stats["zt_count"]
+            market_stats["dt_count"] = fallback_stats["dt_count"]
             results["market_stats"] = market_stats
             data_status["大盘涨跌统计"] = True
             emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
@@ -757,8 +759,8 @@ def collect_market_activity_pool_request_bundle(
                 stats_message = "大盘涨跌统计接口异常，使用涨跌停池数量补足"
                 if _market_breadth_counts_complete(fact_db_market_stats):
                     market_stats = dict(fact_db_market_stats)
-                    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-                    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+                    market_stats["zt_count"] = fallback_stats["zt_count"]
+                    market_stats["dt_count"] = fallback_stats["dt_count"]
                     results["market_stats"] = market_stats
                     data_status["大盘涨跌统计"] = True
                     stats_provider = market_stats.get("source") or market_stats.get("data_source") or "storage.stock_daily_quotes_recent"
@@ -766,8 +768,8 @@ def collect_market_activity_pool_request_bundle(
                     emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
                 elif _market_breadth_counts_complete(snapshot_market_stats):
                     market_stats = dict(snapshot_market_stats)
-                    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-                    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+                    market_stats["zt_count"] = fallback_stats["zt_count"]
+                    market_stats["dt_count"] = fallback_stats["dt_count"]
                     results["market_stats"] = market_stats
                     data_status["大盘涨跌统计"] = True
                     stats_provider = snapshot.get("provider", "akshare.stock_market_activity_legu")

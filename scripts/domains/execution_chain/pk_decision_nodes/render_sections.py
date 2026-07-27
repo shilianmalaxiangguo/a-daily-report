@@ -88,6 +88,7 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "stage_title": context.get("stage_title", "PK决胜局（期望值模型）"),
         "trade_gate_open": context.get("trade_gate_open", False),
         "position_level": context.get("position_level", ""),
+        "position_decision": context.get("position_decision"),
         "pending_lines": context.get("pending_lines", []),
         "observation_lines": [] if final_wait_without_target else context.get("observation_lines", []),
         "conclusion_lines": [
@@ -114,6 +115,7 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "candidate_quality_samples": context.get("candidate_quality_samples", []),
         "final_target_resolution": context.get("final_target_resolution"),
         "selection_workflow": context.get("selection_workflow"),
+        "position_decision": context.get("position_decision"),
         "sniper_target_derivation": context.get("sniper_target_derivation"),
         "render_candidate_trace_tables": context.get("render_candidate_trace_tables", True),
         "candidate_trace_eliminated_items": context.get("candidate_trace_eliminated_items", []),

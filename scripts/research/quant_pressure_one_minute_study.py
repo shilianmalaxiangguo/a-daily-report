@@ -1589,6 +1589,12 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
             "morning_diagnostic": "early_pressure_diagnosis_not_afternoon_shock_prediction",
             "late_handling": "overnight_risk_and_tail_state_not_early_exit",
             "timing_evidence_status": "three_cases_do_not_conflict_but_do_not_validate_tradable_lead_time",
+            "attention_policy": {
+                "routine_human_viewing_windows": ["T+1 09:30-09:35", "T+2 14:30-14:55"],
+                "planned_review_window": "T+1 09:50-10:10",
+                "automatic_notification_available": False,
+                "replay_research_slice": "13:45-14:10",
+            },
         },
         "afternoon_risk_synthesis": {
             "candidate_range": (
@@ -1596,6 +1602,9 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
             ),
             "status": "research_candidate_not_validated_trading_window",
             "formal_windows_unchanged": True,
+            "human_attention_required": False,
+            "intraday_action_allowed": False,
+            "notification_policy": "silent",
             "slope_threshold_status": "uncalibrated_research_threshold",
             "active_at_observation_start_case_ids": [
                 case["case_id"]
@@ -1618,6 +1627,7 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
                     ],
                     "scope_rule": "single_stock_evidence_does_not_upgrade_to_market_force",
                     "research_handling": "observation_only_risk_reduction_or_exit_candidate",
+                    "attention_handling": "no_intraday_action",
                 },
                 {
                     "branch_id": "upward_trend",
@@ -1627,6 +1637,7 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
                         "breadth_and_participation_match_force_scope",
                     ],
                     "research_handling": "continue_holding",
+                    "attention_handling": "no_intraday_action",
                 },
                 {
                     "branch_id": "conflicted_or_invalidated",
@@ -1636,6 +1647,7 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
                         "scope_conflict",
                     ],
                     "research_handling": "defer_to_late_handling_window",
+                    "attention_handling": "no_intraday_action",
                 },
             ],
         },
@@ -1673,21 +1685,21 @@ def build_study(fixture_root=DEFAULT_FIXTURE_ROOT):
             "protocol": [
                 {
                     "stage": "T+0",
-                    "rule": "只识别压力表象、降温与修复质量；加速本身用于回避，不直接生成次日抄底资格。",
+                    "rule": "收盘后识别压力表象、降温与修复质量；加速本身用于回避，不直接生成次日抄底资格。",
                 },
                 {
                     "stage": "T+1",
-                    "rule": "只有板块、相对强度和承接继续确认才给 B1；B2 只在进一步确认后补。",
+                    "rule": "09:30-09:35按T0计划处理B1。预定规则是09:50-10:10只后台复核T0已经允许的B2；目前不会自动提醒，未收到明确提示时B2不执行。",
                 },
                 {
                     "stage": "T+2",
-                    "rule": "固定卖出仍是待检验假说，必须与压力半衰期、可成交性和单账户资金占用一起回测。",
+                    "rule": "14:30-14:55人工按T0退出计划处理可卖仓位；这个尾盘窗口仍要与可成交性和单账户资金占用一起回测。",
                 },
             ],
             "account_overlap_options": [
                 "单仓持有期间跳过重叠新信号",
                 "两个 50% 资金槽交替",
-                "T+2 开盘先处理旧仓再判断新信号，但这会改变原退出规则",
+                "T+2 14:30-14:55先按退出计划处理旧仓，再安排后续信号的资金占用",
             ],
         },
     }
@@ -1725,8 +1737,16 @@ def _confirmation_quality_cn(value):
 
 def _window_display_label(review):
     if review["window_id"] == "morning_diagnostic":
-        return "09:45-09:50 前哨 + 09:50-10:10 正式"
+        return "09:45-09:50 T0前哨样本 + 09:50-10:10 T0早盘样本"
     return review["label"]
+
+
+def _morning_subwindow_display_label(child):
+    if child["start_time"] == "09:45":
+        return "T0前哨样本"
+    if child["start_time"] == "09:50":
+        return "T0早盘样本"
+    return child["label"]
 
 
 def _svg_polyline(points):
@@ -1801,7 +1821,7 @@ def _path_svg(case, *, width=860, height=280):
     return f"""
 <svg class="price-chart" viewBox="0 0 {width} {height}" role="img" aria-labelledby="path-{_escape(case['case_id'])}-title path-{_escape(case['case_id'])}-desc">
   <title id="path-{_escape(case['case_id'])}-title">{_escape(title)}</title>
-  <desc id="path-{_escape(case['case_id'])}-desc">连续交易分钟横轴。四段阴影依次表示开盘正式窗口、早盘前哨观察、早盘正式窗口和尾盘正式窗口；标记客观收盘峰值和日内最低。</desc>
+  <desc id="path-{_escape(case['case_id'])}-desc">连续交易分钟横轴。四段阴影都是案例 T0 当日研究样本，依次表示开盘样本、前哨样本、早盘样本和尾盘样本；标记客观收盘峰值和日内最低。</desc>
   {''.join(shades)}
   {''.join(grid)}
   <polyline class="price-line" points="{_svg_polyline(path_points)}" />
@@ -2060,7 +2080,7 @@ def _morning_subwindow_rows(cases):
             rows.append(
                 "<tr>"
                 f"<td>{_escape(case['trade_date'])} {_escape(case['instrument']['name'])}</td>"
-                f"<td>{_escape(child['label'])}</td>"
+                f"<td>{_escape(_morning_subwindow_display_label(child))}</td>"
                 f"<td>{_escape(child['start_time'])}-{_escape(child['end_time'])}</td>"
                 f"<td>{_fmt(child['window_return_pct'], 2, '%')}</td>"
                 f"<td>{_fmt(child['window_amount_cny']/100_000_000, 2)}</td>"
@@ -2118,15 +2138,15 @@ def _afternoon_decision_branch_rows(study):
         "downward_risk": (
             "向下事件已形成斜率连续和价格同向延续，反抽不能收回 VWAP 或关键参考线，"
             "事件尚未失效；全市场或板块合力必须有对应层级同步证据。单股独立风险不升级为市场合力",
-            "可卖仓位进入减风险或退出候选；当前研究版仍等 14:30-14:55 正式窗口复核后处理",
+            "日终/replay 记为向下风险样本；不提示、不提前卖，留待 T+2 14:30-14:55 按 T0 退出计划处理",
         ),
         "upward_trend": (
             "中短斜率保持向上，价格持续驻留 VWAP 上方，板块宽度和成交参与仍在扩散",
-            "继续持有，不因为到了 13:45-14:10 就卖；先观察上行是否衰减",
+            "日终/replay 记为向上趋势样本；不提示，也不因为到了 13:45-14:10 产生临时动作",
         ),
         "conflicted_or_invalidated": (
             "只有短暂候选、价格快速收回、出现快速修复，或指数、板块和个股证据冲突",
-            "不抢结论，等 14:30-14:55 再处理",
+            "日终/replay 记为冲突或失效样本；不提示、不抢结论",
         ),
     }
     rows = []
@@ -2195,7 +2215,7 @@ def render_study_html(study):
   </div>
   <figure>
     <div class="chart-wrap">{_path_svg(case)}</div>
-    <figcaption>真实一分钟结束时点。浅红、浅蓝、浅绿是三段正式窗口；黄色是 09:45-09:50 前哨观察，不是新增买卖窗口。</figcaption>
+    <figcaption>真实一分钟结束时点。浅红、浅蓝、浅绿分别是案例 T0 当日的 09:30-09:35、09:50-10:10、14:30-14:55 研究样本；黄色是 09:45-09:50 T0 前哨样本。它们不代表未来 T+1/T+2 的真实动作。</figcaption>
   </figure>
   <figure>
     <div class="chart-wrap">{_model_svg(case, scope='full_day')}</div>
@@ -2321,14 +2341,14 @@ def render_study_html(study):
 <body>
 <article class="sheet">
   <header>
-    <p class="kicker">MARKET LANGUAGE RESEARCH · REVISION 4</p>
+    <p class="kicker">MARKET LANGUAGE RESEARCH · REVISION 5</p>
     <h1>一分钟市场语言：公式、事件时钟与日报只读落地</h1>
     <p class="subtitle">把“鸭蛋弧”拆成可复算的一分钟事实，再把形状、压力阶段、机制假说和交易动作分层。市场确实在说话，但曲线本身不提供账户身份证明。</p>
     <ul class="meta"><li>案例冻结：{RESEARCH_AS_OF_DATE}</li><li>落地复核：{IMPLEMENTATION_REVIEW_DATE}</li><li>主源：通达信历史一分钟</li><li>范围：三例锚定 + 七类保护路径，不外推普遍命中率</li></ul>
   </header>
   <div class="findings">
     <div class="finding"><strong>公式不再强行单选</strong><p>全日：{_escape(full_winner_text)}；下降段：{_escape(decline_winner_text)}。上证全日包络最像平移椭圆弧，三例客观下降段都由单变化点分段领先；日报盘中只用斜率、连续性和事件时钟。</p></div>
-    <div class="finding"><strong>研究证据已经只读接入</strong><p><code>market_language_translation.v1</code> 只在原有明日动作之后展示；完整版和摘要版的正式对象、仓位、B1/B2 与退出动作逐字段保持不变。</p></div>
+    <div class="finding"><strong>低注意力研究目标</strong><p>目标是把固定主动查看压缩到 T+1 09:30-09:35 与 T+2 14:30-14:55。它尚未替代正式动作链；09:50-10:10 目前不会自动提醒，未收到明确提示时 B2 不执行。</p></div>
     <div class="finding"><strong>保护样本限制了过度解释</strong><p>普通缓跌、一次性重估、单股卖压、快速修复、权重与宽度背离、健康扩散和五分钟降级都已固定；形状只能描述压力，不能确认量化身份或 40% 成交占比。</p></div>
   </div>
   <main>
@@ -2382,47 +2402,47 @@ def render_study_html(study):
     </section>
 
     <section id="windows">
-      <h2>三段正式窗口反推：角色暂时合理，时点有效性仍待样本外验收</h2>
-      <p><strong>09:30-09:35</strong> 只有五个完整分钟，适合看开盘冲击和相对强弱，不够识别椭圆或多轮级联。<strong>09:45-09:50</strong> 只作前哨观察，为 <strong>09:50-10:10</strong> 正式窗口准备证据，不新增买卖动作。<strong>14:30-14:55</strong> 适合判断尾部是否继续创新低、是否修复以及隔夜风险，但不能包装成“提前退出”。候选要求十五分钟斜率低于 -0.05 bp/分钟；三根相邻结束时点的十五分钟斜率同向只记为“重叠斜率连续”，还要检查候选后价格是否继续同向移动。这是透明研究口径，不是买入资格。</p>
+      <h2>T0 三段同日研究样本：不能代替 T+1/T+2 回测</h2>
+      <p>本节三张案例图都只使用压力发生日 T0 的一分钟事实。图中 <strong>09:30-09:35</strong> 是 T0 开盘样本，<strong>09:45-09:50</strong> 是 T0 前哨样本，<strong>09:50-10:10</strong> 是 T0 早盘样本，<strong>14:30-14:55</strong> 是 T0 尾盘样本；它们只回答“压力表象在同一天何时可见”，不能当成 T+1 买入或 T+2 卖出的回测。低注意力研究目标把固定主动查看只安排在 T+1 09:30-09:35 与 T+2 14:30-14:55：开盘处理 T0 已决定的 B1，尾盘按 T0 退出计划处理可卖仓位。这个目标尚未替代正式动作链。预定规则是在 T+1 09:50-10:10 只后台复核前一晚已经允许的 B2；目前不会自动提醒，未收到明确提示时 B2 不执行。以后若有明确提示，只响应提示，不守着分时，也不要求持续盯盘。其余盘中研究不产生临时动作。候选仍要求十五分钟斜率低于 -0.05 bp/分钟；三根相邻结束时点的十五分钟斜率同向只记为“重叠斜率连续”，还要检查候选后价格是否继续同向移动。</p>
       <div class="formula">κ<sub>20</sub>(t) = [s<sub>5</sub>(t) - s<sub>5</sub>(t-15)] / 15</div>
       <p>表中的二十分钟曲率代理不是另一套二次回归：<code>s5</code> 是六个收盘点拟合出的五交易分钟对数价格斜率，<code>κ20</code> 是最近十五个交易分钟里这条短斜率的平均变化，单位为 bp/交易分钟²。判断使用未舍入值，表格只在显示时保留小数。</p>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>窗口</th><th>窗口收益</th><th>距当时峰值</th><th>窗口成交额（亿元）</th><th>近10分钟下跌占比</th><th>5分斜率（bp/分钟）</th><th>15分斜率（bp/分钟）</th><th>20分曲率代理（bp/分钟²）</th><th>截止时表象</th></tr></thead><tbody>{_window_rows(cases)}</tbody></table></div>
       <h3>首次候选、重叠斜率连续与价格同向延续</h3>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>观察范围</th><th>截至截止全日首次候选</th><th>范围内首次候选</th><th>范围覆盖全日首次</th><th>首次重叠斜率连续</th><th>候选后价格同向延续</th><th>首次证据质量</th><th>截至截止当前轮</th><th>范围内候选失效次数</th></tr></thead><tbody>{_window_timeline_rows(cases)}</tbody></table></div>
-      <h3>09:45-09:50 前哨 / 09:50-10:10 正式窗口拆解</h3>
-      <p>前哨段只负责发现异动，不直接给新增动作；正式窗口再看中短斜率是否同向、短线回抽能否改变十五分钟压力。</p>
+      <h3>09:45-09:50 T0前哨样本 / 09:50-10:10 T0早盘样本</h3>
+      <p>这张表只拆解案例 T0 当日：日终/replay 把前哨段单独列为样本，再衡量后段压力表象是否延续。它不是 T+1 的 B2 执行记录，也不能证明后台 B2 复核已经产生收益。</p>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>子阶段</th><th>区间</th><th>区间收益</th><th>区间成交额（亿元）</th><th>近10分钟下跌占比</th><th>5分斜率（bp/分钟）</th><th>15分斜率（bp/分钟）</th><th>截止时表象</th></tr></thead><tbody>{_morning_subwindow_rows(cases)}</tbody></table></div>
-      <h3>13:45-14:10 午后风险复核：只是待验证候选</h3>
-      <p class="lead"><strong>13:45-14:10 只是待验证候选</strong>，不是第四段正式买卖时间。这三个案例只能说明：三例的向下分钟事件在 13:45 已经可见，不能反推出 14:10 是更好的结束点。它的研究价值是让事件时间钟在 14:30 前持续回答方向、连续性、对应市场范围和失效；正式三段窗口目前保持不变。</p>
-      <p>你的生活经验可以改写成一个可检验假说：如果一只股票到 14:30 已经处于强势大涨，通常在 13:45-14:10 会更早留下向上斜率、VWAP 上方驻留、板块同步和成交参与的足迹。因此不能只凭“时间到了”卖出；有持续向上证据时，过早卖反而会放弃趋势。但这不是“14:30 后几乎不会再大涨”的统计结论。尾盘突袭涨停、消息驱动的快速重估和先弱后强的快速修复都是必须保留的反例。<strong>三例只复算向下分钟事件</strong>，没有历史强势尾盘样本验证这条向上假说。</p>
+      <h3>13:45-14:10 只作日终/replay 研究区间：不是人工窗口</h3>
+      <p class="lead"><strong>13:45-14:10 只作日终/replay 研究区间</strong>，不提示、不产生临时动作，也不要求人工查看。目前只在收盘后提取这一段，不在 13:45 自动提醒。这三个案例只能说明三例的向下分钟事件在 13:45 已经可见，不能反推出 14:10 是更好的结束点，也不改变 T+2 14:30-14:55 的退出计划。</p>
+      <p>你的生活经验可以改写成一个可检验假说：如果一只股票到 14:30 已经处于强势大涨，通常在 13:45-14:10 会更早留下向上斜率、VWAP 上方驻留、板块同步和成交参与的足迹。生成器可以在日终或 replay 保存这些足迹，事后比较它们是否有助于解释尾盘，但不能据此盘中催促卖出。这也不是“14:30 后几乎不会再大涨”的统计结论。尾盘突袭涨停、消息驱动的快速重估和先弱后强的快速修复都是必须保留的反例。<strong>三例只复算向下分钟事件</strong>，没有历史强势尾盘样本验证这条向上假说。</p>
       <h3>三例午后事件原始时钟</h3>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>候选</th><th>斜率连续</th><th>价格同向延续</th><th>失效</th><th>证据质量</th></tr></thead><tbody>{_afternoon_event_rows(cases)}</tbody></table></div>
       <h3>截止分钟截面会变化，但三例不能选出 14:10</h3>
       <div class="table-wrap"><table><thead><tr><th>截止</th><th>13:45 至截止曾捕获</th><th>截止分钟截面仍有效</th></tr></thead><tbody>{_afternoon_cutoff_rows(study)}</tbody></table></div>
       <p><strong>正确读法：</strong>13:45 当下三例都已经具备斜率连续和价格同向延续；从 13:45 到四个截止时刻都曾捕获三例，所以 14:00 和 14:05 并没有漏掉长电。右栏只显示截止分钟截面：长电第一轮在 13:59 失效，14:06 再候选后到 14:10 又有效；到 14:20，长电与兆易此前那一轮均已失效。这张表说明事件会失效和重来，不能证明必须观察到 14:10。</p>
       <p>所有精确分钟都依赖当前尚未校准的 <code>0.05 bp/分钟</code> 研究阈值。阈值变化会移动候选与失效边界；后续必须加入普通日和多阈值敏感性，三例不能选出 14:10，也不能确定 13:45 是全市场最优起点。</p>
-      <h3>怎样判断卖出：不是一根曲线，而是三种处理分支</h3>
-      <div class="table-wrap"><table><thead><tr><th>当时证据</th><th>当前处理</th></tr></thead><tbody>{_afternoon_decision_branch_rows(study)}</tbody></table></div>
-      <p>真正进入减风险候选至少要同时满足：方向向下；斜率连续并有价格同向延续；反抽未能修复；事件没有失效；证据与合力范围相配。全市场范围要有指数、宽度和多板块同步，板块范围要有板块内部扩散，单股独立风险只进入原有个股退出条件，不能升级成市场合力。只有向下斜率、只有跌破 VWAP、只有一根急跌，均不足以单独决定卖出；还要服从可卖仓位、前一晚计划、认错线和亏损边界。</p>
-      <p><strong>防守式卖出和高位止盈要分开：</strong>前者看向下事件是否成立；后者看原本向上的合力是否衰减。价格仍高，但板块宽度先收缩、成交推动效率下降、后排掉队、核心跌回 VWAP 后反弹失败，才进入高位止盈候选。若向上斜率、VWAP 驻留、板块扩散和成交参与仍互相支持，持续上涨本身不是卖出条件。</p>
+      <h3>日终样本怎样服务 T+2 尾盘研究：只分类，不下指令</h3>
+      <div class="table-wrap"><table><thead><tr><th>日终/replay 样本</th><th>怎样记录</th></tr></thead><tbody>{_afternoon_decision_branch_rows(study)}</tbody></table></div>
+      <p>研究上要把向下风险样本记完整，至少要同时看到：方向向下；斜率连续并有价格同向延续；反抽未能修复；事件没有失效；证据与合力范围相配。全市场范围要有指数、宽度和多板块同步，板块范围要有板块内部扩散，单股独立风险不能升级成市场合力。只有向下斜率、只有跌破 VWAP、只有一根急跌，都只能进入日终/replay 样本，不能单独决定卖出。</p>
+      <p><strong>向下风险样本和向上衰减样本要分开：</strong>前者记录向下事件是否成立；后者记录原本向上的合力是否减弱。价格仍高，但板块宽度先收缩、成交推动效率下降、后排掉队、核心跌回 VWAP 后反弹失败，才记为向上衰减样本。无论哪一类，都不在 13:45-14:10 提示或产生临时动作；人工仍到 T+2 14:30-14:55 按 T0 退出计划处理。</p>
       <h3>事后验收，不回填当时判断</h3>
       <p>下表故意与上面的当时证据分开。主要下降完成比例、后续最低和未来 5/10/20 分钟收益都只有收盘后才知道，只用于检验窗口是否真的领先。</p>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>窗口</th><th>主要下降已完成</th><th>客观峰值 → 谷值</th><th>截止后最低时刻</th><th>截止后剩余跌幅</th><th>后5分钟</th><th>后10分钟</th><th>后20分钟</th></tr></thead><tbody>{_window_followup_rows(cases)}</tbody></table></div>
-      <p class="truth">5·21 上证到 10:10 没有越过噪声带的下压候选；第一轮可记录候选是 10:17，10:19 只说明重叠斜率连续，10:24 才出现候选后价格同向延续，13:50 开始的这一轮才持续到尾盘。因此，本研究压力口径截至 10:10 未识别后来形成的午后鸭蛋弧，早盘窗口不能保证提前识别所有午后风险。兆易创新 09:47 的首次候选虽在 09:49 出现重叠斜率连续，却没有价格同向延续并于 09:54 失效；10:00 的第二轮才补齐延续证据。三段正式窗口的角色暂不冲突，但仍不能证明已经具备可交易领先量。</p>
+      <p class="truth">5·21 上证到 10:10 没有越过噪声带的下压候选；第一轮可记录候选是 10:17，10:19 只说明重叠斜率连续，10:24 才出现候选后价格同向延续，13:50 开始的这一轮才持续到尾盘。因此，本研究压力口径截至 10:10 未识别后来形成的午后鸭蛋弧，T0 早盘样本不能保证提前识别所有午后风险。兆易创新 09:47 的首次候选虽在 09:49 出现重叠斜率连续，却没有价格同向延续并于 09:54 失效；10:00 的第二轮才补齐延续证据。这正说明人工不该为了捕获每一轮变化而持续盯盘：日终/replay 按分钟顺序还原事件，人工只按 T0 计划在 T+1 开盘与 T+2 尾盘集中处理。</p>
     </section>
 
     <section id="implementation">
-      <h2>日报落地：一个只读研究产物，两种时间钟</h2>
+      <h2>日报落地：只读研究目标，尚未改写正式动作链</h2>
       <p class="lead">正式日报新增的不是“量化买卖按钮”，而是一份 <code>market_language_translation.v1</code> 研究证据。它在入口从目标日事实构建一次，完整版和摘要版各拿独立副本，只在原有明日执行结论之后展示。</p>
       <div class="formula">目标日事实 → 来源投影 → 合力范围 / 方向 / 阶段 / 多轮事件 → 研究证据区<br>正式候选 / 最终对象 / 仓位 / B1-B2 / 退出动作 ─────────────────→ 保持原链路</div>
       <div class="table-wrap"><table><thead><tr><th>层次</th><th>进入内容</th><th>时间边界</th><th>对正式动作的影响</th></tr></thead><tbody>
         <tr><td>当时事实</td><td>目标日指数、宽度、板块同步、参与度与可追溯分钟路径</td><td>只能读到 <code>causal_cutoff</code></td><td>仅生成研究解释</td></tr>
-        <tr><td>市场语言产物</td><td>范围、方向、阶段、候选、确认、失效、反证、下一窗口任务</td><td>候选、确认与失效各自保留因果截止点</td><td>不进入正式决定输入</td></tr>
+        <tr><td>市场语言产物</td><td>范围、方向、阶段、候选、确认、失效、反证、后台复核说明</td><td>候选、确认与失效各自保留因果截止点</td><td>不进入正式决定输入</td></tr>
         <tr><td>正式日报</td><td><code>selection_workflow</code>、<code>final_target_resolution</code>、仓位与执行计划</td><td>继续按原有 T0 决定</td><td>研究产物只能在后方展示</td></tr>
         <tr><td>replay 验收</td><td>未来 5/10/20 分钟、MFE/MAE、低高区、T+1/T+2 与行情完成比例</td><td>仅在未来事实已发生后填写</td><td>只批改，不回写当时判断</td></tr>
       </tbody></table></div>
-      <h3>固定时间钟没有扩张</h3>
-      <p><code>09:30-09:35</code>、<code>09:50-10:10</code>、<code>14:30-14:55</code> 仍是唯一三段买卖处理时间。<code>09:45-09:50</code> 只作前哨观察；全天事件时钟可以记录午间或午后新候选，但窗口外只形成观察记录，等下一正式窗口或下一份日报处理。</p>
+      <h3>低注意力研究目标中的固定主动查看只有两段</h3>
+      <p><code>T+1 09:30-09:35</code> 是既定 B1 的人工处理时间；<code>T+2 14:30-14:55</code> 是可卖仓位的人工处理时间。<code>09:50-10:10</code> 的预定规则只是后台复核 T0 已经允许的 B2；目前不会自动提醒，未收到明确提示时 B2 不执行。<code>09:45-09:50</code> 和 <code>13:45-14:10</code> 目前只在日终/replay 还原，不产生盘中动作。</p>
       <h3>正式决定逐字段不变</h3>
       <div class="table-wrap"><table><thead><tr><th>比较项</th><th>完整版</th><th>摘要版</th><th>结果</th></tr></thead><tbody>
         <tr><td><code>selection_workflow</code></td><td>接入前后逐字段比较</td><td>接入前后逐字段比较</td><td>相同</td></tr>
@@ -2451,7 +2471,7 @@ def render_study_html(study):
 
     <section id="strategy">
       <h2>T+0 识别 → T+1 条件参与 → T+2 处理：仍是待验收研究协议</h2>
-      <p>市场语言产物不会自行把任何股票送入这条链。压力日的顺滑下跌最多提示次日研究对象，“压力大”本身更像回避信号；只有原日报已经在 T0 决定条件参与，且次日持续修复、相对强度和承接同时成立，才执行 B1，B2 仍只在进一步确认后补。</p>
+      <p>市场语言产物不会自行把任何股票送入这条链。压力日的顺滑下跌最多提示次日研究对象，“压力大”本身更像回避信号；只有原日报已经在 T0 决定 B1，才在 T+1 09:30-09:35 处理。B2 也必须由 T0 预先允许；目前不会在 09:50-10:10 自动提醒，未收到明确提示时 B2 不执行。盘中不临时增加对象或仓位；T+2 14:30-14:55 再按 T0 退出计划处理可卖仓位。</p>
       <ol class="steps">{protocol}</ol>
       <h3>7 月 10 日两例只能前瞻登记</h3>
       <div class="table-wrap"><table><thead><tr><th>案例</th><th>T+0</th><th>T+1</th><th>T+2</th><th>当前状态</th></tr></thead><tbody>{future_rows}</tbody></table></div>
@@ -2465,7 +2485,7 @@ def render_study_html(study):
       <h2>这一步真正帮助日报什么，以及下一轮怎样验收</h2>
       <p>它已经把“乌云密布”的生活经验拆成可追溯字段：压力发生在指数、单股、单板块还是全市场；方向向上还是向下；处于启动、扩散、衰减、向下反馈加速或修复；候选何时出现、确认、失效和再来；指数、宽度和板块是否互相支持。</p>
       <div class="formula-grid">
-        <div class="formula-item"><strong>现在能做</strong><p>在原有动作之后解释市场正在表达的范围、方向和阶段；让下一正式窗口知道应该核对延续、扩散、失效还是修复。</p></div>
+        <div class="formula-item"><strong>现在能做</strong><p>在原有动作之后解释市场正在表达的范围、方向和阶段；日终/replay 还原延续、扩散、失效与修复，固定主动查看只保留两个既定时间。</p></div>
         <div class="formula-item"><strong>现在不能做</strong><p>仅凭曲线确认量化账户、龙虎榜席位触发链、真实撤单率、A 股量化成交占比或次日必然反弹。</p></div>
         <div class="formula-item"><strong>下一轮验收</strong><p>连续积累样本外 replay，比较候选后的 5/10/20 分钟、MFE/MAE、失效率和不同市场范围，不只挑成功样本。</p></div>
         <div class="formula-item"><strong>升级前提</strong><p>只有研究证据在足够样本中稳定提高窗口复核质量，且没有改写正式决定，才单独讨论是否影响候选或仓位。</p></div>

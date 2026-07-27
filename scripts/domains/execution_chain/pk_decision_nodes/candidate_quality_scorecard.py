@@ -2,7 +2,7 @@ from report.surface_wording import sanitize_user_visible_text
 from report.sniper_target_derivation import stock_key as _derivation_stock_key
 from report.position_context import (
     existing_position_summary_from_context,
-    is_inferred_previous_report_position,
+    position_fact_status,
 )
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     anchor_reversal_payload as _anchor_payload,
@@ -185,6 +185,12 @@ def _enrich_candidate_trace_inputs(candidate, context, *, source_pool=""):
         enriched["source_pools"] = _merge_unique_values(enriched.get("source_pools"), source_pool)
     if "position_context_provided" not in enriched and "position_context_provided" in (context or {}):
         enriched["position_context_provided"] = bool((context or {}).get("position_context_provided"))
+    existing_position_summary = existing_position_summary_from_context(context)
+    if (
+        position_fact_status(existing_position_summary, context_provided=True) == "confirmed"
+        and _candidate_identity_keys(existing_position_summary) & _candidate_identity_keys(enriched)
+    ):
+        enriched["position_fact_status"] = "confirmed"
     mainline = _meaningful_text(enriched.get("mainline") or enriched.get("主线")) or _context_mainline(context)
     sector = _candidate_sector(enriched) or mainline
     if mainline and not _meaningful_text(enriched.get("mainline")):
@@ -501,13 +507,13 @@ def _clear_panel_target_fields(panel_fields):
     return updated
 
 
-def _normalize_inferred_position_panel_fields(panel_fields, existing_position_summary):
+def _normalize_pending_position_panel_fields(panel_fields, existing_position_summary):
     updated = dict(panel_fields or {})
-    if not is_inferred_previous_report_position(existing_position_summary):
+    if position_fact_status(existing_position_summary, context_provided=True) != "pending_confirmation":
         return updated
     if "只处理旧仓" in str(updated.get("market_emotion_label") or ""):
         updated["market_emotion_label"] = "🟠 0%不参与；先确认成交事实"
-    updated["account_attention_load"] = "前日报计划对象待成交确认"
+    updated["account_attention_load"] = "外部交易记录待核实"
     updated["holding_priority_action"] = "未确认成交前不视为B1；新机会按自身资格判断"
     return updated
 
@@ -526,13 +532,20 @@ def _build_panel_fields(
     if _candidate_key(best_stock) and _candidate_key(best_stock) == _candidate_key(watch_anchor):
         backup_candidate = None
     existing_position_summary = existing_position_summary if isinstance(existing_position_summary, dict) else {}
-    inferred_old_path = bool(existing_position_summary.get("has_position") and existing_position_summary.get("summary"))
-    default_old_position = bool(
-        existing_position_summary.get("position_source") == "previous_report_target_default_1x"
-        or existing_position_summary.get("inferred_from_previous_report") is True
+    position_status = position_fact_status(
+        existing_position_summary,
+        context_provided=position_context_provided,
     )
-    if default_old_position:
-        account_attention_load = "前日报计划对象待成交确认"
+    inferred_old_path = bool(
+        position_status == "confirmed"
+        and any(
+            str(existing_position_summary.get(key) or "").strip()
+            for key in ("summary", "name", "stock_name", "code", "stock_code")
+        )
+    )
+    pending_position = position_status == "pending_confirmation"
+    if pending_position:
+        account_attention_load = "外部交易记录待核实"
         holding_priority_action = "未确认成交前不视为B1；新机会按自身资格判断"
     elif has_personal_positions:
         account_attention_load = "有持仓需先处理"
@@ -587,7 +600,7 @@ def build_candidate_quality_scorecard_payload(context):
         else:
             panel_fields = _clear_blocked_panel_target_fields(existing_panel_fields, existing_samples)
             panel_fields = _align_panel_fields_to_current_watch_target(panel_fields, current_watch_target)
-        panel_fields = _normalize_inferred_position_panel_fields(
+        panel_fields = _normalize_pending_position_panel_fields(
             panel_fields,
             existing_position_summary_from_context(context),
         )
@@ -682,7 +695,7 @@ def build_candidate_quality_scorecard_payload(context):
         best_stock=best_stock,
         watch_anchor=watch_anchor,
     )
-    panel_fields = _normalize_inferred_position_panel_fields(panel_fields, existing_position_summary)
+    panel_fields = _normalize_pending_position_panel_fields(panel_fields, existing_position_summary)
     if final_empty_without_current_observation:
         panel_fields = _clear_panel_target_fields(panel_fields)
     return {

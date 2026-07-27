@@ -105,6 +105,89 @@ Required tests:
 - `tests.test_daily_report_render.DailyReportRenderTest.test_report_preflight_fails_when_etf_turnover_series_has_coverage_anomaly`
 - `tests.test_market_overview_nodes.MarketOverviewNodesTest.test_market_base_marks_etf_turnover_coverage_anomaly_as_review_needed`
 
+#### Rolling An Accepted ETF Window
+
+##### 1. Scope / Trigger
+
+Use this path only for a fresh report whose target date is today and whose
+per-ETF historical collection is incomplete or too expensive. It must not run
+for historical replay.
+
+##### 2. Signatures
+
+`get_etf_turnover_series_from_sina_first(...)` may receive:
+
+```python
+load_previous_etf_series_fn: Callable[[str], dict] | None
+database_service_cls: type | None
+db_path: str | Path | None
+```
+
+The production default loads the exact prior trading day's
+`etf_turnover_series` from PostgreSQL daily-report facts.
+
+##### 3. Contracts
+
+- The prior payload must be `available=True`, `coverage_status="normal"`,
+  `coverage_anomaly=False`, and `requested_trade_date` must equal the exact
+  prior trading date.
+- The prior payload must contain exactly the expected latest 25 trading dates.
+  Retain its latest 24 rows, then append today's Sina ETF category-list total.
+- Every retained row must have positive turnover, positive covered count, and
+  at least 95% coverage against the prior payload's ETF universe count.
+- Today's positive-turnover ETF count must cover at least 95% of today's Sina
+  universe. Re-run `_annotate_etf_turnover_coverage_quality(...)` on the merged
+  25 rows; never inherit the prior success flag without recomputation.
+- `sequence_min_covered_etf_count` and `sequence_min_coverage_ratio` must report
+  the actual minimum across all historical rows, including when every row is
+  above 95%; they are evidence fields, not anomaly-only placeholders.
+- Every merged row must expose `trade_date`, `source`, `source_date`, and
+  `query_date`. Historical `source_date` equals its trade date and
+  `query_date` equals the prior fact date; today's dates both equal today.
+- Tushare `fund_daily` requests omit `offset` on the first page. Only later
+  pages send positive offsets.
+
+##### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Prior fact missing, partial, unavailable, or for another date | Reject rolling and continue existing Sina/Tushare collection |
+| Prior dates do not equal the expected 25-date window | Reject rolling |
+| Any retained row is below 95% coverage | Reject rolling |
+| Today's current-list coverage is below 95% | Reject rolling |
+| Merged coverage check reports an anomaly | Reject rolling |
+| PostgreSQL or calendar read raises | Continue existing collection; it must not create a false success |
+
+##### 5. Good / Base / Bad Cases
+
+- Good: accepted prior 25-day window plus complete current list returns 24+1
+  rows without requesting 1,600 individual Sina history endpoints.
+- Base: no accepted prior fact falls through to the existing Sina history and
+  Tushare alternatives.
+- Bad: a smooth 25-row series with only about 1,000 covered ETFs remains
+  partial and cannot support the institutional-capacity judgment.
+
+##### 6. Tests Required
+
+- Assert the successful rolling path uses the exact prior trading date,
+  returns the expected 24+1 dates, preserves row provenance, and never calls
+  the Sina history fetcher.
+- Assert partial prior facts, requested-date mismatch, extra or missing dates,
+  and low current-list coverage reject rolling. At least one rejection test
+  must exercise the public entry and confirm it does not return a rolled result.
+- Assert the first Tushare page has no `offset` and later pages use increasing
+  positive offsets.
+- Keep input-runtime, report-preflight, and market-overview rejection tests for
+  partial payloads.
+
+##### 7. Wrong vs Correct
+
+Wrong: reuse any recent 25-row payload or lower the 95% threshold until the
+report generates.
+
+Correct: reuse only the exact prior trading day's accepted window, append one
+source-dated current row, and run the full coverage check again.
+
 ### T0 Account Advice Contract
 
 The front-page `T0` row is the next-day account action layer. It is not a

@@ -112,10 +112,11 @@ def _build_prohibition_payload(
     if display_position_level == "0%不参与":
         headline = environment_headline or "环境关闭，只做等待，不做新增参与"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
-        payload["prohibition_items"].append("- ✅ 保持空仓：当前不新增参与")
         if has_personal_positions:
+            payload["prohibition_items"].append("- ✅ 不新增参与：先处理旧仓，不新增仓位")
             payload["prohibition_items"].append("- ✅ 禁止恋战：你的现有仓位只做退出，不做摊平和自救")
         else:
+            payload["prohibition_items"].append("- ✅ 保持空仓：当前不新增参与")
             payload["prohibition_items"].append("- ✅ 禁止恋战：若你有旧仓，只做退出，不做摊平和自救")
         payload["prohibition_items"].append("- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开")
         payload["prohibition_items"].append("- ✅ 禁止追高：不追涨任何股票")

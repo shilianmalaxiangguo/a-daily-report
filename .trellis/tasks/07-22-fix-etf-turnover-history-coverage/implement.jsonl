@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"ETF成交额完整性与日报停止生成契约"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"PostgreSQL日报事实读取与来源保留规范"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"事实源到日报与HTML的跨层一致性检查"}
+{"file":".trellis/tasks/07-22-fix-etf-turnover-history-coverage/research/etf-source-diagnosis.md","reason":"本次来源实测与方案选择依据"}

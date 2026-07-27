@@ -8,17 +8,11 @@ import os
 # 方法1: 设置环境变量
 os.environ['PYTHONUNBUFFERED'] = '1'
 
-# 方法2: 重新配置stdout
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(line_buffering=True)
-else:
-    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
-
-# 方法3: 强制stderr也无缓冲
-if hasattr(sys.stderr, 'reconfigure'):
-    sys.stderr.reconfigure(line_buffering=True)
-else:
-    sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
+# 方法2/3: 终端流支持时开启行缓冲；测试捕获流不支持时保持原样。
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if callable(_reconfigure):
+        _reconfigure(line_buffering=True)
 
 _POSTGRES_ONLY_RUNTIME = False
 _LAST_DAILY_REPORT_POSTGRES_SERVICE = None
@@ -50,6 +44,7 @@ A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-
 import sys
 import os
 import datetime
+import math
 import types
 import time
 import signal
@@ -97,6 +92,10 @@ from daily_report_render import (
     save_stock_diagnostic_output,
 )
 from report.markdown_report_html import render_markdown_report_html
+from report.tomorrow_action_calendar import (
+    build_tomorrow_action_calendar_from_service,
+    empty_tomorrow_action_calendar,
+)
 from report.elimination_tournament import (
     build_sector_capital_preflight_daily_context,
     build_sector_capital_preflight_payload,
@@ -225,6 +224,7 @@ from portfolio.position_management_report import (
     parse_position_string as run_parse_position_string,
 )
 from portfolio.position_strategy_report import (
+    _read_previous_report_target as run_read_previous_report_target,
     render_position_strategy_report,
     save_position_strategy_report,
 )
@@ -238,14 +238,17 @@ from export.sh_index_chanlun_html import (
 from replay.report_replay import replay_from_snapshot as run_replay_from_snapshot
 from report.report_acceptance_audit import audit_report_markdown
 from report.position_context import (
-    PENDING_PREVIOUS_REPORT_ROLE,
+    SIMULATED_PREVIOUS_REPORT_ROLE,
+    build_tomorrow_empty_account_action,
     existing_position_summary_from_context,
     extract_position_timeline_markdown,
+    is_tomorrow_empty_account_action,
     is_position_timeline_header,
     markdown_has_position_timeline,
     normalize_inferred_previous_target_records,
     prepend_position_timeline_markdown,
 )
+from report.position_tier_contract import POSITION_TIER_B1_PCT
 from report.market_language_translation_artifacts import (
     prepare_market_language_translation,
     write_fresh_market_language_translation,
@@ -4085,6 +4088,43 @@ def _first_dict_from_sources(key, *sources):
     return {}
 
 
+def _clear_cached_explicit_cli_tomorrow_account_action(data):
+    if not isinstance(data, dict):
+        return data
+    queue = [data]
+    seen = set()
+    nested_keys = (
+        "final_target_resolution",
+        "position_decision",
+        "execution_stage_context",
+        "market_research_snapshot",
+    )
+    while queue:
+        container = queue.pop(0)
+        marker = id(container)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        action = container.get("tomorrow_account_action")
+        if (
+            isinstance(action, dict)
+            and str(action.get("action") or "").strip() in {"empty", "明日空仓"}
+            and str(action.get("source") or "").strip() == "explicit_cli"
+        ):
+            container.pop("tomorrow_account_action", None)
+            priority = container.get("capital_priority_decision")
+            if (
+                isinstance(priority, dict)
+                and str(priority.get("capital_priority") or "").strip() == "tomorrow_empty"
+            ):
+                container.pop("capital_priority_decision", None)
+        for key in nested_keys:
+            nested = container.get(key)
+            if isinstance(nested, dict):
+                queue.append(nested)
+    return data
+
+
 def _restore_postgres_sector_first_runtime_facts(data, target_date):
     if not isinstance(data, dict):
         return data
@@ -4097,12 +4137,16 @@ def _restore_postgres_sector_first_runtime_facts(data, target_date):
         market_snapshot = {}
         data["market_research_snapshot"] = market_snapshot
 
-    existing_workflow = _first_dict_from_sources("selection_workflow", data, execution_context, market_snapshot)
-
     try:
         from report import runtime as report_runtime
     except (ImportError, ModuleNotFoundError):
         return data
+
+    existing_workflow = report_runtime._runtime_selection_workflow(
+        data=data,
+        execution_stage_context=execution_context,
+        market_research_snapshot=market_snapshot,
+    )
 
     position_decision = _first_dict_from_sources("position_decision", data, execution_context, market_snapshot)
     selected_candidate = _first_dict_from_sources("selected_position_candidate", data, execution_context, market_snapshot)
@@ -4602,35 +4646,74 @@ def _extract_report_target_from_markdown(markdown_text):
     return {}
 
 
-def _read_previous_report_target_for_entry(target_date, reports_root=None):
-    previous = _entry_previous_trade_day(target_date)
-    if not previous:
-        return {}
-    root = Path(reports_root) if reports_root else Path(__file__).resolve().parents[1] / "reports"
-    for suffix in ("_A股日报_执行摘要.md", "_A股日报_完整版.md"):
-        path = root / f"{previous}{suffix}"
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        target = _extract_report_target_from_markdown(text)
-        if target:
-            target["source_report_date"] = previous
-            return target
-    return {}
+def _read_previous_report_target_for_entry(
+    target_date,
+    reports_root=None,
+    *,
+    prefer_postgres_history=False,
+):
+    return run_read_previous_report_target(
+        target_date,
+        output_root=reports_root,
+        prefer_postgres_history=prefer_postgres_history,
+    )
 
 
-def _inject_previous_report_target_as_existing_position(data, target_date, reports_root=None):
+def _inject_previous_report_target_as_existing_position(
+    data,
+    target_date,
+    reports_root=None,
+    *,
+    prefer_postgres_history=False,
+):
     if not isinstance(data, dict):
         return {}
     personal_position_context = data.get("personal_position_context")
-    if isinstance(personal_position_context, dict) and personal_position_context.get("existing_position_summary"):
-        return {}
-    if data.get("existing_position_summary"):
-        return {}
-    previous_target = _read_previous_report_target_for_entry(target_date, reports_root=reports_root)
+    personal_summary = (
+        personal_position_context.get("existing_position_summary")
+        if isinstance(personal_position_context, dict)
+        else None
+    )
+    root_summary = data.get("existing_position_summary")
+    for existing_summary in (personal_summary, root_summary):
+        if not isinstance(existing_summary, dict):
+            continue
+        if (
+            existing_summary.get("has_position") is True
+            or existing_summary.get("has_pending_position") is True
+            or str(existing_summary.get("position_source") or "").strip()
+            in {
+                "external_trade_pending",
+                "explicit_empty_input",
+                "previous_report_explicit_empty",
+            }
+        ):
+            return {}
+    previous_target = _read_previous_report_target_for_entry(
+        target_date,
+        reports_root=reports_root,
+        prefer_postgres_history=prefer_postgres_history,
+    )
     if not previous_target:
         return {}
+    if previous_target.get("previous_position_ended") is True:
+        source_report_date = str(previous_target.get("source_report_date") or "").strip()
+        source_note = f"；上一份日报来源={source_report_date}" if source_report_date else ""
+        empty_summary = {
+            "has_position": False,
+            "has_pending_position": False,
+            "summary": f"已确认无旧仓{source_note}",
+            "position": 0.0,
+            "position_pct": 0.0,
+            "position_source": "previous_report_explicit_empty",
+            "source_report_date": source_report_date,
+        }
+        context = dict(personal_position_context) if isinstance(personal_position_context, dict) else {}
+        context["existing_position_summary"] = empty_summary
+        data["personal_position_context"] = context
+        data["existing_position_summary"] = empty_summary
+        data["position_context_provided"] = True
+        return empty_summary
     label = previous_target.get("name") or ""
     code = previous_target.get("code") or ""
     if code:
@@ -4640,26 +4723,25 @@ def _inject_previous_report_target_as_existing_position(data, target_date, repor
     inferred_position = {
         "name": previous_target.get("name") or "",
         "code": code,
-        "position": 0.0,
-        "default_position_pct": 100.0,
-        "holding_note": "上一份日报计划推定，待成交确认",
+        "position": float(POSITION_TIER_B1_PCT),
+        "position_pct": float(POSITION_TIER_B1_PCT),
+        "default_position_pct": float(POSITION_TIER_B1_PCT),
+        "holding_note": "上一份日报明日标的默认1x旧仓",
     }
     inferred_context = build_personal_position_context(data, [inferred_position])
     source_report_date = str(previous_target.get("source_report_date") or "").strip()
     source_note = f"；上一份日报目标来源={source_report_date}" if source_report_date else ""
     summary = {
-        "has_position": False,
-        "has_pending_position": True,
-        "role": PENDING_PREVIOUS_REPORT_ROLE,
-        "summary": (
-            f"前日报计划推定，待成交确认：{label}{source_note}；"
-            "未确认成交前不视为B1，不新增B2"
-        ),
+        "has_position": True,
+        "has_pending_position": False,
+        "role": SIMULATED_PREVIOUS_REPORT_ROLE,
+        "summary": f"持有{label}，1x/50%半仓，上一份日报明日标的默认1x旧仓{source_note}",
         "name": previous_target.get("name") or "",
         "code": code,
-        "position": 0.0,
-        "position_pct": 0.0,
-        "default_position_pct": 100.0,
+        "position": float(POSITION_TIER_B1_PCT),
+        "position_pct": float(POSITION_TIER_B1_PCT),
+        "default_position_pct": float(POSITION_TIER_B1_PCT),
+        "holding_note": "上一份日报明日标的默认1x旧仓",
         "position_source": "previous_report_target_default_1x",
         "source_report_date": source_report_date,
         "inferred_from_previous_report": True,
@@ -4683,13 +4765,13 @@ def _position_from_inferred_previous_target(summary):
     return {
         "name": name,
         "code": code,
-        "has_position": False,
-        "has_pending_position": True,
-        "role": PENDING_PREVIOUS_REPORT_ROLE,
-        "position": 0.0,
-        "position_pct": 0.0,
-        "default_position_pct": float(summary.get("default_position_pct") or 100.0),
-        "holding_note": "上一份日报计划推定，待成交确认",
+        "has_position": True,
+        "has_pending_position": False,
+        "role": SIMULATED_PREVIOUS_REPORT_ROLE,
+        "position": float(POSITION_TIER_B1_PCT),
+        "position_pct": float(POSITION_TIER_B1_PCT),
+        "default_position_pct": float(POSITION_TIER_B1_PCT),
+        "holding_note": "上一份日报明日标的默认1x旧仓",
         "position_source": summary.get("position_source") or "previous_report_target_default_1x",
         "source_report_date": summary.get("source_report_date"),
         "inferred_from_previous_report": True,
@@ -4698,6 +4780,43 @@ def _position_from_inferred_previous_target(summary):
 
 def _normalize_inferred_previous_target_records(value):
     return normalize_inferred_previous_target_records(value)
+
+
+def _clear_stale_tomorrow_empty_resolution_copies(value):
+    queue = [value]
+    seen = set()
+    nested_keys = (
+        "final_target_resolution",
+        "position_decision",
+        "market_research_snapshot",
+        "execution_stage_context",
+    )
+    while queue:
+        current = queue.pop(0)
+        if not isinstance(current, dict) or id(current) in seen:
+            continue
+        seen.add(id(current))
+        action = current.get("tomorrow_account_action")
+        cached_cli_action = (
+            is_tomorrow_empty_account_action(action)
+            and str(action.get("source") or "").strip() == "explicit_cli"
+        )
+        if cached_cli_action:
+            current.pop("tomorrow_account_action", None)
+        priority = current.get("capital_priority_decision")
+        if (
+            isinstance(priority, dict)
+            and priority.get("capital_priority") == "tomorrow_empty"
+            and (
+                cached_cli_action
+                or not is_tomorrow_empty_account_action(current.get("tomorrow_account_action"))
+            )
+        ):
+            current.pop("capital_priority_decision", None)
+        for key in nested_keys:
+            nested = current.get(key)
+            if isinstance(nested, dict):
+                queue.append(nested)
 
 
 def _extract_position_timeline_markdown(position_strategy_report):
@@ -4734,7 +4853,14 @@ def _sync_position_timeline_into_saved_markdown(saved_report_paths=None, positio
     return True
 
 
-def _render_daily_report_html_for_acceptance(target_date, markdown_text, *, output_path):
+def _render_daily_report_html_for_acceptance(
+    target_date,
+    markdown_text,
+    *,
+    output_path,
+    tomorrow_action_calendar=None,
+    t0_market_breadth=None,
+):
     try:
         return render_markdown_report_html(
             markdown_text,
@@ -4742,6 +4868,8 @@ def _render_daily_report_html_for_acceptance(target_date, markdown_text, *, outp
             trade_date=target_date,
             source_label="Markdown日报",
             output_path=output_path,
+            tomorrow_action_calendar=tomorrow_action_calendar,
+            t0_market_breadth=t0_market_breadth,
         )
     except ReportCriticalDataMissingError:
         raise
@@ -4749,6 +4877,174 @@ def _render_daily_report_html_for_acceptance(target_date, markdown_text, *, outp
         raise ReportCriticalDataMissingError(
             f"Bear HTML 渲染失败，停止生成：{exc}"
         ) from exc
+
+
+def _bear_chart_number_or_none(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _bear_chart_count_or_none(value):
+    number = _bear_chart_number_or_none(value)
+    if number is None or number < 0:
+        return None
+    return int(number)
+
+
+def _bear_chart_fact_matches_date(value, expected_date):
+    if not isinstance(value, dict):
+        return False
+    fact_dates = [
+        str(value.get(key) or "").strip()[:10]
+        for key in ("trade_date", "source_date", "date")
+        if str(value.get(key) or "").strip()
+    ]
+    return bool(fact_dates) and all(fact_date == expected_date for fact_date in fact_dates)
+
+
+def _build_t0_market_breadth_for_bear(
+    target_date,
+    *,
+    service=None,
+    new_high_rows=None,
+    limit=25,
+):
+    target_date = str(target_date or "").strip()[:10]
+    limit = max(int(limit or 25), 1)
+    if not target_date or service is None:
+        return {}
+
+    index_reader = getattr(service, "query_index_daily_bars", None)
+    breadth_reader = getattr(service, "query_market_breadth_counts", None)
+    new_high_reader = getattr(service, "query_new_high_feedback_series", None)
+    if not callable(index_reader):
+        return {}
+    try:
+        index_rows = index_reader("sh000985", target_date, window_days=limit + 1) or []
+    except Exception:
+        return {}
+
+    bars_by_date = {}
+    for row in index_rows:
+        if not isinstance(row, dict):
+            continue
+        trade_date = str(row.get("trade_date") or row.get("date") or "").strip()[:10]
+        if not trade_date or trade_date > target_date:
+            continue
+        bars_by_date[trade_date] = row
+    bars = [(trade_date, bars_by_date[trade_date]) for trade_date in sorted(bars_by_date)][-(limit + 1) :]
+    if not bars:
+        return {}
+
+    change_by_date = {}
+    for index, (trade_date, row) in enumerate(bars):
+        close = _bear_chart_number_or_none(row.get("close"))
+        previous_close = (
+            _bear_chart_number_or_none(bars[index - 1][1].get("close"))
+            if index > 0
+            else None
+        )
+        change_by_date[trade_date] = (
+            round((close / previous_close - 1.0) * 100.0, 2)
+            if close is not None and close > 0 and previous_close is not None and previous_close > 0
+            else None
+        )
+
+    display_dates = [trade_date for trade_date, _row in bars[-limit:]]
+    new_high_by_date = {}
+    aligned_new_high_rows = [row for row in (new_high_rows or []) if isinstance(row, dict)]
+    if not aligned_new_high_rows and callable(new_high_reader):
+        try:
+            aligned_new_high_rows = new_high_reader(target_date, window_days=limit) or []
+        except Exception:
+            aligned_new_high_rows = []
+    for row in aligned_new_high_rows:
+        if not isinstance(row, dict):
+            continue
+        trade_date = str(row.get("trade_date") or row.get("date") or row.get("source_date") or "").strip()[:10]
+        if trade_date in display_dates and _bear_chart_fact_matches_date(row, trade_date):
+            new_high_by_date[trade_date] = row
+
+    items = []
+    for trade_date in display_dates:
+        breadth = {}
+        if callable(breadth_reader):
+            try:
+                value = breadth_reader(trade_date) or {}
+            except Exception:
+                value = {}
+            if _bear_chart_fact_matches_date(value, trade_date):
+                breadth = value
+        new_high = new_high_by_date.get(trade_date, {})
+        items.append(
+            {
+                "date": trade_date,
+                "up_count": _bear_chart_count_or_none(breadth.get("up_count")),
+                "down_count": _bear_chart_count_or_none(breadth.get("down_count")),
+                "all_a_change_pct": change_by_date.get(trade_date),
+                "new_high_share_pct": _bear_chart_number_or_none(
+                    new_high.get("all_a_share_pct", new_high.get("new_high_share_pct"))
+                ),
+            }
+        )
+    return {
+        "schema": "t0_market_breadth.v1",
+        "items": items,
+        "basis": "截至报告日的最近25个交易日；缺失事实保持空值。",
+    }
+
+
+def _future_open_dates_for_tomorrow_action_calendar(target_date, *, fetch_open_dates=None):
+    try:
+        target = datetime.date.fromisoformat(str(target_date or "")[:10])
+    except ValueError:
+        return []
+    shanghai_today = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).date()
+    if abs((shanghai_today - target).days) > 14:
+        return []
+    if fetch_open_dates is None:
+        try:
+            from market_data.tushare_market_activity_service import fetch_tushare_open_trade_dates
+        except (ImportError, ModuleNotFoundError):
+            return []
+        fetch_open_dates = fetch_tushare_open_trade_dates
+    try:
+        return fetch_open_dates(
+            (target + datetime.timedelta(days=1)).isoformat(),
+            (target + datetime.timedelta(days=14)).isoformat(),
+        ) or []
+    except Exception:
+        return []
+
+
+def _build_tomorrow_action_calendar_for_bear(
+    target_date,
+    *,
+    run_mode,
+    service=None,
+    fetch_open_dates=None,
+):
+    service = service or _postgres_index_bar_service()
+    if service is None:
+        return empty_tomorrow_action_calendar(
+            mode=run_mode,
+            missing_fields=("postgresql",),
+        )
+    future_open_dates = _future_open_dates_for_tomorrow_action_calendar(
+        target_date,
+        fetch_open_dates=fetch_open_dates,
+    )
+    return build_tomorrow_action_calendar_from_service(
+        target_report_date=target_date,
+        mode=run_mode,
+        service=service,
+        future_open_dates=future_open_dates,
+    )
 
 
 def _try_save_daily_report_html_from_saved_markdown(
@@ -4759,6 +5055,7 @@ def _try_save_daily_report_html_from_saved_markdown(
     prepend_markdown="",
     validate_html=None,
     html_text=None,
+    t0_market_breadth=None,
 ):
     temporary_path = None
     try:
@@ -4774,6 +5071,7 @@ def _try_save_daily_report_html_from_saved_markdown(
                 target_date,
                 markdown_text,
                 output_path=path,
+                t0_market_breadth=t0_market_breadth,
             )
         if callable(validate_html):
             validate_html(html_text)
@@ -5027,6 +5325,8 @@ def main():
                        help='不生成报告文件，只获取数据')
     parser.add_argument('-p', '--position', type=str, default=None,
                        help='持仓信息，格式: "我的仓位是股票1 仓位1%% 股票2 仓位2%% ..."')
+    parser.add_argument('--tomorrow-empty', action='store_true',
+                       help='显式指定明日空仓：不买新股、集合竞价卖清全部可卖旧仓、不做T')
     parser.add_argument('--replay', action='store_true',
                        help='复盘模式：从快照读数据，只重新拉财联社日历，用最新skill生成报告')
     parser.add_argument('--postgres-only', action='store_true',
@@ -5093,6 +5393,7 @@ def main():
     position_timeline_markdown = ""
     position_strategy_report = ""
     bear_html_text = ""
+    chanlun_html = ""
     market_language_translation = {}
     market_language_storage = {}
     fresh_wiki_persistence_ready = True
@@ -5152,6 +5453,8 @@ def main():
             output_payload={"data_keys": list((data or {}).keys())[:30], "empty": not bool(data)},
         )
         if data:
+            if not args.tomorrow_empty:
+                _clear_cached_explicit_cli_tomorrow_account_action(data)
             _normalize_inferred_previous_target_records(data)
             report_preflight = build_report_preflight(data, target_date)
             preflight_failures = list(report_preflight.get("failures") or [])
@@ -5192,6 +5495,13 @@ def main():
 
         # 生成日报（除非指定不生成）
         if not args.no_report and data:
+            if args.tomorrow_empty:
+                data["tomorrow_account_action"] = build_tomorrow_empty_account_action(
+                    source="explicit_cli"
+                )
+            elif not is_tomorrow_empty_account_action(data.get("tomorrow_account_action")):
+                data.pop("tomorrow_account_action", None)
+                _clear_stale_tomorrow_empty_resolution_copies(data)
             positions = []
             if args.position is not None:
                 print(f"\n📊 解析持仓信息...")
@@ -5226,8 +5536,12 @@ def main():
             has_personal_positions = bool(positions) or _has_existing_position_context(data)
             if has_personal_positions:
                 data["position_context_provided"] = True
-            elif not args.postgres_only and not bool(data.get("position_context_provided")):
-                injected_existing = _inject_previous_report_target_as_existing_position(data, target_date)
+            elif not bool(data.get("position_context_provided")):
+                injected_existing = _inject_previous_report_target_as_existing_position(
+                    data,
+                    target_date,
+                    prefer_postgres_history=bool(args.postgres_only),
+                )
                 inferred_position = _position_from_inferred_previous_target(injected_existing)
                 if inferred_position:
                     positions = [inferred_position]
@@ -5356,6 +5670,32 @@ def main():
                     )
 
         if postgres_synced and not args.no_report and data:
+            tomorrow_action_calendar = _build_tomorrow_action_calendar_for_bear(
+                target_date,
+                run_mode=run_mode,
+                service=_LAST_DAILY_REPORT_POSTGRES_SERVICE,
+            )
+            t0_market_breadth = _build_t0_market_breadth_for_bear(
+                target_date,
+                service=_LAST_DAILY_REPORT_POSTGRES_SERVICE,
+                new_high_rows=(data.get("new_high_feedback") or {}).get("trend_rows"),
+            )
+            bear_html_text = _render_daily_report_html_for_acceptance(
+                target_date,
+                report_outputs.get(REPORT_VARIANT_FULL, ""),
+                output_path=planned_report_path.with_suffix(".html"),
+                tomorrow_action_calendar=tomorrow_action_calendar,
+                t0_market_breadth=t0_market_breadth,
+            )
+            audit_result = _audit_generated_report_with_chanlun_html(
+                report_outputs,
+                companion_html=chanlun_html,
+                position_companion_html=bear_html_text,
+                source_path=planned_report_path,
+                expected_position_summary=_existing_position_summary_for_audit(data),
+                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
+                prefer_postgres_history=True,
+            )
             _try_persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
 
         if not args.no_report and data:
@@ -5475,6 +5815,7 @@ def main():
                     saved_report_paths=saved_report_paths,
                     prepend_markdown=position_timeline_markdown,
                     html_text=bear_html_text,
+                    t0_market_breadth=t0_market_breadth,
                 )
                 if not args.postgres_only:
                     snapshot_path = _save_data_snapshot(

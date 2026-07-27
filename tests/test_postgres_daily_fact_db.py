@@ -307,6 +307,9 @@ class _MemoryDailyFactCursor:
         elif "INSERT INTO new_high_feedback_daily" in normalized_sql:
             (
                 trade_date,
+                source_date,
+                query_date,
+                requested_trade_date,
                 new_high_count,
                 all_a_share_pct,
                 leading_sectors,
@@ -317,6 +320,9 @@ class _MemoryDailyFactCursor:
             ) = params
             self.state["new_high"][trade_date] = {
                 "trade_date": trade_date,
+                "source_date": source_date,
+                "query_date": query_date,
+                "requested_trade_date": requested_trade_date,
                 "new_high_count": new_high_count,
                 "all_a_share_pct": all_a_share_pct,
                 "leading_sectors": leading_sectors,
@@ -325,7 +331,7 @@ class _MemoryDailyFactCursor:
                 "source_policy": source_policy,
                 "source_run_id": source_run_id,
             }
-        elif "SELECT trade_date, new_high_count, all_a_share_pct, leading_sectors, sector_distribution_json, top_stocks_json, source_policy, source_run_id FROM new_high_feedback_daily" in normalized_sql:
+        elif "FROM new_high_feedback_daily" in normalized_sql and "SELECT trade_date, source_date, query_date, requested_trade_date" in normalized_sql:
             end_date, window_days = params
             rows = [row for row in self.state["new_high"].values() if row["trade_date"] <= end_date]
             self.last_rows = sorted(rows, key=lambda row: row["trade_date"], reverse=True)[: int(window_days)]
@@ -730,6 +736,12 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(feedback["trend_rows"][-1]["trade_date"], "2026-06-08")
         self.assertEqual(stored["trade_date"], "2026-06-08")
         self.assertEqual(series[-1]["trade_date"], "2026-06-08")
+        self.assertEqual(stored["source_date"], "2026-06-08")
+        self.assertEqual(stored["query_date"], "2026-06-08")
+        self.assertEqual(stored["requested_trade_date"], "2026-06-08")
+        self.assertEqual(series[-1]["source_date"], "2026-06-08")
+        self.assertEqual(series[-1]["query_date"], "2026-06-08")
+        self.assertEqual(series[-1]["requested_trade_date"], "2026-06-08")
         self.assertEqual(series[-1]["new_high_count"], 1)
 
     def test_psycopg_connection_prefers_python_impl_when_unspecified(self):
@@ -2125,6 +2137,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 ("2026-05-29", "entry_range_low", "", 8.2, None, "number"),
                 ("2026-05-29", "confirm_price_60m", "", 8.8, None, "number"),
                 ("2026-05-29", "candidate_feedback_ready", "", None, True, "bool"),
+                ("2026-05-29", "tomorrow_account_empty", "", None, True, "bool"),
             ],
             [
                 ("2026-05-29", "environment.score", "", 80.0, None, "number"),
@@ -2166,9 +2179,118 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(record["entry_range_low"], 8.2)
         self.assertEqual(record["confirm_price_60m"], 8.8)
         self.assertTrue(record["candidate_feedback_ready"])
+        self.assertTrue(record["tomorrow_account_empty"])
         self.assertEqual(record["factor_snapshot"]["environment"]["score"], 80)
         self.assertEqual(record["factor_snapshot"]["selection"]["participation_mode"], "attack_50_ready")
         self.assertEqual(record["factor_snapshot"]["core_stocks"][0]["stock_name"], "大唐发电")
+
+    def test_queries_tomorrow_action_history_from_final_decision_snapshot_fields(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [
+            [
+                (
+                    "2026-06-01",
+                    "two_layer_decision_payload.next_day_action.final_object_identity",
+                    "无",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-01",
+                    "two_layer_decision_payload.next_day_action.position_stance",
+                    "0%不参与",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-01",
+                    "two_layer_decision_payload.next_day_action.stock.code",
+                    "000001",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-01",
+                    "two_layer_decision_payload.next_day_action.stock.name",
+                    "残留旧标的",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-02",
+                    "two_layer_decision_payload.next_day_action.final_object_identity",
+                    "明日执行对象",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-02",
+                    "two_layer_decision_payload.next_day_action.position_stance",
+                    "50%条件执行",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-02",
+                    "two_layer_decision_payload.next_day_action.stock.code",
+                    "600584",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-02",
+                    "two_layer_decision_payload.next_day_action.stock.name",
+                    "长电科技",
+                    None,
+                    None,
+                    "text",
+                ),
+                (
+                    "2026-06-03",
+                    "two_layer_decision_payload.tomorrow_account_action.action",
+                    "empty",
+                    None,
+                    None,
+                    "text",
+                ),
+                ("2026-06-04", None, None, None, None, None),
+            ]
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        records = db.query_tomorrow_action_history(
+            "2026-06-03",
+            mode="frozen",
+            limit=25,
+        )
+
+        self.assertEqual(
+            ["2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04"],
+            [row["report_date"] for row in records],
+        )
+        self.assertEqual("no_trade", records[0]["action_type"])
+        self.assertFalse(records[0]["can_new_entry"])
+        self.assertEqual("execute", records[1]["action_type"])
+        self.assertEqual("600584", records[1]["stock_code"])
+        self.assertEqual("长电科技", records[1]["stock_name"])
+        self.assertTrue(records[2]["tomorrow_account_empty"])
+        self.assertEqual("", records[3]["action_type"])
+        self.assertIsNone(records[3]["can_new_entry"])
+        sql = conn.cursor_obj.calls[0][1]
+        self.assertIn("LEFT JOIN strategy_factor_snapshot_fields", sql)
+        self.assertIn("LIMIT %s", sql)
+        self.assertEqual(("frozen", "2026-06-03", 25, "frozen"), conn.cursor_obj.calls[0][2])
 
     def test_loads_structured_candidate_trace_artifact(self):
         conn = _FakeConnection()

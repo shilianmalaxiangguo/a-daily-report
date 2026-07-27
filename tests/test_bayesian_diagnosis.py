@@ -61,7 +61,7 @@ class BayesianDiagnosisTest(unittest.TestCase):
 
         self.assertEqual(packet["conclusion"]["path_conclusion"], "条件执行")
         self.assertEqual(packet["conclusion"]["position_pct"], 50)
-        self.assertIn("50%条件执行", packet["conclusion"]["action_text"])
+        self.assertIn("1x/50%半仓条件执行", packet["conclusion"]["action_text"])
         self.assertIn("回到0%不参与", packet["conclusion"]["action_text"])
 
     def test_source_date_missing_is_preserved(self):

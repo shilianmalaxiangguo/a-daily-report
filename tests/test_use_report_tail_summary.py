@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from hooks.report.use_report_tail_summary import run
+from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 
 
 class UseReportTailSummaryTest(unittest.TestCase):
@@ -248,6 +249,83 @@ class UseReportTailSummaryTest(unittest.TestCase):
         self.assertEqual(captured["context"]["tracking_memory_status"]["today_validated_items"][0]["code"], "000002")
         self.assertEqual(captured["context"]["position_level"], "0%不参与")
         self.assertEqual(result["diagnostics"]["hook_name"], "report.tail_summary")
+
+    def test_tail_summary_hook_preserves_confirmed_old_position_in_final_conclusion(self):
+        result = run(
+            {
+                "inputs": {
+                    "display_mvp_mode": False,
+                    "step0_prediction": "DIFFICULT",
+                    "step0_prediction_cn": "只处理旧仓",
+                    "step0_action": "不新增参与",
+                    "final_gate": {"can_new_entry": False, "should_reduce": True},
+                    "mainline_name": "半导体",
+                    "market_research_snapshot": {},
+                    "personal_position_context": {
+                        "existing_position_summary": {
+                            "has_position": True,
+                            "summary": "持有长电科技(600584)，100%仓位",
+                        }
+                    },
+                    "watchlist": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "step2_bundle": {},
+                    "abnormal_watch_pool": [],
+                    "abnormal_probe_group": {},
+                    "exit_analysis": {"sector_name": "半导体"},
+                    "main_sectors_info": [{"name": "半导体"}],
+                    "risk_sectors": [],
+                    "market_state_snapshot": {},
+                },
+                "helpers": {
+                    "build_legacy_final_conclusion_lines": build_legacy_final_conclusion_lines,
+                },
+            }
+        )
+
+        rendered = "\n".join(result["value"]["lines"])
+        self.assertIn("旧仓处理：持有长电科技(600584)", rendered)
+        self.assertIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertNotIn("| 操作风格 | 空仓 |", rendered)
+
+    def test_tail_summary_hook_falls_back_to_direct_summary_when_nested_summary_is_empty(self):
+        result = run(
+            {
+                "inputs": {
+                    "display_mvp_mode": False,
+                    "step0_prediction": "DIFFICULT",
+                    "step0_prediction_cn": "只处理旧仓",
+                    "step0_action": "不新增参与",
+                    "final_gate": {"can_new_entry": False, "should_reduce": True},
+                    "mainline_name": "半导体",
+                    "market_research_snapshot": {},
+                    "personal_position_context": {"existing_position_summary": {}},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有长电科技(600584)，100%仓位",
+                    },
+                    "watchlist": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "step2_bundle": {},
+                    "abnormal_watch_pool": [],
+                    "abnormal_probe_group": {},
+                    "exit_analysis": {"sector_name": "半导体"},
+                    "main_sectors_info": [{"name": "半导体"}],
+                    "risk_sectors": [],
+                    "market_state_snapshot": {},
+                },
+                "helpers": {
+                    "build_legacy_final_conclusion_lines": build_legacy_final_conclusion_lines,
+                },
+            }
+        )
+
+        rendered = "\n".join(result["value"]["lines"])
+        self.assertIn("旧仓处理：持有长电科技(600584)", rendered)
+        self.assertIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertNotIn("| 操作风格 | 空仓 |", rendered)
 
     def test_tail_summary_hook_passes_core_stocks_into_final_conclusion(self):
         captured = {}
