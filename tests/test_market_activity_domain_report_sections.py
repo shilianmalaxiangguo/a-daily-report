@@ -1215,6 +1215,58 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 利仁科技 | 001259 | 股权转让 | +10.00% | 09:25:00 | 66.55 | 63.01 | 66.55 | 66.55 |", rendered)
         self.assertNotIn("| 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
 
+    def test_lianban_rows_keep_trade_narrative_stocks_visible_after_default_five(self):
+        ordinary_rows = [
+            {
+                "lianban_days": 1,
+                "name": f"普通首板{index}",
+                "code": f"00000{index}",
+                "sector": "软件服务",
+                "first_limit_time": f"09:3{index}:00",
+                "reason": "普通首板",
+            }
+            for index in range(1, 6)
+        ]
+        narrative_rows = [
+            {
+                "lianban_days": 1,
+                "name": "岩山科技",
+                "code": "002195",
+                "sector": "脑机接口",
+                "raw_sector": "软件服务",
+                "trade_narrative_sector": "脑机接口",
+                "first_limit_time": "10:01:00",
+                "reason": "脑机接口+AI大模型",
+            },
+            {
+                "lianban_days": 1,
+                "name": "创新医疗",
+                "code": "002173",
+                "sector": "脑机接口",
+                "raw_sector": "医疗保健",
+                "trade_narrative_sector": "脑机接口",
+                "first_limit_time": "10:02:00",
+                "reason": "脑机接口+医疗服务",
+            },
+        ]
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": ordinary_rows + narrative_rows,
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "软件服务",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 4, "强"),
+            enabled_node_keys=["lianban"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 岩山科技 | 002195 | 脑机接口 |", rendered)
+        self.assertIn("| 创新医疗 | 002173 | 脑机接口 |", rendered)
+
     def test_build_advanced_activity_report_sections_can_render_only_enabled_nodes(self):
         result = build_advanced_activity_report_sections(
             data={

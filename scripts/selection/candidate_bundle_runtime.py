@@ -343,6 +343,13 @@ def _normalize_candidate_sector(item):
 
 _TRADE_NARRATIVE_RULES = (
     (
+        "脑机接口",
+        (
+            "脑机接口",
+            "脑科学",
+        ),
+    ),
+    (
         "AI算力基础设施",
         (
             "英伟达",

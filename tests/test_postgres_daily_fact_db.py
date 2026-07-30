@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from storage.postgres_daily_fact_db import (
     POSTGRES_SCHEMA_STATEMENTS,
     PostgresDailyFactDb,
+    _compact_margin_pressure,
     _recent_replay_min_trade_date,
 )
 from daily_report_render import build_report_preflight
@@ -807,6 +808,31 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("expires_at timestamptz not null", schema)
         self.assertIn("primary key (namespace, cache_key, target_date)", schema)
         self.assertIn("create index if not exists idx_runtime_cache_entries_expires_at", schema)
+
+    def test_compact_margin_pressure_preserves_date_provenance(self):
+        result = _compact_margin_pressure(
+            {
+                "available": True,
+                "latest_data_date": "2026-07-24",
+                "target_date": "2026-07-27",
+                "stale_trade_days": 1,
+                "rows": [
+                    {
+                        "trade_date": "2026-07-24",
+                        "margin_balance_yi": 26666.03,
+                        "market_turnover_yi": 15379.48,
+                        "margin_source_date": "2026-07-24",
+                        "turnover_source_date": "2026-07-24",
+                        "query_date": "2026-07-27",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(result["stale_trade_days"], 1)
+        self.assertEqual(result["rows"][0]["margin_source_date"], "2026-07-24")
+        self.assertEqual(result["rows"][0]["turnover_source_date"], "2026-07-24")
+        self.assertEqual(result["rows"][0]["query_date"], "2026-07-27")
 
     def test_query_price_band_style_series_reads_daily_report_fact_snapshot(self):
         db = PostgresDailyFactDb(
@@ -2477,6 +2503,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     }
                 ],
                 "lhb_inst_detail_status": "available",
+                "lhb_source_record_count": 85,
+                "lhb_grouped_record_count": 76,
+                "lhb_provider": "tushare.top_list",
+                "lhb_data_status": "available",
                 "sector_quadrant": {"quadrants": {"highStrong": [{"sector": "电力", "stocks": [{"code": "raw"}]}]}},
                 "sector_ai_analysis": {"sector_tree": {"电力": {"raw": "skip"}}, "sector_count": 148},
                 "entry_cycle_calibration": {"cases": [{"code": "000001", "day_rows": [{"date": "raw"}]}]},
@@ -2616,6 +2646,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertTrue(any("new_high_feedback/k:14:new_high_count" in path for path in field_paths))
         self.assertTrue(any("lhb_inst_detail" in path and "exalter" in path for path in field_paths))
         self.assertTrue(any("lhb_inst_detail_status" in path for path in field_paths))
+        self.assertTrue(any("lhb_source_record_count" in path for path in field_paths))
+        self.assertTrue(any("lhb_grouped_record_count" in path for path in field_paths))
+        self.assertTrue(any("lhb_provider" in path for path in field_paths))
+        self.assertTrue(any("lhb_data_status" in path for path in field_paths))
         self.assertTrue(any("margin_pressure/k:21:latest_pressure_label" in path for path in field_paths))
         self.assertTrue(any("extreme_conviction_list" in path and "risk_reward_plan" in path for path in field_paths))
         self.assertTrue(any("candidate_trace_artifact" in path and "trace_count" in path for path in field_paths))
@@ -2644,6 +2678,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ("k:15:lhb_inst_detail/#0/k:4:code", "002837", None, None, "text"),
             ("k:15:lhb_inst_detail/#0/k:7:exalter", "机构专用", None, None, "text"),
             ("k:22:lhb_inst_detail_status", "available", None, None, "text"),
+            ("k:23:lhb_source_record_count", "", 85.0, None, "number"),
+            ("k:24:lhb_grouped_record_count", "", 76.0, None, "number"),
+            ("k:12:lhb_provider", "tushare.top_list", None, None, "text"),
+            ("k:15:lhb_data_status", "available", None, None, "text"),
             ("k:22:exchange_monitor_today/#0/k:4:code", "000001", None, None, "text"),
             ("k:24:exchange_monitor_nextday/#0/k:4:code", "000002", None, None, "text"),
         ], [], []]
@@ -2658,9 +2696,13 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["csi1000_index"]["price"], 6123.4)
         self.assertEqual(loaded["data"]["lhb_inst_detail"][0]["exalter"], "机构专用")
         self.assertEqual(loaded["data"]["lhb_inst_detail_status"], "available")
+        self.assertEqual(loaded["data"]["lhb_source_record_count"], 85)
+        self.assertEqual(loaded["data"]["lhb_grouped_record_count"], 76)
+        self.assertEqual(loaded["data"]["lhb_provider"], "tushare.top_list")
+        self.assertEqual(loaded["data"]["lhb_data_status"], "available")
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
-        self.assertEqual(loaded["field_count"], 18)
+        self.assertEqual(loaded["field_count"], 22)
 
     def test_index_validation_survives_fact_round_trip_and_preflight_rechecks_it(self):
         values = {

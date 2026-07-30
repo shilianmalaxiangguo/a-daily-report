@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as _dt
+
 from market_data.kline_dates import normalize_kline_date_str
 
 
@@ -26,6 +28,36 @@ def _safe_int(value, default=0):
 
 def _format_pct(value):
     return f"{_safe_float(value):.2f}%"
+
+
+def _calendar_trading_days_between(latest_date, target_date, trade_dates=None):
+    latest = normalize_kline_date_str(latest_date)
+    target = normalize_kline_date_str(target_date)
+    if not latest or not target or latest >= target:
+        return 0
+    normalized_trade_dates = sorted(
+        {
+            normalize_kline_date_str(value)
+            for value in trade_dates or []
+            if normalize_kline_date_str(value) and normalize_kline_date_str(value) <= target
+        }
+    )
+    if normalized_trade_dates:
+        if latest not in normalized_trade_dates or target not in normalized_trade_dates:
+            return None
+        return sum(1 for value in normalized_trade_dates if latest < value <= target)
+    try:
+        start = _dt.date.fromisoformat(latest)
+        end = _dt.date.fromisoformat(target)
+    except ValueError:
+        return 0
+    count = 0
+    day = start + _dt.timedelta(days=1)
+    while day <= end:
+        if day.weekday() < 5:
+            count += 1
+        day += _dt.timedelta(days=1)
+    return count
 
 
 def _pressure_label(ratio_pct):
@@ -66,7 +98,7 @@ def _normalize_source_row(row):
     exchange_count = _safe_int(row.get("exchange_count"), EXPECTED_MARGIN_EXCHANGE_COUNT)
     source_policy = str(row.get("source_policy") or row.get("source") or "tushare.margin+tushare.daily")
     ratio_pct = margin_balance / market_turnover * 100.0 if margin_balance > 0 and market_turnover > 0 else 0.0
-    return {
+    result = {
         "trade_date": trade_date,
         "margin_balance_yi": margin_balance,
         "short_selling_balance_yi": short_balance,
@@ -79,6 +111,11 @@ def _normalize_source_row(row):
         "source_policy": source_policy,
         "is_market_level_margin_balance": bool(row.get("is_market_level_margin_balance")) or "eastmoney.rzrq.total.RZYE" in source_policy,
     }
+    for key in ("margin_source_date", "turnover_source_date", "query_date"):
+        value = normalize_kline_date_str(row.get(key))
+        if value:
+            result[key] = value
+    return result
 
 
 def _valid_row(row):
@@ -151,6 +188,8 @@ def build_margin_pressure_snapshot(
     calibration_days=250,
     expected_exchange_count=EXPECTED_MARGIN_EXCHANGE_COUNT,
     target_date="",
+    trade_dates=None,
+    max_stale_trade_days=1,
 ):
     target_date = normalize_kline_date_str(target_date)
     normalized = [_normalize_source_row(row) for row in rows or []]
@@ -186,6 +225,26 @@ def build_margin_pressure_snapshot(
     latest = visible_rows[-1]
     latest_date = latest.get("trade_date") or ""
     is_stale_for_target = bool(target_date and latest_date and latest_date < target_date)
+    stale_trade_days = _calendar_trading_days_between(latest_date, target_date, trade_dates=trade_dates)
+    if is_stale_for_target and (
+        stale_trade_days is None or stale_trade_days > int(max_stale_trade_days or 0)
+    ):
+        lag_text = f"{stale_trade_days}个交易日" if stale_trade_days is not None else "无法确认的交易日数"
+        return {
+            "available": False,
+            "status": "stale_fact_date",
+            "source": source,
+            "message": (
+                f"融资承接压力最新事实截至{latest_date}，较目标日{target_date}滞后{lag_text}，"
+                "关键数据不完整，停止生成。"
+            ),
+            "rows": [],
+            "calibration_rows": calibration_rows,
+            "latest_data_date": latest_date,
+            "target_date": target_date,
+            "is_stale_for_target": True,
+            "stale_trade_days": stale_trade_days,
+        }
     calibration = _build_calibration(calibration_rows, latest)
     latest_ratio = _safe_float(latest.get("margin_turnover_ratio_pct"))
     latest_label = latest.get("pressure_label") or _pressure_label(latest_ratio)
@@ -198,7 +257,7 @@ def build_margin_pressure_snapshot(
     )
     usage_note = "融资余额是杠杆存量，两市成交额是承接流量；融资余额上升、成交额下降时，市场承接压力加重。"
     if is_stale_for_target:
-        usage_note = f"{usage_note} 本项数据截至{latest_date}，较目标日{target_date}滞后一交易日。"
+        usage_note = f"{usage_note} 本项数据截至{latest_date}，较目标日{target_date}滞后{stale_trade_days}个交易日。"
     return {
         "available": True,
         "status": "success",
@@ -210,6 +269,7 @@ def build_margin_pressure_snapshot(
         "latest_data_date": latest_date,
         "target_date": target_date,
         "is_stale_for_target": is_stale_for_target,
+        "stale_trade_days": stale_trade_days,
         "latest_margin_turnover_ratio_pct": latest_ratio,
         "latest_pressure_diff_pct": _safe_float(latest.get("pressure_diff_pct")),
         "summary": summary,

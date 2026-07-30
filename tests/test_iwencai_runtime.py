@@ -96,6 +96,21 @@ class IwencaiRuntimeTest(unittest.TestCase):
         tushare_mock.assert_called_once_with("000001", "2026-05-01", "2026-05-13", is_index=True)
         self.assertEqual(legacy_calls, [])
 
+    def test_default_fetch_daily_price_bars_uses_fallback_when_tushare_misses_target_date(self):
+        tushare_bars = [{"date": "2026-05-12", "close": 3370}]
+        fallback_bars = [
+            {"date": "2026-05-12", "close": 3370},
+            {"date": "2026-05-13", "close": 3388},
+        ]
+
+        with patch("market_data.tushare_service.fetch_daily_price_bars", return_value=tushare_bars), patch(
+            "market_data.daily_price_runtime.fetch_daily_price_bars",
+            return_value=fallback_bars,
+        ):
+            result = _default_fetch_daily_price_bars("000001", "2026-05-01", "2026-05-13", is_index=True)
+
+        self.assertEqual(result, fallback_bars)
+
     def test_major_indices_uses_tushare_price_bars_when_akshare_and_api_key_missing(self):
         bar_map = {
             "000001": [

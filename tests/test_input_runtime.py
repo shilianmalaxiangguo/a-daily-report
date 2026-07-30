@@ -687,8 +687,115 @@ assert snapshot["lhb_analysis"][0]["data_source"] == "finshare.get_lhb"
         self.assertEqual(result["etf_turnover_series"]["rows"][0]["etf_turnover_yi"], 4484.9)
         self.assertTrue(result["data_status"]["ETF两市成交额趋势"])
         self.assertTrue(result["step_status"]["ETF两市成交额趋势获取"])
-        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        logs_by_step = {log.get("step"): log for log in result.get("module_logs", [])}
+        provider_by_step = {step: (log.get("details") or {}).get("provider") for step, log in logs_by_step.items()}
         self.assertEqual(provider_by_step["request.etf_turnover_series"], "sina.etf.daily_amount")
+        self.assertEqual(
+            logs_by_step["request.etf_turnover_series"]["details"]["latest_data_date"],
+            "2026-05-18",
+        )
+        self.assertFalse(
+            logs_by_step["request.etf_turnover_series"]["details"]["is_stale_for_target"]
+        )
+
+    def test_run_input_runtime_rejects_stale_but_complete_etf_turnover_series(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: {
+                "available": True,
+                "source": "sina.etf.daily_amount",
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [{"trade_date": "2026-07-24", "etf_turnover_yi": 4484.9}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-07-27", helpers=helpers)
+
+        self.assertFalse(result["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(result["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in result["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertIn("目标日 2026-07-27", log["message"])
+        self.assertIn("最后事实日 2026-07-24", log["message"])
+        self.assertEqual(log["details"]["latest_data_date"], "2026-07-24")
+        self.assertTrue(log["details"]["is_stale_for_target"])
+
+    def test_run_input_runtime_rejects_etf_turnover_series_with_future_rows(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: {
+                "available": True,
+                "source": "sina.etf.daily_amount",
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [
+                    {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                    {"trade_date": "2026-07-30", "etf_turnover_yi": 4588.1},
+                ],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-07-29", helpers=helpers)
+
+        self.assertFalse(result["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(result["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in result["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertIn("未来事实日 2026-07-30", log["message"])
+        self.assertEqual(log["details"]["future_data_dates"], ["2026-07-30"])
+
+    def test_run_input_runtime_rejects_invalid_etf_turnover_dates(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: {
+                "available": True,
+                "source": "sina.etf.daily_amount",
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [
+                    {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                    {"trade_date": "07/30/2026", "etf_turnover_yi": 9999.0},
+                    "invalid-row",
+                ],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-07-29", helpers=helpers)
+
+        self.assertFalse(result["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(result["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in result["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertIn("无效事实日期", log["message"])
+        self.assertEqual(
+            log["details"]["invalid_data_dates"],
+            ["07/30/2026", "第3行非结构化"],
+        )
+
+    def test_run_input_runtime_rejects_unavailable_exact_date_etf_turnover_series(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: {
+                "available": False,
+                "source": "sina.etf.daily_amount",
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [{"trade_date": "2026-07-27", "etf_turnover_yi": 4484.9}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-07-27", helpers=helpers)
+
+        self.assertFalse(result["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(result["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in result["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertEqual(log["message"], "ETF两市成交额趋势不可用")
 
     def test_run_input_runtime_rejects_etf_turnover_coverage_anomaly(self):
         input_runtime = importlib.import_module("input.runtime")

@@ -5063,7 +5063,19 @@ class ReportRuntimeTest(unittest.TestCase):
             _normalize_report_timer_steps=lambda *args, **kwargs: [],
             render_execution_appendix=lambda *args, **kwargs: ["## 附录C：个股观察生命周期", "| 股票 | 来自哪天日报 | 当前处理 |"],
             _compact_report_for_mvp=lambda report, stage_lookup=None: report,
-            run_report_tail_summary=lambda payload: {"value": {"lines": ["### 最终结论", "| 事项 | 结论 |", "| 明日动作 | 10:00看承接 |"], "module_logs": [], "exports": {}}},
+            run_report_tail_summary=lambda payload: {
+                "value": {
+                    "lines": [
+                        "### 最终结论",
+                        "| 事项 | 结论 |",
+                        "| 明日动作 | 10:00看承接 |",
+                        "| 明日风险预判 | 市场环境偏强，但现在还只有重点盯盘股，还没有缩到唯一合格对象 |",
+                        "- ⏳ 明新旭腾(605068) - 过程候选，重点观察确认资格：重点观察名单，且承接未坏",
+                    ],
+                    "module_logs": [],
+                    "exports": {},
+                }
+            },
             run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
             run_execution_appendix_tail=lambda payload: {"value": {"lines": ["## 附录C：个股观察生命周期", "| 股票 | 来自哪天日报 | 当前处理 |"], "module_logs": [], "exports": {}}},
             _render_market_research_snapshot_section=lambda snapshot, compact=False: [
@@ -5080,8 +5092,13 @@ class ReportRuntimeTest(unittest.TestCase):
             _render_step0_follow_section=lambda plan, snapshot, compact=False: ["### 明日执行计划", "| 时间 | 动作 |", "| 10:00 | 看承接 |"],
         )
 
+        data = {
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+            "enable_selection_workflow_quote_backfill": True,
+        }
         result = report_runtime.render_markdown_report_runtime(
-            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            data,
             "2026-04-24",
             helpers=helpers,
             config={},
@@ -5099,9 +5116,19 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("### 1. 指数与市场底色", rendered)
         self.assertIn("[半导体] 修复", rendered)
         self.assertIn("### 1. 龙虎榜资金状态", rendered)
-        self.assertIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", rendered)
+        self.assertIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 过程处理 |", rendered)
+        self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", rendered)
         self.assertIn("### 附录C：个股观察生命周期", rendered)
         self.assertNotIn("附录：附录C", rendered)
+        self.assertNotIn("重点盯盘股", rendered)
+        self.assertNotIn("重点观察确认资格", rendered)
+        self.assertNotIn("重点观察名单", rendered)
+        self.assertIn("当前仍未形成唯一合格对象", rendered)
+        self.assertIn("过程候选，仅保留过程回看：历史筛选时承接未坏", rendered)
+        self.assertEqual(
+            data["execution_stage_context"]["final_gate"],
+            data["market_research_snapshot"]["front_page_final_gate"],
+        )
 
     def test_render_markdown_report_runtime_renders_mainline_turnover_text_in_full_and_summary(self):
         from report.front_summary_renderer import render_front_digest as _render_front_digest_actual
@@ -6618,7 +6645,7 @@ assert rendered == "# migrated"
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 |", report)
         self.assertNotIn("强核心(000001)：当前账户买不了一手，只保留观察", report)
         self.assertNotIn("50%条件执行，只做合格对象", report)
-        self.assertIn("最终执行条件: 观察", stdout.getvalue())
+        self.assertIn("最终执行条件: 无明日执行对象，保持观察", stdout.getvalue())
         self.assertNotIn("最终执行条件: 明日目标标的保留50%条件执行", stdout.getvalue())
 
     def test_render_markdown_report_runtime_appends_ai_friction_knowledge_note_when_requested(self):
@@ -8539,10 +8566,89 @@ def _runtime_binding_probe(
         self.assertIs(market_snapshot["selection_workflow"], workflow)
         self.assertIs(front_snapshot["selection_workflow"], workflow)
         self.assertIs(data["execution_stage_context"], execution_context)
+        self.assertNotIn("data", execution_context)
+        self.assertFalse(any(callable(value) for value in execution_context.values()))
         self.assertIs(execution_context["market_research_snapshot"], market_snapshot)
         self.assertIs(data["execution_stage_context"]["selection_workflow"], workflow)
         self.assertIs(data["market_research_snapshot"]["selection_workflow"], workflow)
         self.assertIs(execution_context["market_research_snapshot"]["selection_workflow"], workflow)
+
+    def test_compact_execution_stage_context_removes_runtime_only_references(self):
+        data = {"target_date": "2026-07-29"}
+        context = {
+            "data": data,
+            "builder": lambda: None,
+            "selection_workflow": {"schema_version": "selection_workflow.v1"},
+        }
+
+        compacted = report_runtime._compact_execution_stage_context_for_persistence(context)
+
+        self.assertIsNot(compacted, context)
+        self.assertNotIn("data", compacted)
+        self.assertNotIn("builder", compacted)
+        self.assertIs(context["data"], data)
+        self.assertTrue(callable(context["builder"]))
+        self.assertEqual(
+            compacted["selection_workflow"],
+            {"schema_version": "selection_workflow.v1"},
+        )
+
+    def test_compact_execution_stage_context_persists_effective_final_gate(self):
+        raw_gate = {
+            "gate_status": "可做",
+            "position_level": "50%条件执行",
+            "can_new_entry": True,
+        }
+        effective_gate = {
+            "gate_status": "只观察",
+            "position_level": "0%不参与",
+            "can_new_entry": False,
+        }
+        context = {"final_gate": raw_gate}
+
+        compacted = report_runtime._compact_execution_stage_context_for_persistence(
+            context,
+            effective_final_gate=effective_gate,
+        )
+
+        self.assertEqual(compacted["final_gate"], effective_gate)
+        self.assertIsNot(compacted["final_gate"], effective_gate)
+        self.assertEqual(context["final_gate"], raw_gate)
+
+    def test_context_compaction_does_not_remove_helpers_before_pk_rerender(self):
+        price_focus_calls = []
+
+        def build_trade_price_focus(minute_plan, stop_plan):
+            price_focus_calls.append((minute_plan, stop_plan))
+            return {"key_zone_display": "10.00-10.50"}
+
+        context = {
+            "data": {"target_date": "2026-07-29"},
+            "build_trade_price_focus": build_trade_price_focus,
+            "selection_workflow": {"schema_version": "selection_workflow.v1"},
+        }
+        persisted = report_runtime._compact_execution_stage_context_for_persistence(context)
+
+        def rerender(runtime_context, *args, **kwargs):
+            price_focus = runtime_context["build_trade_price_focus"]({}, {})
+            return {
+                "lines": [price_focus["key_zone_display"]],
+                "module_logs": [],
+                "exports": {},
+            }
+
+        with patch.object(report_runtime, "_build_pk_decision_runtime", side_effect=rerender):
+            result = report_runtime._rerender_pk_decision_stage_after_final_resolution(
+                execution_stage_context=context,
+                stage_lookup={},
+                final_target_resolution={},
+                selection_workflow=context["selection_workflow"],
+            )
+
+        self.assertEqual(result["lines"], ["10.00-10.50"])
+        self.assertEqual(len(price_focus_calls), 1)
+        self.assertTrue(callable(context["build_trade_price_focus"]))
+        self.assertNotIn("build_trade_price_focus", persisted)
 
     def test_sector_capital_carrier_strategy_becomes_selection_workflow_final_object(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
@@ -8876,6 +8982,10 @@ def _runtime_binding_probe(
                 "participation_mode": "full_100",
                 "final_action": "100%核心进攻",
                 "sizing_reason": "旧结论",
+                "trigger_text": "09:50-10:10站上18.72且不破17.78",
+                "support_price": 17.78,
+                "candidate_feedback_reasons": ["具备09:50-10:10验证链"],
+                "candidate_feedback_score": 3,
             },
             workflow,
         )
@@ -8885,6 +8995,10 @@ def _runtime_binding_probe(
         self.assertEqual(synced["participation_mode"], "no_trade")
         self.assertEqual(synced["final_action"], "0%不参与")
         self.assertIn("盘前叙事复核未通过", synced["sizing_reason"])
+        self.assertNotIn("trigger_text", synced)
+        self.assertNotIn("support_price", synced)
+        self.assertEqual(synced["candidate_feedback_reasons"], [])
+        self.assertEqual(synced["candidate_feedback_score"], 0)
 
     def test_selection_workflow_zero_replaces_stale_positive_action_when_pct_already_zero(self):
         workflow = {
@@ -9577,33 +9691,201 @@ def _runtime_binding_probe(
         self.assertEqual(selected, {})
 
     def test_runtime_replaces_early_pk_stage_after_empty_final_resolution(self):
-        original = [
-            "##### 附录：Step 4 - 明日观察位预计算",
-            "step4",
-            "##### 附录：Step 5 - PK决胜局（期望值模型）",
-            "**最终动作表**（只展示真正具备参与资格的对象）:",
-            "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
-            "| ⏳ 确认后执行预案 | 和远气体 | 002971 | 09:50-10:10站上52.75 | 50.11 |",
-            "**先看顺序**（优先盯最能反映主线承接的对象）:",
-            "- 👀 和远气体(002971) - 跨线继续看谁，09:50-10:10观察价52.75",
-            "**过程观察25日跟踪表**",
-            "tracking",
-        ]
         replacement = [
             "##### 附录：Step 5 - PK决胜局（期望值模型）",
             "**最终动作表**（只展示真正具备参与资格的对象）:",
             "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
             "| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |",
         ]
+        for stage_heading in (
+            "##### 附录：Step 5 - PK决胜局（期望值模型）",
+            "##### 附录：Step 5 - 过程候选最终复核",
+        ):
+            with self.subTest(stage_heading=stage_heading):
+                original = [
+                    "##### 附录：Step 4 - 明日观察位预计算",
+                    "step4",
+                    stage_heading,
+                    "**最终动作表**（只展示真正具备参与资格的对象）:",
+                    "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
+                    "| ⏳ 确认后执行预案 | 和远气体 | 002971 | 09:50-10:10站上52.75 | 50.11 |",
+                    "**先看顺序**（优先盯最能反映主线承接的对象）:",
+                    "- 👀 和远气体(002971) - 跨线继续看谁，09:50-10:10观察价52.75",
+                    "**过程观察25日跟踪表**",
+                    "tracking",
+                ]
 
-        replaced = report_runtime._replace_pk_decision_stage_lines(original, replacement)
-        rendered = "\n".join(replaced)
+                replaced = report_runtime._replace_pk_decision_stage_lines(original, replacement)
+                rendered = "\n".join(replaced)
 
-        self.assertIn("##### 附录：Step 4 - 明日观察位预计算", rendered)
-        self.assertIn("**过程观察25日跟踪表**", rendered)
-        self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", rendered)
-        self.assertNotIn("确认后执行预案", rendered)
-        self.assertNotIn("和远气体", rendered)
+                self.assertIn("##### 附录：Step 4 - 明日观察位预计算", rendered)
+                self.assertIn("**过程观察25日跟踪表**", rendered)
+                self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", rendered)
+                self.assertNotIn("确认后执行预案", rendered)
+                self.assertNotIn("和远气体", rendered)
+
+    def test_runtime_empty_final_resolution_clears_stale_watch_anchor_but_keeps_process_pool(self):
+        stale_anchor = {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"}
+        process_row = {
+            **stale_anchor,
+            "candidate_role": "板块锚",
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "auction_reseal",
+            "participation_window": "竞价表态 + 回封参与",
+            "attack_state": "50%",
+            "buy_window": "09:30-09:35",
+            "sniper_role": "明日主买对象",
+            "primary_buy_candidate": True,
+            "dest": "可按计划",
+            "reason": "候选观察 / 极致加速龙头",
+            "condition": "保留原始过程证据",
+            "entry_price": 18.72,
+            "stop_loss": 17.78,
+            "display_anchor_price": 17.78,
+            "execution_stop": 17.78,
+            "entry_timing": "ten_confirm",
+            "entry_timing_reason": "等待09:50-10:10窗口",
+            "ma_reversion_window": "09:50-10:10",
+            "watch_anchor_type": "跨线明天先盯哪只",
+            "tmr_forecast": "3进4，若竞价高开可能继续",
+            "permission_label": "重点观察确认资格",
+            "minute_plan": {"confirm_price_60m": 18.72},
+            "planned_participation": {
+                "trigger_text": "09:50站上18.72",
+                "support_price": 17.78,
+                "confirm_price": 18.72,
+                "minute_plan": {"confirm_price_60m": 18.72},
+            },
+            "participation_script": {
+                "trigger_text": "09:50站上18.72",
+                "support_price": 17.78,
+                "confirm_price": 18.72,
+                "minute_plan": {"confirm_price_60m": 18.72},
+            },
+        }
+        data = {
+            "watch_anchor": dict(stale_anchor),
+            "candidate_snapshot": {"watch_anchor": dict(stale_anchor)},
+        }
+        execution_stage_context = {
+            "watch_anchor": dict(stale_anchor),
+            "watch_anchor_type": "跨线观察",
+            "evaluated_stocks": [dict(process_row)],
+            "waiting_stocks": [dict(process_row)],
+            "focus_group": [dict(process_row)],
+            "core_stocks": [dict(process_row)],
+            "crossline_observation_stocks": [dict(process_row)],
+            "sector_derived_candidates": [dict(process_row)],
+            "candidate_quality_samples": [dict(process_row), dict(stale_anchor)],
+            "special_probe_verdict": {"probe_candidate": dict(process_row)},
+            "step2_bundle": {
+                "evaluated_stocks": [dict(process_row)],
+                "crossline_evaluated_stocks": [dict(process_row)],
+                "crossline_ignored_stocks": [dict(process_row)],
+                "extreme_conviction_list": [dict(process_row)],
+            },
+            "step3_bundle": {
+                "all_check_stocks": [dict(process_row)],
+                "focus_group": [dict(process_row)],
+                "stock_rows": [dict(process_row)],
+                "by_code": {"605068": dict(process_row)},
+            },
+        }
+        market_research_snapshot = {
+            "watch_anchor": dict(stale_anchor),
+            "candidate_snapshot": {"watch_anchor": dict(stale_anchor)},
+        }
+
+        selected = report_runtime._runtime_sync_selected_candidate_from_final_resolution(
+            {
+                "capital_priority_decision": {"capital_priority": "wait"},
+                "watch_target": {},
+            },
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
+
+        self.assertEqual(selected, {})
+        for target in (data, execution_stage_context, market_research_snapshot):
+            self.assertNotIn("watch_anchor", target)
+            self.assertNotIn("watch_anchor_type", target)
+            self.assertNotIn("front_observation_target", target)
+        self.assertNotIn("watch_anchor", data["candidate_snapshot"])
+        self.assertNotIn("watch_anchor", market_research_snapshot["candidate_snapshot"])
+        retained_rows = [
+            execution_stage_context["evaluated_stocks"][0],
+            execution_stage_context["waiting_stocks"][0],
+            execution_stage_context["focus_group"][0],
+            execution_stage_context["core_stocks"][0],
+            execution_stage_context["crossline_observation_stocks"][0],
+            execution_stage_context["sector_derived_candidates"][0],
+            execution_stage_context["candidate_quality_samples"][0],
+            execution_stage_context["special_probe_verdict"]["probe_candidate"],
+            execution_stage_context["step2_bundle"]["evaluated_stocks"][0],
+            execution_stage_context["step2_bundle"]["crossline_evaluated_stocks"][0],
+            execution_stage_context["step2_bundle"]["crossline_ignored_stocks"][0],
+            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0],
+            execution_stage_context["step3_bundle"]["all_check_stocks"][0],
+            execution_stage_context["step3_bundle"]["focus_group"][0],
+            execution_stage_context["step3_bundle"]["stock_rows"][0],
+            execution_stage_context["step3_bundle"]["by_code"]["605068"],
+        ]
+        self.assertEqual(len(retained_rows), 16)
+        self.assertEqual(execution_stage_context["candidate_quality_samples"][1], stale_anchor)
+        self.assertEqual(
+            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0]["reason"],
+            "候选观察 / 极致加速龙头",
+        )
+        self.assertEqual(
+            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0]["condition"],
+            "保留原始过程证据",
+        )
+        for row in retained_rows:
+            self.assertEqual(row["candidate_layer"], "process_observation")
+            self.assertEqual(row["execution_eligibility"], "observation_only")
+            self.assertEqual(row["attack_state"], "0%不参与")
+            self.assertEqual(row["sniper_role"], "候选观察")
+            self.assertFalse(row["primary_buy_candidate"])
+            self.assertEqual(row["dest"], "只作过程回放，不新增参与")
+            self.assertEqual(row["tmr_forecast"], "只作过程回放，不新增参与")
+            self.assertEqual(row["permission_label"], "过程样本，无当前观察资格")
+            self.assertNotIn("entry_price", row)
+            self.assertNotIn("stop_loss", row)
+            self.assertNotIn("display_anchor_price", row)
+            self.assertNotIn("execution_stop", row)
+            self.assertNotIn("entry_timing", row)
+            self.assertNotIn("entry_timing_reason", row)
+            self.assertNotIn("ma_reversion_window", row)
+            self.assertEqual(row["watch_anchor_type"], "过程候选回看样本")
+            self.assertEqual(row["minute_plan"], {})
+            for plan_key in ("planned_participation", "participation_script"):
+                plan = row[plan_key]
+                self.assertEqual(plan["action"], "skip")
+                self.assertEqual(plan["attack_state"], "0%不参与")
+                self.assertEqual(plan["target_position_pct"], 0)
+                self.assertEqual(plan["minute_plan"], {})
+                self.assertNotIn("trigger_text", plan)
+                self.assertNotIn("support_price", plan)
+                self.assertNotIn("confirm_price", plan)
+
+        appendix_c = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-07-29",
+            execution_stage_context=execution_stage_context,
+        )
+        self.assertTrue(appendix_c["current_stock_monitoring_pool"])
+        self.assertTrue(
+            all(
+                item["current_action"] == "只作过程回放，不新增参与"
+                for item in appendix_c["current_stock_monitoring_pool"]
+            )
+        )
+        self.assertTrue(
+            all(
+                item["current_action"] == "只作过程回放，不新增参与"
+                for item in appendix_c["stock_lifecycle_records"]
+            )
+        )
 
     def test_zero_front_page_triggers_process_candidate_soft_word_cleanup(self):
         lines = [
@@ -9612,6 +9894,9 @@ def _runtime_binding_probe(
             "|------|------|",
             "| 仓位姿态 | 0%不参与 |",
             "| 最终对象 | 无 |",
+            "**明天重点候选组**（过程证据）:",
+            "| 股票 | 代码 | 明日资格 |",
+            "| 明新旭腾 | 605068 | 可做 |",
             "**备用观察**（观察位未触发，明日不操作）:",
             "- ⏳ 和远气体(002971) - 过程候选，等观察位出现，09:50-10:10观察价52.75",
             "- 👀 和远气体(002971) - 跨线继续看谁，09:50-10:10观察价52.75",
@@ -9621,8 +9906,13 @@ def _runtime_binding_probe(
 
         self.assertIn("仅保留过程回看", rendered)
         self.assertIn("跨线回看样本", rendered)
+        self.assertIn("过程候选回看组", rendered)
+        self.assertIn("| 明新旭腾 | 605068 | 条件未满足，只观察 |", rendered)
         self.assertNotIn("等观察位出现", rendered)
         self.assertNotIn("跨线继续看谁", rendered)
+        self.assertNotIn("明天重点候选组", rendered)
+        self.assertNotIn("明日资格", rendered)
+        self.assertNotIn("09:50-10:10观察价52.75", rendered)
 
     def test_zero_appendix_relabels_entry_plan_waiting_process_candidate(self):
         lines = [
@@ -9630,7 +9920,7 @@ def _runtime_binding_probe(
             "**明日观察位预计算表**:",
             "| 股票 | 代码 | 观察资格 | 怎么观察 | 日线预设区间 | 09:50-10:10观察价 | 价格怎么盯 | 明天具体怎么做 |",
             "|------|------|----------|----------|------------|--------------|----------|----------|",
-            "| 和远气体 | 002971 | 过程候选 | 观察 | - | 52.75 | 关键位/带50.11（支撑/失效） | ⏳明日继续观察 |",
+            "| 和远气体 | 002971 | 重点观察确认资格 | 观察 | - | 52.75 | 关键位/带50.11（支撑/失效） | ⏳明日继续观察 |",
             "**明日触发条件汇总**:",
             "**明日继续观察**（1只，等观察位出现）:",
             "- ⏳ 和远气体(002971) - 过程候选，等观察位出现，09:50-10:10观察价52.75",
@@ -9656,11 +9946,80 @@ def _runtime_binding_probe(
             )
         )
 
-        self.assertIn("| 和远气体 | 002971 | 过程候选 | 观察 | - | 52.75 | 关键位/带50.11（支撑/失效） | 只作过程回放，不新增参与 |", rendered)
+        self.assertIn("| 和远气体 | 002971 | 过程样本，无当前观察资格 | 仅回放 | - | - | 不保留未来观察价 | 只作过程回放，不新增参与 |", rendered)
         self.assertIn("**过程候选回看**（1只，不作为明日对象）:（过程证据）", rendered)
         self.assertIn("过程候选，仅保留过程回看", rendered)
         self.assertNotIn("⏳明日继续观察", rendered)
         self.assertNotIn("等观察位出现", rendered)
+        self.assertNotIn("09:50-10:10观察价52.75", rendered)
+
+    def test_empty_final_appendix_reassembly_demotes_named_tomorrow_watch_to_process_evidence(self):
+        original = [
+            "##### 附录：Step 4 - 明日观察位预计算",
+            "step4",
+            "##### 附录：Step 5 - PK决胜局（期望值模型）",
+            "**明天先盯哪只**: 旧候选(000001)",
+            "**过程观察25日跟踪表**",
+            "- **跨线明天先盯哪只**: 明新旭腾(605068) - 09:50-10:10观察价待盘中确认",
+        ]
+        replacement = [
+            "##### 附录：Step 5 - 过程候选最终复核",
+            "**重点盯盘股排序**（1只，只看谁更适合进入复盘和下一份日报）:",
+            "| 股票 | 来源 | 过程价位记录 | 候选顺位 | 说明 |",
+            "|------|------|--------------|----------|------|",
+            "| 明新旭腾 | 重点观察确认资格 | 18.72 | 第1顺位 | 历史筛选时承接未坏 |",
+            "**明天先盯哪只**: 明新旭腾(605068)",
+            "- **明天先盯哪只**: 明新旭腾(605068)",
+            "- **跨线明天先盯哪只**: 明新旭腾(605068)",
+            "- **现在重点盯什么**: 09:50-10:10观察价待盘中确认",
+            "- **过程价位记录**: 18.72",
+            "- **价格怎么盯**: 关键位/带17.78（支撑/失效）",
+            "- **观察纪律**: 明日只记录09:50-10:10窗口，不在盘中升级为买入对象",
+            "- 市场环境偏强，但当前没有当晚已决定的执行对象，本时段只观察重点盯盘股承接",
+            "- 继续只盯观察对象，不做多票分散",
+            "- **现在是什么情况**: 市场环境偏强，但当晚没有已决定执行对象，明日只观察它自己证明",
+            "- **明天是否参与**: 市场环境偏强，但现在还只有重点盯盘股，还没有缩到唯一合格对象",
+            "- ⏳ 明新旭腾(605068) - 过程候选，重点观察确认资格：重点观察名单，且承接未坏",
+        ]
+
+        rerendered = report_runtime._replace_pk_decision_stage_lines(original, replacement)
+        appendix = report_runtime._normalize_attack_preview_appendix_lines(
+            rerendered,
+            final_target_resolution={
+                "watch_target": {},
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+        )
+        rendered = "\n".join(
+            report_runtime._sanitize_report_lines(
+                [
+                    "## 日报裁决总览",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 仓位姿态 | 0%不参与 |",
+                    "| 最终对象 | 无 |",
+                    "",
+                    "## 八、详细附录",
+                    "",
+                ]
+                + appendix
+            )
+        )
+
+        self.assertIn("过程候选回看样本", rendered)
+        self.assertIn("明新旭腾(605068)", rendered)
+        self.assertIn("只作过程回放，不新增参与", rendered)
+        self.assertNotIn("明天先盯哪只", rendered)
+        self.assertNotIn("观察价待盘中确认", rendered)
+        self.assertNotIn("18.72", rendered)
+        self.assertNotIn("17.78", rendered)
+        self.assertNotIn("明日只记录09:50-10:10窗口", rendered)
+        self.assertNotIn("只观察重点盯盘股承接", rendered)
+        self.assertNotIn("继续只盯观察对象", rendered)
+        self.assertNotIn("重点盯盘股", rendered)
+        self.assertNotIn("明日只观察它自己证明", rendered)
+        self.assertNotIn("重点观察确认资格", rendered)
+        self.assertNotIn("重点观察名单", rendered)
 
     def test_workflow_empty_final_dict_suppresses_selected_candidate(self):
         selected = {
@@ -11179,7 +11538,12 @@ def _runtime_binding_probe(
 
     def test_front_page_final_gate_keeps_observation_when_opportunity_risk_blocks_target(self):
         gate = report_runtime._build_effective_front_page_final_gate(
-            {"final_action": "只保留观察，等风险价格补齐"},
+            {
+                "final_action": "只保留观察，等风险价格补齐",
+                "gate_status": "可做",
+                "operation_state": "进攻态",
+                "position_level": "50%条件执行",
+            },
             selected_position_candidate={"name": "兆易创新", "code": "603986"},
             position_decision={"target_position_pct": 100, "signal_grade": "100"},
             opportunity_comparison={
@@ -11191,9 +11555,84 @@ def _runtime_binding_probe(
         )
 
         self.assertEqual(gate["final_action"], "只保留观察，等风险价格补齐")
+        self.assertEqual(gate["gate_status"], "只观察")
+        self.assertEqual(gate["operation_state"], "观察态")
+        self.assertEqual(gate["position_level"], "0%不参与")
         self.assertFalse(gate["allow_attack_50_ready"])
         self.assertNotIn("100%核心进攻", gate["final_action"])
         self.assertNotIn("50%条件执行", gate["final_action"])
+
+    def test_front_page_final_gate_uses_zero_when_final_wait_clears_candidate(self):
+        gate = report_runtime._build_effective_front_page_final_gate(
+            {
+                "final_action": "50%条件执行只围绕主线核心；条件不满足回到0%",
+                "can_new_entry": True,
+                "allow_attack_50_ready": True,
+                "base_position_cap_pct": 50,
+                "gate_status": "可做",
+                "operation_state": "进攻态",
+                "position_level": "50%条件执行",
+            },
+            selected_position_candidate={},
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            final_target_resolution={
+                "new_entry_target": {},
+                "display_target": {},
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "无明日执行对象，保持0%不参与",
+                },
+            },
+        )
+
+        self.assertFalse(gate["can_new_entry"])
+        self.assertFalse(gate["allow_attack_50_ready"])
+        self.assertEqual(gate["base_position_cap_pct"], 0)
+        self.assertEqual(gate["gate_status"], "只观察")
+        self.assertEqual(gate["operation_state"], "观察态")
+        self.assertEqual(gate["position_level"], "0%不参与")
+        self.assertIn("无明日执行对象", gate["final_action"])
+        self.assertNotIn("50%条件执行", gate["final_action"])
+
+    def test_front_page_final_gate_keeps_risk_reason_after_final_wait_clears_candidate(self):
+        opportunity_comparison = {
+            "comparison": {
+                "max_participation_pct": 0,
+                "final_action": "只保留观察，等风险价格补齐",
+            }
+        }
+        gate = report_runtime._build_effective_front_page_final_gate(
+            {
+                "final_action": "50%条件执行只围绕主线核心；条件不满足回到0%",
+                "can_new_entry": True,
+                "allow_attack_50_ready": True,
+                "base_position_cap_pct": 50,
+                "gate_status": "可做",
+                "operation_state": "进攻态",
+                "position_level": "50%条件执行",
+            },
+            selected_position_candidate={},
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            opportunity_comparison=opportunity_comparison,
+            final_target_resolution={
+                "new_entry_target": {},
+                "display_target": {},
+                "opportunity_comparison": opportunity_comparison,
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "无明日执行对象，保持观察",
+                },
+            },
+        )
+
+        self.assertFalse(gate["can_new_entry"])
+        self.assertFalse(gate["allow_attack_50_ready"])
+        self.assertEqual(gate["base_position_cap_pct"], 0)
+        self.assertEqual(gate["gate_status"], "只观察")
+        self.assertEqual(gate["operation_state"], "观察态")
+        self.assertEqual(gate["position_level"], "0%不参与")
+        self.assertEqual(gate["final_action"], "只保留观察，等风险价格补齐")
+        self.assertIn("风险价格", gate["final_participation"])
 
     def test_front_page_final_conditions_do_not_promote_stale_candidate_after_final_wait(self):
         final_target_resolution = {
@@ -11602,6 +12041,15 @@ def _runtime_binding_probe(
         self.assertEqual(identity["source"], "none")
         self.assertEqual(identity["key"], "")
         self.assertEqual(report_runtime._runtime_observation_anchor_label(resolution), "")
+
+    def test_runtime_positive_priority_without_real_target_treats_resolution_as_waiting(self):
+        resolution = {
+            "new_entry_target": {},
+            "watch_target": {},
+            "capital_priority_decision": {"capital_priority": "new_entry"},
+        }
+
+        self.assertTrue(report_runtime._runtime_final_resolution_waits_without_watch_target(resolution))
 
     def test_runtime_recovers_huadian_old_position_from_damaged_t_summary(self):
         old_position = report_runtime._runtime_old_position_for_opportunity(
@@ -14230,6 +14678,50 @@ def _runtime_binding_probe(
         self.assertNotIn("回封/打板", rendered)
         self.assertNotIn("试错条件", rendered)
         self.assertNotIn("| 50% |", rendered)
+
+    def test_sanitize_zero_report_removes_positive_market_research_actions(self):
+        lines = [
+            "| 最终对象 | 无 |",
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 修复 | 暂无 | 0%不参与 | 0%：没有合格标的就不参与 |",
+            "**明日裁决**: 🟢 跟随主线",
+            "**开盘前动作**: 只在主线和异常承接对象里按三段固定交易窗口处理；B1先到1x/50%取得参与权，B2只在确认后补到2x/100%；B1未变强不补B2，走弱先取消B2并检查B1",
+            "**怎么执行**：日线结构中枢定环境，强核心走09:30-09:35竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口；B1先到1x/50%取得参与权，B2只在确认后补到2x/100%；B1未变强不补B2，走弱先取消B2并检查B1，按失效价和单笔-5%底线处理风险",
+            "#### 附录：🟡 明日市场环境：只观察 / 进攻态",
+            "- **最终操作状态**: 进攻态",
+            "- **明天具体怎么做**: 只观察只围绕主线核心；09:30-09:35或09:50-10:10窗口条件成立才参与，不满足回到0%",
+            "- **环境推导**: 主线进入强化阶段，买也只买最强，不做分散试错",
+            "- **日线预估买入区间**: 49.01 - 49.99元",
+            "- **硬止损底线**: 47.02元",
+            "- **止盈观察位**: 54.45元",
+            "- **执行说明**: 盘前预案先给-5%硬止损底线，买入后按失效价和单笔-5%底线处理风险",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("**明日裁决**: 0%不参与；市场环境偏强只作研究证据", rendered)
+        self.assertIn("**开盘前动作**: 最终0%不生成B1/B2", rendered)
+        self.assertIn(report_runtime.ZERO_OBSERVATION_REVIEW_TEXT, rendered)
+        self.assertIn("明日市场环境：只观察 / 环境偏强（研究证据）", rendered)
+        self.assertIn("- **最终操作状态**: 只观察；环境偏强仅作研究证据", rendered)
+        self.assertIn("固定窗口结果只进入复盘，不生成盘中买入决定", rendered)
+        self.assertIn("只观察最强方向，不新增参与", rendered)
+        self.assertNotIn("- **日线预估买入区间**:", rendered)
+        self.assertNotIn("- **硬止损底线**:", rendered)
+        self.assertNotIn("- **止盈观察位**:", rendered)
+        self.assertNotIn("🟢 跟随主线", rendered)
+        self.assertNotIn("取得参与权", rendered)
+        self.assertNotIn("进攻态", rendered)
+        self.assertNotIn("条件成立才参与", rendered)
+        self.assertNotIn("买入后按失效价", rendered)
+
+        from report.report_acceptance_audit import _audit_zero_position_participation_language
+
+        self.assertEqual(
+            _audit_zero_position_participation_language(rendered.splitlines()),
+            [],
+        )
 
     def test_runtime_appendix_keeps_selected_candidate_observation_only_under_zero_participation(self):
         lines = [

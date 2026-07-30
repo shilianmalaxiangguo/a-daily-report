@@ -188,6 +188,163 @@ report generates.
 Correct: reuse only the exact prior trading day's accepted window, append one
 source-dated current row, and run the full coverage check again.
 
+### Daily Report As-Of Date Contract
+
+#### 1. Scope / Trigger
+
+Apply this contract whenever a daily-report fact can be published on a date
+different from the report target date. It applies to fresh generation after the
+normal 17:30 Asia/Shanghai start, PostgreSQL fast rendering, explicit
+PostgreSQL-only rendering, and replay validation. The 17:30 start is an
+operational precondition, not a reason for source code to infer dates from the
+system clock.
+
+This contract currently distinguishes two fact families:
+
+- ETF turnover is a target-date close fact. The latest valid row must equal the
+  requested report date.
+- Margin pressure may use the target date or exactly one prior trading day,
+  because exchange margin aggregates are normally published the next morning.
+
+Do not apply one family's publication lag to another family. In particular,
+the next-morning schedule for ETF share, size, or NAV data does not make ETF
+turnover a prior-day fact.
+
+#### 2. Signatures
+
+The owning functions and consumers are:
+
+```python
+build_margin_pressure_snapshot(
+    rows,
+    *,
+    target_date="",
+    trade_dates=None,
+    max_stale_trade_days=1,
+    **kwargs,
+) -> dict
+
+get_etf_turnover_series_from_sina_first(
+    target_date=None,
+    *,
+    overall_timeout_seconds=120,
+    **kwargs,
+) -> dict
+
+build_report_preflight(data, target_date) -> dict
+_select_daily_report_data_path(args, target_date) -> dict
+```
+
+#### 3. Contracts
+
+ETF turnover payloads must expose:
+
+```python
+{
+    "available": bool,
+    "requested_trade_date": "YYYY-MM-DD",
+    "latest_data_date": "YYYY-MM-DD | ''",
+    "is_stale_for_target": bool,
+    "coverage_anomaly": bool,
+    "rows": list,
+}
+```
+
+- `latest_data_date` is the last valid row date after filtering rows to dates
+  no later than `requested_trade_date`. Older persisted payloads may derive it
+  from `rows`; a missing metadata field never bypasses date validation.
+- `available` may be true only when rows exist and `latest_data_date` equals
+  `requested_trade_date`. Coverage remains an independent diagnostic contract:
+  consumers require both exact date and `coverage_anomaly=False`.
+- A missing target-date ETF row must trigger the existing same-day Sina current
+  list and target-date Tushare `fund_daily` alternatives within the existing
+  120-second budget. If neither proves the target date, return unavailable;
+  never use a prior-day ETF turnover as the target-day value.
+- Input status, report preflight, and PostgreSQL fast-render selection must all
+  re-check the ETF latest date. A persisted success flag or a smooth 25-row
+  series is not proof of target-date ownership.
+
+Margin-pressure payloads must expose `target_date`, `latest_data_date`,
+`is_stale_for_target`, and `stale_trade_days` when a target date is supplied.
+The lag is counted with an explicit trading calendar when available. If the
+calendar cannot prove the lag, source-row gaps must not be interpreted as
+market holidays. A primary source older than the allowed lag may try a newer,
+source-dated market-level margin source before returning unavailable.
+
+#### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| ETF latest row equals target and coverage is normal | Usable in input, preflight, and fast rendering |
+| ETF has 25 smooth rows but latest row is prior trading day | Try target-date alternatives, then return unavailable if still missing |
+| ETF target row exists but coverage is partial | Preserve diagnostics; input and preflight reject it |
+| Old PostgreSQL ETF payload lacks `latest_data_date` | Derive from rows and apply the same exact-date rule |
+| Margin latest row equals target | Available when row completeness is valid |
+| Margin latest row is exactly one prior trading day | Available and explicitly labeled with one stale trading day |
+| Margin latest row is two or more trading days old | Return `status="stale_fact_date"` and unavailable |
+| Margin calendar is missing and observed rows have a date gap | Do not infer a holiday; use weekday fallback or return unavailable |
+
+#### 5. Good / Base / Bad Cases
+
+- Good: for report date 2026-07-27, ETF latest date is 2026-07-27 and margin
+  latest date is 2026-07-24 with `stale_trade_days=1`; both facts are usable.
+- Base: Sina history stops at the prior trading day, but the same-day current
+  list or Tushare `fund_daily` supplies a complete 2026-07-27 ETF row; append
+  it and recompute the rolling window.
+- Bad: the ETF series has normal coverage but stops at 2026-07-24 for a
+  2026-07-27 request, or margin stops at 2026-07-23. Row count and a stored
+  success value must not make either fact usable.
+
+#### 6. Tests Required
+
+- Producer tests must assert ETF exact-target success, prior-day rejection,
+  same-day current-list completion, Tushare target-date completion, and failure
+  when all target-date sources are missing.
+- Input-runtime tests must assert `data_status` and `step_status` are false for
+  a stale-but-complete ETF payload.
+- Report-preflight tests must reject a stale ETF payload even when it has 25
+  rows, normal coverage metadata, and a successful request log.
+- Fast-render tests must reject an old PostgreSQL ETF payload and preserve the
+  exact-target success path.
+- Margin tests must cover exact date, one trading-day lag, two trading-day lag,
+  missing-calendar date gaps, and a newer market-level fallback.
+- A report-level regression must compare `selection_workflow`, final target,
+  position, execution nature, B1/B2, and exit actions before and after the date
+  fix; every field must remain unchanged when source facts are already valid.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+rows = payload.get("rows") or []
+usable = bool(rows) and not payload.get("coverage_anomaly")
+```
+
+This accepts a complete prior-day series for a target-day report.
+
+Correct:
+
+```python
+rows = payload.get("rows") or []
+latest_data_date = payload.get("latest_data_date") or latest_row_date(rows)
+usable = bool(
+    rows
+    and latest_data_date == target_date
+    and not payload.get("coverage_anomaly")
+)
+```
+
+Wrong for margin pressure:
+
+```python
+stale_trade_days = len(observed_source_dates_after_latest)
+```
+
+Correct: count the explicit trading calendar when available; otherwise use a
+conservative weekday calculation or return unavailable. Missing source rows do
+not prove that the market was closed.
+
 ### T0 Account Advice Contract
 
 The front-page `T0` row is the next-day account action layer. It is not a

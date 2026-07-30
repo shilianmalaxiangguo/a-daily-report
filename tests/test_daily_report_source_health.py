@@ -307,7 +307,7 @@ class DailyReportSourceHealthTest(unittest.TestCase):
         import daily_report_source_health as health
 
         env = self._env()
-        env["TUSHARE_HTTP_URL"] = "https://fastapic.stockai888.top"
+        env["TUSHARE_HTTP_URL"] = "http://a.sszhixia.cn/"
         calls = []
 
         def ok_a_channel(**kwargs):
@@ -332,7 +332,7 @@ class DailyReportSourceHealthTest(unittest.TestCase):
         row = next(item for item in payload["checks"] if item["id"] == "tushare.runtime")
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["token"], env["TUSHARE_TOKEN"])
-        self.assertEqual(calls[0]["http_url"], env["TUSHARE_HTTP_URL"])
+        self.assertEqual(calls[0]["http_url"], "http://a.sszhixia.cn")
         self.assertEqual(row["task"], "Tushare A 通道")
         self.assertEqual(row["provider"], "tushare.pro.index_basic")
         self.assertEqual(row["result"], "pass")

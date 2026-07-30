@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 
 from knowledge.llm_wiki_context import build_replay_llm_wiki_context
+from market_data.kline_dates import parse_kline_date
 from report.position_context import (
     existing_position_summary_from_context,
     extract_position_timeline_markdown,
@@ -652,26 +653,70 @@ def _ensure_replay_price_band_style_series(snapshot_data, target_date, safe_floa
     return snapshot_data
 
 
-def _etf_turnover_series_needs_refresh(series, target_date):
+def _normalized_replay_etf_turnover_series(series, target_date):
     if not isinstance(series, dict):
-        return True
-    rows = [row for row in series.get("rows") or [] if isinstance(row, dict)]
-    if len(rows) < 25:
-        return True
-    target = str(target_date or "").strip()
-    if target and not any(_trend_row_date(row) == target for row in rows):
-        return True
-    return False
+        return None
+    if series.get("available") is not True:
+        return None
+    if series.get("coverage_anomaly") is True or str(series.get("coverage_status") or "").strip() == "partial":
+        return None
+    source_rows = series.get("rows") or []
+    if not isinstance(source_rows, list) or len(source_rows) < 25:
+        return None
+    target_day = parse_kline_date(target_date)
+    if target_day is None:
+        return None
+    dated_rows = []
+    for row in source_rows:
+        if not isinstance(row, dict) or row.get("coverage_anomaly") is True:
+            return None
+        trade_day = parse_kline_date(row.get("trade_date") or row.get("date"))
+        if trade_day is None or trade_day > target_day:
+            return None
+        normalized_row = dict(row)
+        normalized_row["trade_date"] = trade_day.isoformat()
+        dated_rows.append((trade_day, normalized_row))
+    if not any(trade_day == target_day for trade_day, _ in dated_rows):
+        return None
+    dated_rows.sort(key=lambda item: item[0])
+    normalized = dict(series)
+    normalized["rows"] = [row for _, row in dated_rows]
+    normalized["latest_data_date"] = dated_rows[-1][0].isoformat()
+    return normalized
+
+
+def _etf_turnover_series_needs_refresh(series, target_date):
+    return _normalized_replay_etf_turnover_series(series, target_date) is None
 
 
 def _ensure_replay_etf_turnover_series(snapshot_data, target_date, safe_float, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
-    if not _etf_turnover_series_needs_refresh(snapshot_data.get("etf_turnover_series"), target_date):
+    normalized_existing = _normalized_replay_etf_turnover_series(
+        snapshot_data.get("etf_turnover_series"),
+        target_date,
+    )
+    if normalized_existing is not None:
+        snapshot_data["etf_turnover_series"] = normalized_existing
         return snapshot_data
     helpers = helpers or {}
     fetcher = helpers.get("get_etf_turnover_series_from_sina")
     if not callable(fetcher):
+        existing = snapshot_data.get("etf_turnover_series") or {}
+        rows = (existing.get("rows") if isinstance(existing, dict) else []) or []
+        snapshot_data.setdefault("data_status", {})["ETF两市成交额趋势"] = False
+        snapshot_data.setdefault("step_status", {})["ETF两市成交额趋势获取"] = False
+        _replace_request_module_log(
+            snapshot_data,
+            module="input.runtime",
+            step="request.etf_turnover_series",
+            status="degraded",
+            message="ETF两市成交额趋势不满足目标日条件且刷新函数不可用，停止生成",
+            provider=(existing.get("source") if isinstance(existing, dict) else "") or "snapshot.etf_turnover_series",
+            target_keys=["etf_turnover_series"],
+            row_count=len(rows) if isinstance(rows, list) else 0,
+        )
+        _refresh_request_diagnostics(snapshot_data)
         return snapshot_data
     try:
         series = fetcher(target_date=target_date, window_days=25) or {}
@@ -695,10 +740,26 @@ def _ensure_replay_etf_turnover_series(snapshot_data, target_date, safe_float, h
         )
         _refresh_request_diagnostics(snapshot_data)
         return snapshot_data
-    rows = [row for row in (series.get("rows") if isinstance(series, dict) else []) or [] if isinstance(row, dict)]
-    if not rows:
+    normalized_series = _normalized_replay_etf_turnover_series(series, target_date)
+    if normalized_series is None:
+        rows = (series.get("rows") if isinstance(series, dict) else []) or []
+        snapshot_data.setdefault("data_status", {})["ETF两市成交额趋势"] = False
+        snapshot_data.setdefault("step_status", {})["ETF两市成交额趋势获取"] = False
+        _replace_request_module_log(
+            snapshot_data,
+            module="input.runtime",
+            step="request.etf_turnover_series",
+            status="degraded",
+            message="ETF两市成交额趋势刷新结果不满足目标日条件，停止生成",
+            provider=(series.get("source") if isinstance(series, dict) else "") or "sina.etf.daily_amount",
+            target_keys=["etf_turnover_series"],
+            row_count=len(rows) if isinstance(rows, list) else 0,
+        )
+        _refresh_request_diagnostics(snapshot_data)
         return snapshot_data
 
+    series = normalized_series
+    rows = series["rows"]
     snapshot_data["etf_turnover_series"] = series
     data_status = snapshot_data.setdefault("data_status", {})
     step_status = snapshot_data.setdefault("step_status", {})
@@ -1833,12 +1894,13 @@ def _use_replay_concept_fund_flow_if_complete(snapshot_data, target_date, safe_f
     return True
 
 
-def _build_sector_bucket(records, *, include_zt_type=False):
+def _build_sector_bucket(records, *, include_zt_type=False, snapshot_data=None):
     buckets = {}
     for item in records or []:
         if not isinstance(item, dict):
             continue
-        sector = item.get("所属行业") or item.get("sector") or "未知"
+        narrative_sector = _resolve_replay_trade_narrative_sector(snapshot_data, item)
+        sector = narrative_sector or item.get("所属行业") or item.get("sector") or "未知"
         row = {
             "code": item.get("代码") or item.get("code") or "",
             "name": item.get("名称") or item.get("name") or "",
@@ -1910,6 +1972,13 @@ def _infer_replay_sector_from_reason(text):
     return ""
 
 
+def _infer_replay_trade_narrative_sector(text):
+    text = str(text or "")
+    if "脑机接口" in text or "脑科学" in text:
+        return "脑机接口"
+    return ""
+
+
 def _normalize_replay_stock_code(value):
     text = str(value or "").strip()
     for suffix in (".SZ", ".SS", ".SH", ".BJ"):
@@ -1960,6 +2029,29 @@ def _resolve_replay_xuangubao_reason(snapshot_data, code):
     return {}
 
 
+def _resolve_replay_trade_narrative_sector(snapshot_data, item):
+    item = item or {}
+    code = _normalize_replay_stock_code(item.get("代码") or item.get("code"))
+    xgb_reason = _resolve_replay_xuangubao_reason(snapshot_data, code) if code else {}
+    related_plates = (xgb_reason or {}).get("related_plates", []) or []
+    narrative_text = " / ".join(
+        str(value or "")
+        for value in (
+            item.get("涨停统计"),
+            item.get("zt_type"),
+            item.get("reason"),
+            item.get("xuangubao_stock_reason"),
+            (xgb_reason or {}).get("stock_reason"),
+            " ".join(
+                str(plate.get("plate_name") or plate.get("name") or "").strip()
+                for plate in related_plates
+                if isinstance(plate, dict)
+            ),
+        )
+    )
+    return _infer_replay_trade_narrative_sector(narrative_text)
+
+
 def _normalize_replay_limit_time(value):
     text = str(value or "").strip()
     if not text:
@@ -1992,10 +2084,12 @@ def _derive_lianban_data_from_zt_pool(snapshot_data):
             continue
         xgb_reason = _resolve_replay_xuangubao_reason(snapshot_data, code)
         stock_reason = str((xgb_reason or {}).get("stock_reason") or "").strip()
-        sector = item.get("所属行业") or item.get("sector") or ""
+        raw_sector = item.get("所属行业") or item.get("sector") or ""
         related_plates = (xgb_reason or {}).get("related_plates", []) or []
         plate_name = _first_valid_replay_plate_name(related_plates)
         reason_text = stock_reason or item.get("涨停统计") or item.get("reason") or ""
+        narrative_sector = _resolve_replay_trade_narrative_sector(snapshot_data, item)
+        sector = narrative_sector or raw_sector
         if not _is_valid_replay_sector(sector):
             sector = plate_name or _infer_replay_sector_from_reason(reason_text) or ""
         row = {
@@ -2026,9 +2120,116 @@ def _derive_lianban_data_from_zt_pool(snapshot_data):
                     "xuangubao_limit_up_days": (xgb_reason or {}).get("limit_up_days", 0),
                 }
             )
+        if narrative_sector:
+            row.update(
+                {
+                    "raw_sector": raw_sector,
+                    "trade_narrative_sector": narrative_sector,
+                    "trade_narrative_reason": "目标日涨停原因或关联题材命中：脑机接口",
+                }
+            )
         rows.append(row)
     rows.sort(key=lambda item: (-item.get("lianban_days", 0), item.get("first_limit_time", "99:99:99")))
     return rows
+
+
+def _normalize_replay_trade_narrative_sectors(snapshot_data):
+    zt_pool = list((snapshot_data or {}).get("zt_pool") or [])
+    if not zt_pool:
+        return False
+
+    changed = False
+    narrative_sector_by_code = {}
+    narrative_items = []
+    for item in zt_pool:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_replay_stock_code(item.get("代码") or item.get("code"))
+        narrative_sector = _resolve_replay_trade_narrative_sector(snapshot_data, item)
+        if code and narrative_sector:
+            narrative_sector_by_code[code] = narrative_sector
+            narrative_items.append((code, narrative_sector, item))
+
+    existing_buckets = snapshot_data.get("zt_pool_by_sector")
+    if isinstance(existing_buckets, dict) and existing_buckets:
+        target_row_by_code = {}
+        for rows in existing_buckets.values():
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                code = _normalize_replay_stock_code(row.get("code") or row.get("代码"))
+                if code in narrative_sector_by_code and code not in target_row_by_code:
+                    target_row_by_code[code] = row
+
+        normalized_buckets = {}
+        placed_codes = set()
+        narrative_sectors = set(narrative_sector_by_code.values())
+        for sector, rows in existing_buckets.items():
+            normalized_rows = []
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    normalized_rows.append(row)
+                    continue
+                code = _normalize_replay_stock_code(row.get("code") or row.get("代码"))
+                destination = narrative_sector_by_code.get(code)
+                if not destination:
+                    normalized_rows.append(row)
+                elif sector == destination and code not in placed_codes:
+                    normalized_rows.append(row)
+                    placed_codes.add(code)
+            if normalized_rows or sector in narrative_sectors:
+                normalized_buckets[sector] = normalized_rows
+
+        for code, narrative_sector, item in narrative_items:
+            if code in placed_codes:
+                continue
+            row = target_row_by_code.get(code)
+            if row is None:
+                row = {
+                    "code": item.get("代码") or item.get("code") or "",
+                    "name": item.get("名称") or item.get("name") or "",
+                    "zt_type": item.get("涨停统计") or item.get("zt_type") or "",
+                }
+            normalized_buckets.setdefault(narrative_sector, []).append(row)
+            placed_codes.add(code)
+    else:
+        normalized_buckets = _build_sector_bucket(
+            zt_pool,
+            include_zt_type=True,
+            snapshot_data=snapshot_data,
+        )
+
+    if normalized_buckets != (existing_buckets or {}):
+        snapshot_data["zt_pool_by_sector"] = normalized_buckets
+        changed = True
+
+    zt_by_code = {
+        _normalize_replay_stock_code(item.get("代码") or item.get("code")): item
+        for item in zt_pool
+        if isinstance(item, dict)
+    }
+    existing_lianban = list(snapshot_data.get("lianban_data") or [])
+    normalized_lianban = []
+    for item in existing_lianban:
+        if not isinstance(item, dict):
+            normalized_lianban.append(item)
+            continue
+        normalized = dict(item)
+        code = _normalize_replay_stock_code(item.get("code") or item.get("代码"))
+        source_item = zt_by_code.get(code, item)
+        narrative_sector = _resolve_replay_trade_narrative_sector(snapshot_data, source_item)
+        if narrative_sector:
+            raw_sector = str(item.get("raw_sector") or item.get("sector") or item.get("所属行业") or "").strip()
+            if raw_sector and raw_sector != narrative_sector:
+                normalized["raw_sector"] = raw_sector
+            normalized["sector"] = narrative_sector
+            normalized["trade_narrative_sector"] = narrative_sector
+            normalized["trade_narrative_reason"] = "目标日涨停原因或关联题材命中：脑机接口"
+        normalized_lianban.append(normalized)
+    if normalized_lianban != existing_lianban:
+        snapshot_data["lianban_data"] = normalized_lianban
+        changed = True
+    return changed
 
 
 def _previous_turnover_window(stock, current_turnover):
@@ -2247,9 +2448,10 @@ def _apply_replay_limit_pool_snapshot(snapshot_data, pool_snapshot, safe_float):
         if preserve_dt_pool
         else (pool_snapshot or {}).get("dt_pool_by_sector")
     )
-    snapshot_data["zt_pool_by_sector"] = (
-        zt_pool_by_sector
-        or _build_sector_bucket(zt_pool, include_zt_type=True)
+    snapshot_data["zt_pool_by_sector"] = zt_pool_by_sector or _build_sector_bucket(
+        zt_pool,
+        include_zt_type=True,
+        snapshot_data=snapshot_data,
     )
     snapshot_data["dt_pool_by_sector"] = (
         dt_pool_by_sector
@@ -2484,6 +2686,9 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 stock_count=len(wanzhu_top10),
             )
             changed = True
+
+    if _normalize_replay_trade_narrative_sectors(snapshot_data):
+        changed = True
 
     if (
         snapshot_data.get("step_status", {}).get("连板梯队提取") is False

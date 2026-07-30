@@ -1425,6 +1425,10 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "lhb_net_sell_top10",
     "lhb_inst_detail",
     "lhb_inst_detail_status",
+    "lhb_source_record_count",
+    "lhb_grouped_record_count",
+    "lhb_provider",
+    "lhb_data_status",
     "xueqiu_hot_rank_top100",
     "xueqiu_hot_stock_arguments",
     "data_status",
@@ -2051,6 +2055,7 @@ def _compact_margin_pressure(snapshot):
             "latest_data_date",
             "target_date",
             "is_stale_for_target",
+            "stale_trade_days",
             "latest_margin_turnover_ratio_pct",
             "latest_pressure_diff_pct",
             "summary",
@@ -2083,6 +2088,9 @@ def _compact_margin_pressure(snapshot):
                     "exchange_count",
                     "source_policy",
                     "is_market_level_margin_balance",
+                    "margin_source_date",
+                    "turnover_source_date",
+                    "query_date",
                     "change_text",
                 )
                 if key in row and row.get(key) not in (None, "")

@@ -899,14 +899,44 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertTrue(data["margin_pressure"]["available"])
         self.assertEqual(data["margin_pressure"]["latest_data_date"], "2026-05-21")
         self.assertIn("截至2026-05-21", rendered)
-        self.assertIn("较报告日2026-05-22滞后一交易日", rendered)
+        self.assertIn("较报告日2026-05-22滞后1个交易日", rendered)
         self.assertIn("| 项目 | 结论 | 依据 |", rendered)
-        self.assertIn("| 融资承接压力 | 中性 | 截至2026-05-21，融资承接比 90.40%；较报告日2026-05-22滞后一交易日。 |", rendered)
+        self.assertIn("| 融资承接压力 | 中性 | 截至2026-05-21，融资承接比 90.40%；较报告日2026-05-22滞后1个交易日。 |", rendered)
         self.assertIn("**近10日融资承接表**", rendered)
         self.assertIn("| 2026-05-21 |", rendered)
         self.assertIn("| 2026-05-12 |", rendered)
         self.assertNotIn("| 2026-05-11 |", rendered)
         self.assertLess(rendered.index("2026-05-21"), rendered.index("2026-05-20"))
+
+    def test_build_market_trend_sections_contract_does_not_invent_stale_trade_day_count(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 114.0} for _ in range(50)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2400, "down_count": 2400},
+                "margin_pressure": {
+                    "available": True,
+                    "latest_data_date": "2026-05-21",
+                    "latest_pressure_label": "中性",
+                    "latest_margin_turnover_ratio_pct": 90.4,
+                    "usage_note": "融资余额是杠杆存量。",
+                    "rows": [
+                        {
+                            "trade_date": "2026-05-21",
+                            "margin_turnover_ratio_pct": 90.4,
+                            "pressure_label": "中性",
+                        }
+                    ],
+                },
+            },
+            target_date="2026-05-22",
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("较报告日2026-05-22为滞后事实", rendered)
+        self.assertNotIn("滞后0个交易日", rendered)
 
     def test_build_market_trend_sections_contract_explains_empty_new_high_provider(self):
         result = build_market_trend_sections_contract(

@@ -2,6 +2,7 @@ import importlib
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -87,6 +88,46 @@ class SectorTurnoverHistoryRuntimeTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_default_history_fallback_uses_compact_snapshot_loader(self):
+        runtime = self._load_module()
+        full_loader = Mock(side_effect=AssertionError("完整快照 loader 不应被调用"))
+        compact_loader = Mock(
+            return_value=(
+                {
+                    "sector_turnover_snapshots": [
+                        {
+                            "date": "2026-07-22",
+                            "sector_name": "脑机接口",
+                            "sector_turnover": 321.0,
+                            "turnover_share_pct": 2.6,
+                        }
+                    ],
+                    "turnover_data": {"total_amount_yi": 12345.0},
+                },
+                "",
+            )
+        )
+
+        with patch.object(runtime, "load_data_snapshot", full_loader), \
+             patch.object(runtime, "_DEFAULT_LOAD_DATA_SNAPSHOT", full_loader):
+            result = runtime.load_recent_sector_turnover_history(
+                "2026-07-23",
+                "脑机接口",
+                lookback_days=1,
+                max_scan_days=1,
+                helpers={
+                    "DatabaseService": None,
+                    "_normalize_kline_date_str": lambda value: str(value),
+                    "get_previous_date_str": lambda value: "2026-07-22" if value == "2026-07-23" else "",
+                    "load_compact_metric_history_snapshot": compact_loader,
+                },
+            )
+
+        self.assertEqual(result[0]["sector_turnover"], 321.0)
+        self.assertEqual(result[0]["total_turnover"], 12345.0)
+        compact_loader.assert_called_once_with("2026-07-22")
+        full_loader.assert_not_called()
 
     def test_load_recent_sector_turnover_history_reads_nested_wrapped_snapshot_and_alias_match(self):
         runtime = self._load_module()

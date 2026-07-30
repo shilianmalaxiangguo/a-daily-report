@@ -11,6 +11,7 @@ switching, report variants, and persistence.
 from __future__ import annotations
 
 import copy
+import datetime as _dt
 import os
 import re
 from pathlib import Path
@@ -31,6 +32,7 @@ from report.position_context import (
 )
 from report.surface_wording import sanitize_user_visible_text
 from domains.market_state.market_language_translation import canonical_market_language_hash
+from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
 from input.index_cross_validation import (
     index_cross_validation_failures,
     index_cross_validation_required,
@@ -81,8 +83,8 @@ CRITICAL_REPORT_DATA_FIELDS = (
     ("热度前50个股", "hot_rank_top50"),
 )
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
-    "wind_a_alternative": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
-    "csi1000_index": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
+    "wind_a_alternative": ("tushare.", "quicktiny.", "postgresql.daily_report_facts", "postgresql."),
+    "csi1000_index": ("tushare.", "quicktiny.", "postgresql.daily_report_facts", "postgresql."),
     "turnover_rank": (
         "tushare.",
         "postgresql.daily_report_facts",
@@ -145,6 +147,7 @@ __all__ = [
     "generate_markdown_report_from_sections",
     "generate_markdown_report",
     "build_report_preflight",
+    "margin_pressure_date_failure",
     "render_report_preflight_lines",
     "build_report_outputs",
     "assert_report_required_facts_complete",
@@ -464,6 +467,169 @@ def _etf_turnover_series_has_coverage_anomaly(payload):
     return any(isinstance(row, dict) and row.get("coverage_anomaly") is True for row in rows)
 
 
+def _etf_turnover_series_latest_data_date(payload, target_date=""):
+    if not isinstance(payload, dict):
+        return ""
+    target_day = parse_kline_date(target_date)
+    rows = payload.get("rows") or payload.get("trend_rows") or []
+    dates = []
+    for row in rows if isinstance(rows, (list, tuple)) else []:
+        if not isinstance(row, dict):
+            continue
+        trade_day = parse_kline_date(row.get("trade_date") or row.get("date"))
+        if trade_day is None or (target_day and trade_day > target_day):
+            continue
+        dates.append(trade_day)
+    latest = max(dates, default=None)
+    return latest.isoformat() if latest else ""
+
+
+def _etf_turnover_series_future_data_dates(payload, target_date=""):
+    if not isinstance(payload, dict):
+        return []
+    target_day = parse_kline_date(target_date)
+    if target_day is None:
+        return []
+    rows = payload.get("rows") or payload.get("trend_rows") or []
+    if not isinstance(rows, (list, tuple)):
+        return []
+    dates = {
+        parse_kline_date(row.get("trade_date") or row.get("date"))
+        for row in rows
+        if isinstance(row, dict)
+    }
+    return sorted(date.isoformat() for date in dates if date and date > target_day)
+
+
+def _etf_turnover_series_invalid_data_dates(payload):
+    if not isinstance(payload, dict):
+        return ["载荷不是结构化数据"]
+    rows = payload.get("rows") or payload.get("trend_rows") or []
+    if not isinstance(rows, (list, tuple)):
+        return ["事实行不是列表"]
+    invalid = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            invalid.append(f"第{index + 1}行非结构化")
+            continue
+        raw_date = row.get("trade_date") or row.get("date")
+        if parse_kline_date(raw_date) is None:
+            invalid.append(str(raw_date or f"第{index + 1}行缺失"))
+    return invalid
+
+
+def etf_turnover_series_date_failure(payload, target_date):
+    target_day = parse_kline_date(target_date)
+    if target_day is None:
+        return "ETF成交额目标日期缺失或无效"
+    target_text = target_day.isoformat()
+    invalid_dates = _etf_turnover_series_invalid_data_dates(payload)
+    if invalid_dates:
+        return f"ETF成交额包含无效事实日期：{invalid_dates[-1]}"
+    future_dates = _etf_turnover_series_future_data_dates(payload, target_text)
+    if future_dates:
+        return (
+            f"ETF成交额包含目标日之后事实：目标日 {target_text}，"
+            f"未来事实日 {future_dates[-1]}"
+        )
+    latest_data_date = _etf_turnover_series_latest_data_date(payload, target_text)
+    if latest_data_date == target_text:
+        return ""
+    return (
+        f"ETF成交额缺少目标日事实：目标日 {target_text}，"
+        f"最后事实日 {latest_data_date or '缺失'}"
+    )
+
+
+def _margin_pressure_latest_row_date(payload):
+    rows = (payload or {}).get("rows") or []
+    dates = [
+        normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+        for row in rows
+        if isinstance(row, dict)
+    ]
+    return max((value for value in dates if value), default="")
+
+
+def _weekday_trade_day_lag(latest_date, target_date):
+    try:
+        current = _dt.date.fromisoformat(latest_date) + _dt.timedelta(days=1)
+        target = _dt.date.fromisoformat(target_date)
+    except (TypeError, ValueError):
+        return None
+    count = 0
+    while current <= target:
+        if current.weekday() < 5:
+            count += 1
+        current += _dt.timedelta(days=1)
+    return count
+
+
+def margin_pressure_date_failure(payload, target_date, *, max_stale_trade_days=1):
+    target_text = normalize_kline_date_str(target_date)
+    if not target_text:
+        return "融资承接压力目标日期缺失"
+    if not isinstance(payload, dict):
+        return "融资承接压力事实缺失"
+
+    payload_target = normalize_kline_date_str(payload.get("target_date"))
+    if payload_target and payload_target != target_text:
+        return (
+            f"融资承接压力目标日期不一致：报告日 {target_text}，"
+            f"事实目标日 {payload_target}"
+        )
+
+    metadata_date = normalize_kline_date_str(payload.get("latest_data_date"))
+    row_date = _margin_pressure_latest_row_date(payload)
+    if metadata_date and row_date and metadata_date != row_date:
+        return (
+            "融资承接压力日期字段不一致："
+            f"记录日期 {row_date}，摘要日期 {metadata_date}"
+        )
+    latest_date = row_date or metadata_date
+    if not latest_date:
+        return "融资承接压力最后事实日缺失"
+    if latest_date > target_text:
+        return (
+            f"融资承接压力事实晚于报告日：报告日 {target_text}，"
+            f"最后事实日 {latest_date}"
+        )
+    if latest_date == target_text:
+        return ""
+
+    try:
+        reported_stale_trade_days = int(payload.get("stale_trade_days"))
+    except (TypeError, ValueError):
+        reported_stale_trade_days = None
+    weekday_stale_trade_days = _weekday_trade_day_lag(latest_date, target_text)
+    positive_lags = [
+        value
+        for value in (reported_stale_trade_days, weekday_stale_trade_days)
+        if value is not None and value > 0
+    ]
+    stale_trade_days = max(positive_lags, default=None)
+    if stale_trade_days is not None and stale_trade_days <= int(max_stale_trade_days):
+        return ""
+    lag_text = f"{stale_trade_days}个交易日" if stale_trade_days is not None else "无法确认的交易日数"
+    return (
+        f"融资承接压力事实过旧：目标日 {target_text}，最后事实日 {latest_date}，"
+        f"滞后 {lag_text}"
+    )
+
+
+def _etf_turnover_series_preflight_note(payload, target_date):
+    notes = []
+    date_failure = etf_turnover_series_date_failure(payload, target_date)
+    if date_failure:
+        notes.append(date_failure)
+    if _etf_turnover_series_has_coverage_anomaly(payload):
+        coverage_reason = str((payload or {}).get("coverage_anomaly_reason") or "").strip()
+        notes.append(coverage_reason or "ETF成交额样本覆盖不足")
+    if isinstance(payload, dict) and payload.get("available") is not True and not notes:
+        notes.append("ETF成交额结果不可用")
+    return "；".join(dict.fromkeys(note for note in notes if note))
+
+
 def _row_count_for_step(data, step, payload_key):
     for log in (data.get("module_logs") or []):
         if not isinstance(log, dict) or log.get("step") != step:
@@ -480,7 +646,80 @@ def _row_count_for_step(data, step, payload_key):
     return 1 if payload not in (None, "", 0, 0.0) else 0
 
 
+def _first_positive_count(mappings, keys):
+    for mapping in mappings or []:
+        if not isinstance(mapping, dict):
+            continue
+        for key in keys:
+            if key not in mapping:
+                continue
+            count = int(_safe_float(mapping.get(key), 0))
+            if count > 0:
+                return count
+    return 0
+
+
+def _lhb_record_counts(data, steps):
+    logs = _request_logs_for_steps(data, steps)
+    log_details = [log.get("details") or {} for log in logs]
+    source_count = _first_positive_count(
+        log_details,
+        ("source_record_count", "lhb_source_record_count"),
+    ) or int(_safe_float(data.get("lhb_source_record_count"), 0))
+    grouped_count = _first_positive_count(
+        log_details,
+        ("lhb_count", "grouped_record_count", "lhb_grouped_record_count"),
+    ) or int(_safe_float(data.get("lhb_grouped_record_count"), 0))
+    buy_count = _first_positive_count(log_details, ("buy_count",)) or len(data.get("lhb_net_buy_top10") or [])
+    sell_count = _first_positive_count(log_details, ("sell_count",)) or len(data.get("lhb_net_sell_top10") or [])
+
+    payload = data.get("lhb_analysis")
+    if grouped_count <= 0:
+        if isinstance(payload, (list, tuple)):
+            grouped_count = len(payload)
+        elif isinstance(payload, dict) and payload:
+            grouped_count = 1
+    effective_count = source_count or grouped_count or max(buy_count, sell_count)
+    return {
+        "effective_count": effective_count,
+        "source_count": source_count,
+        "grouped_count": grouped_count,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+    }
+
+
+def _lhb_preflight_note(data, steps):
+    counts = _lhb_record_counts(data, steps)
+    parts = []
+    if counts["source_count"]:
+        parts.append(f"原始{counts['source_count']}条")
+    if counts["grouped_count"]:
+        parts.append(f"归并{counts['grouped_count']}只")
+    if counts["buy_count"]:
+        parts.append(f"净买排行{counts['buy_count']}只")
+    if counts["sell_count"]:
+        parts.append(f"净卖排行{counts['sell_count']}只")
+    return " / ".join(parts)
+
+
+def _lhb_provider(data):
+    provider = str(data.get("lhb_provider") or "").strip()
+    if provider:
+        return provider
+    for key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
+        for row in data.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            provider = str(row.get("data_source") or "").strip()
+            if provider:
+                return provider
+    return ""
+
+
 def _row_count_for_steps(data, steps, payload_key):
+    if payload_key == "lhb_analysis":
+        return _lhb_record_counts(data, steps)["effective_count"]
     for log in _request_logs_for_steps(data, steps):
         details = log.get("details") or {}
         if "news_count" in details or "plate_count" in details or "limit_up_reason_count" in details:
@@ -510,10 +749,18 @@ def _row_count_for_steps(data, steps, payload_key):
     return 1 if payload not in (None, "", 0, 0.0) else 0
 
 
-def _decision_payload_valid(data, payload_key, allow_empty):
+def _decision_payload_valid(data, payload_key, allow_empty, target_date=""):
+    payload = data.get(payload_key)
+    if payload_key == "etf_turnover_series":
+        return (
+            isinstance(payload, dict)
+            and payload.get("available") is True
+            and bool(payload.get("rows") or [])
+            and not etf_turnover_series_date_failure(payload, target_date)
+            and not _etf_turnover_series_has_coverage_anomaly(payload)
+        )
     if payload_key not in data:
         return True
-    payload = data.get(payload_key)
     if payload_key == "xuangubao_data":
         if not isinstance(payload, dict):
             return False
@@ -527,18 +774,17 @@ def _decision_payload_valid(data, payload_key, allow_empty):
         return isinstance(payload, dict) and payload.get("available") is True
     if payload_key == "top50_turnover_share_series":
         return isinstance(payload, dict) and bool(payload.get("rows") or [])
-    if payload_key == "etf_turnover_series":
-        return (
-            isinstance(payload, dict)
-            and bool(payload.get("rows") or [])
-            and not _etf_turnover_series_has_coverage_anomaly(payload)
-        )
     if payload_key == "concept_fund_flow":
         if not isinstance(payload, dict):
             return False
         return bool(payload.get("rows") or [])
     if payload_key == "margin_pressure":
-        return isinstance(payload, dict) and payload.get("available") is True and bool(payload.get("rows") or [])
+        return bool(
+            isinstance(payload, dict)
+            and payload.get("available") is True
+            and bool(payload.get("rows") or [])
+            and not margin_pressure_date_failure(payload, target_date)
+        )
     if payload_key == "lhb_analysis":
         return bool(
             payload
@@ -584,7 +830,7 @@ def _decision_request_failed(data, steps):
     return not any(str(log.get("status") or "").strip() == "success" for log in logs)
 
 
-def _decision_request_failure_blocks(data, steps, payload_key, allow_empty):
+def _decision_request_failure_blocks(data, steps, payload_key, allow_empty, target_date=""):
     if not _decision_request_failed(data, steps):
         return False
     step_status = (data or {}).get("step_status") or {}
@@ -593,7 +839,7 @@ def _decision_request_failure_blocks(data, steps, payload_key, allow_empty):
         for _, step_label, configured_steps, configured_payload_key, _ in DECISION_CRITICAL_REPORT_DATA_FIELDS
         if configured_payload_key == payload_key and tuple(configured_steps) == tuple(steps)
     )
-    if step_success and _decision_payload_valid(data, payload_key, allow_empty):
+    if step_success and _decision_payload_valid(data, payload_key, allow_empty, target_date):
         return False
     return True
 
@@ -609,7 +855,7 @@ def _decision_field_tracked(data, label, step_label, steps, payload_key):
     )
 
 
-def _build_decision_critical_checks(data):
+def _build_decision_critical_checks(data, target_date=""):
     data = data or {}
     data_status = data.get("data_status") or {}
     step_status = data.get("step_status") or {}
@@ -620,21 +866,39 @@ def _build_decision_critical_checks(data):
             continue
         data_failed = label in data_status and data_status.get(label) is False
         step_failed = step_label in step_status and step_status.get(step_label) is False
-        payload_failed = not _decision_payload_valid(data, payload_key, allow_empty)
-        request_failed = _decision_request_failure_blocks(data, steps, payload_key, allow_empty)
+        payload_failed = not _decision_payload_valid(data, payload_key, allow_empty, target_date)
+        request_failed = _decision_request_failure_blocks(data, steps, payload_key, allow_empty, target_date)
         status = "failed" if data_failed or step_failed or request_failed or payload_failed else "success"
+        provider = _provider_for_steps(data, steps)
+        if not provider and payload_key == "lhb_analysis":
+            provider = _lhb_provider(data)
+        resolved_step_status = step_status.get(step_label)
+        if resolved_step_status is None and payload_key == "lhb_analysis":
+            lhb_data_status = str(data.get("lhb_data_status") or "").strip()
+            if lhb_data_status == "available":
+                resolved_step_status = True
+            elif lhb_data_status in {"upstream_empty", "error"}:
+                resolved_step_status = False
         checks.append(
             {
                 "label": label,
                 "step_label": step_label,
                 "payload_key": payload_key,
                 "status": status,
-                "provider": _provider_for_steps(data, steps) or "unknown",
+                "provider": provider or "unknown",
                 "row_count": _row_count_for_steps(data, steps, payload_key),
                 "echo_lines": _new_high_recent_trend_echo(data) if payload_key == "new_high_feedback" else [],
-                "note": _xuangubao_breakdown_note(data.get(payload_key)) if payload_key == "xuangubao_data" else "",
+                "note": (
+                    _xuangubao_breakdown_note(data.get(payload_key))
+                    if payload_key == "xuangubao_data"
+                    else _etf_turnover_series_preflight_note(data.get(payload_key), target_date)
+                    if payload_key == "etf_turnover_series"
+                    else _lhb_preflight_note(data, steps)
+                    if payload_key == "lhb_analysis"
+                    else ""
+                ),
                 "data_status": data_status.get(label),
-                "step_status": step_status.get(step_label),
+                "step_status": resolved_step_status,
             }
         )
     return checks
@@ -981,7 +1245,7 @@ def build_report_preflight(data, target_date):
         )
     sector_first_checks = _build_sector_first_critical_checks(data)
     checks.extend(sector_first_checks)
-    decision_checks = _build_decision_critical_checks(data) + _build_quant_factor_checks(data)
+    decision_checks = _build_decision_critical_checks(data, target_date) + _build_quant_factor_checks(data)
     known_labels = [check["label"] for check in checks + decision_checks]
     decision_checks.extend(_build_registered_status_failure_checks(data, known_labels=known_labels))
     decision_failures = [check["label"] for check in decision_checks if check["status"] == "failed"]

@@ -4,7 +4,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -121,6 +122,41 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
     def setUp(self):
         import daily_report_entry_demo
 
+        report_output_tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(report_output_tempdir.cleanup)
+
+        def temporary_report_output_path(target_date, mode="frozen", variant="full"):
+            replay_suffix = "_replay" if mode == daily_report_entry_demo.LEDGER_MODE_REPLAY else ""
+            return str(
+                Path(report_output_tempdir.name)
+                / f"{target_date}_A股日报_{variant}{replay_suffix}.md"
+            )
+
+        report_output_path_patcher = patch.object(
+            daily_report_entry_demo,
+            "_get_report_output_path",
+            side_effect=temporary_report_output_path,
+        )
+        report_output_path_patcher.start()
+        self.addCleanup(report_output_path_patcher.stop)
+
+        self.select_daily_report_data_path = daily_report_entry_demo._select_daily_report_data_path
+
+        path_selection_patcher = patch.object(
+            daily_report_entry_demo,
+            "_select_daily_report_data_path",
+            side_effect=lambda args, target_date: {
+                "eligible": False,
+                "selected_path": daily_report_entry_demo._daily_report_data_path_label(args),
+                "target_date": target_date,
+                "reason": "保留测试指定路径",
+                "data": {},
+                "preflight": {},
+            },
+        )
+        path_selection_patcher.start()
+        self.addCleanup(path_selection_patcher.stop)
+
         def accept_legacy_save_stub(report_path, expected_markdown):
             return str(expected_markdown or "")
 
@@ -139,6 +175,296 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         )
         strategy_save_patcher.start()
         self.addCleanup(strategy_save_patcher.stop)
+
+    @staticmethod
+    def _path_args(**overrides):
+        values = {
+            "postgres_only": False,
+            "replay": False,
+            "no_report": False,
+            "source_health_only": False,
+            "stock": None,
+            "force_live": False,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_data_path_selector_reuses_exact_date_postgres_candidate(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-27"
+        data = {
+            "market_stats": {
+                "up_count": 5195,
+                "down_count": 286,
+                "trade_date": target_date,
+                "source_date": target_date,
+            },
+            "etf_turnover_series": {
+                "available": True,
+                "latest_data_date": target_date,
+                "is_stale_for_target": False,
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [{"trade_date": target_date, "etf_turnover_yi": 4484.9}],
+            },
+        }
+        preflight = {"status": "success", "failures": []}
+
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ) as load_mock, patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value=preflight,
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "postgres_only")
+        self.assertIs(result["data"], data)
+        self.assertIs(result["preflight"], preflight)
+        load_mock.assert_called_once_with(target_date, allow_live_refresh=False)
+
+    def test_data_path_selector_rejects_market_stats_from_other_date(self):
+        import daily_report_entry_demo
+
+        data = {
+            "market_stats": {
+                "up_count": 5195,
+                "down_count": 286,
+                "trade_date": "2026-07-24",
+                "source_date": "2026-07-24",
+            }
+        }
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "success", "failures": []},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), "2026-07-27")
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertEqual(result["data"], {})
+        self.assertIn("来源日期与目标日期不一致", result["reason"])
+
+    def test_data_path_selector_rejects_market_stats_with_missing_source_date(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-27"
+        data = {
+            "market_stats": {
+                "up_count": 5195,
+                "down_count": 286,
+                "trade_date": target_date,
+            }
+        }
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "success", "failures": []},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertEqual(result["data"], {})
+        self.assertIn("缺少目标日期来源", result["reason"])
+
+    def test_data_path_selector_rejects_stale_etf_payload_even_when_preflight_passes(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-27"
+        data = {
+            "market_stats": {
+                "up_count": 5195,
+                "down_count": 286,
+                "trade_date": target_date,
+                "source_date": target_date,
+            },
+            "etf_turnover_series": {
+                "available": True,
+                "coverage_anomaly": False,
+                "coverage_status": "normal",
+                "rows": [{"trade_date": "2026-07-24", "etf_turnover_yi": 4484.9}],
+            },
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "success", "failures": []},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertEqual(result["data"], {})
+        self.assertIn("目标日 2026-07-27", result["reason"])
+        self.assertIn("最后事实日 2026-07-24", result["reason"])
+
+    def test_data_path_selector_accepts_previous_trading_day_margin_fact(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-29"
+        data = {
+            "market_stats": {
+                "up_count": 2600,
+                "down_count": 2100,
+                "trade_date": target_date,
+                "source_date": target_date,
+            },
+            "margin_pressure": {
+                "available": True,
+                "target_date": target_date,
+                "latest_data_date": "2026-07-28",
+                "stale_trade_days": 1,
+                "rows": [{"trade_date": "2026-07-28", "margin_balance": 100.0}],
+            },
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "success", "failures": []},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "postgres_only")
+        self.assertIs(result["data"], data)
+
+    def test_data_path_selector_rejects_old_margin_fact_with_stale_lag_metadata(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-29"
+        data = {
+            "market_stats": {
+                "up_count": 2600,
+                "down_count": 2100,
+                "trade_date": target_date,
+                "source_date": target_date,
+            },
+            "margin_pressure": {
+                "available": True,
+                "target_date": target_date,
+                "latest_data_date": "2026-07-27",
+                "stale_trade_days": 1,
+                "rows": [{"trade_date": "2026-07-27", "margin_balance": 100.0}],
+            },
+        }
+
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "success", "failures": []},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertEqual(result["data"], {})
+        self.assertIn("最后事实日 2026-07-27", result["reason"])
+        self.assertIn("滞后 2个交易日", result["reason"])
+
+    def test_data_path_selector_rejects_failed_report_preflight(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-27"
+        data = {
+            "market_stats": {
+                "trade_date": target_date,
+                "source_date": target_date,
+            }
+        }
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            return_value={"status": "failed", "failures": ["大盘涨跌统计"]},
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertIn("大盘涨跌统计", result["reason"])
+
+    def test_data_path_selector_falls_back_to_live_when_preflight_raises(self):
+        import daily_report_entry_demo
+
+        target_date = "2026-07-27"
+        data = {
+            "market_stats": {
+                "trade_date": target_date,
+                "source_date": target_date,
+            }
+        }
+        with patch.object(
+            daily_report_entry_demo,
+            "load_daily_report_data_from_postgres",
+            return_value=data,
+        ), patch.object(
+            daily_report_entry_demo,
+            "build_report_preflight",
+            side_effect=RuntimeError("postgresql://user:secret@localhost/report unavailable"),
+        ):
+            result = self.select_daily_report_data_path(self._path_args(), target_date)
+
+        self.assertEqual(result["selected_path"], "live")
+        self.assertEqual(result["data"], {})
+        self.assertNotIn("secret", result["reason"])
+        self.assertIn("postgresql://***", result["reason"])
+
+    def test_data_path_selector_force_live_skips_postgres_candidate(self):
+        import daily_report_entry_demo
+
+        with patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres") as load_mock:
+            result = self.select_daily_report_data_path(
+                self._path_args(force_live=True),
+                "2026-07-27",
+            )
+
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["selected_path"], "live")
+        load_mock.assert_not_called()
+
+    def test_data_path_selector_preserves_explicit_modes_without_postgres_probe(self):
+        import daily_report_entry_demo
+
+        cases = (
+            (self._path_args(postgres_only=True), "postgres_only"),
+            (self._path_args(replay=True), "replay"),
+            (self._path_args(no_report=True), "live"),
+            (self._path_args(source_health_only=True), "live"),
+            (self._path_args(stock="002364"), "live"),
+        )
+        with patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres") as load_mock:
+            for args, expected_path in cases:
+                with self.subTest(expected_path=expected_path, args=args):
+                    result = self.select_daily_report_data_path(args, "2026-07-27")
+                    self.assertFalse(result["eligible"])
+                    self.assertEqual(result["selected_path"], expected_path)
+
+        load_mock.assert_not_called()
 
     def test_chanlun_tomorrow_decision_follows_zero_position_report_summary(self):
         import daily_report_entry_demo
@@ -608,6 +934,126 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             "written",
         )
 
+    def test_snapshot_observation_records_actual_replay_mode_and_size(self):
+        import daily_report_entry_demo
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_path = Path(tmp) / "replay" / "2026-07-29_replay.json"
+            snapshot_path.parent.mkdir(parents=True)
+            snapshot_bytes = b'{"value": 1}\n'
+            snapshot_path.write_bytes(snapshot_bytes)
+            observer = StubObserver()
+            with patch.object(
+                daily_report_entry_demo,
+                "_save_data_snapshot",
+                return_value=str(snapshot_path),
+            ):
+                result = daily_report_entry_demo._save_data_snapshot_with_observation(
+                    {"value": 1},
+                    "2026-07-29",
+                    daily_report_entry_demo.LEDGER_MODE_FROZEN,
+                    observer,
+                )
+
+        self.assertEqual(result, str(snapshot_path))
+        name, step = observer.steps[0]
+        self.assertEqual(name, "save_data_snapshot")
+        self.assertEqual(step["status"], "success")
+        self.assertEqual(step["input_payload"]["requested_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(step["output_payload"]["actual_mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
+        self.assertEqual(step["output_payload"]["snapshot_size_bytes"], len(snapshot_bytes))
+        self.assertFalse(step["output_payload"]["size_limited"])
+
+    def test_snapshot_observation_records_size_limit_failure(self):
+        import daily_report_entry_demo
+        from daily_report_snapshot_io import SnapshotWriteError
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+        observer = StubObserver()
+        error = SnapshotWriteError(
+            "数据快照超过写入上限，停止保存",
+            snapshot_path="/tmp/replay/2026-07-29_replay.json",
+            mode=daily_report_entry_demo.LEDGER_MODE_REPLAY,
+            bytes_written=64,
+            attempted_size_bytes=72,
+            size_limited=True,
+        )
+        with patch.object(daily_report_entry_demo, "_save_data_snapshot", side_effect=error):
+            with self.assertRaises(SnapshotWriteError):
+                daily_report_entry_demo._save_data_snapshot_with_observation(
+                    {"value": 1},
+                    "2026-07-29",
+                    daily_report_entry_demo.LEDGER_MODE_FROZEN,
+                    observer,
+                )
+
+        name, step = observer.steps[0]
+        self.assertEqual(name, "save_data_snapshot")
+        self.assertEqual(step["status"], "error")
+        self.assertIs(step["error"], error)
+        self.assertEqual(step["output_payload"]["actual_mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
+        self.assertEqual(step["output_payload"]["snapshot_size_bytes"], 64)
+        self.assertEqual(step["output_payload"]["attempted_size_bytes"], 72)
+        self.assertTrue(step["output_payload"]["size_limited"])
+
+    def test_snapshot_observation_records_serialization_failure_destination(self):
+        import daily_report_entry_demo
+        import daily_report_snapshot_io as snapshot_io
+
+        class BrokenKey:
+            def __str__(self):
+                raise ValueError("broken key")
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_root = Path(tmp) / "snapshots"
+            snapshot_root.mkdir(parents=True)
+            official_path = snapshot_root / "2026-07-29.json"
+            official_path.write_text(
+                '{"date":"2026-07-29","mode":"frozen","data":{}}',
+                encoding="utf-8",
+            )
+            observer = StubObserver()
+            with patch.object(snapshot_io, "_snapshot_root", return_value=snapshot_root):
+                with self.assertRaises(snapshot_io.SnapshotWriteError):
+                    daily_report_entry_demo._save_data_snapshot_with_observation(
+                        {BrokenKey(): "value"},
+                        "2026-07-29",
+                        daily_report_entry_demo.LEDGER_MODE_FROZEN,
+                        observer,
+                    )
+
+        name, step = observer.steps[0]
+        self.assertEqual(name, "save_data_snapshot")
+        self.assertEqual(step["status"], "error")
+        self.assertEqual(
+            step["output_payload"]["snapshot_path"],
+            str(snapshot_root / "replay" / "2026-07-29_replay.json"),
+        )
+        self.assertEqual(step["output_payload"]["requested_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(step["output_payload"]["actual_mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
+        self.assertEqual(step["output_payload"]["snapshot_size_bytes"], 0)
+        self.assertFalse(step["output_payload"]["size_limited"])
+
     def test_main_source_health_only_writes_check_without_loading_daily_data(self):
         import daily_report_entry_demo
 
@@ -770,6 +1216,37 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertIn("关键数据不完整，停止生成", observer.finish_payload["output_payload"]["error"])
         self.assertEqual(observer.finish_payload["output_payload"]["report_quality_score"]["status"], "error")
         self.assertEqual(observer.finish_payload["output_payload"]["report_quality_ledger"]["status"], "written")
+
+    def test_main_rejects_empty_daily_data_instead_of_returning_success(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+                self.finish_payload = None
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+            def finish(self, **kwargs):
+                self.finish_payload = kwargs
+
+        observer = StubObserver()
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-22", "--no-report"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value=_source_health_success()), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value={}), \
+             patch.object(daily_report_entry_demo, "build_report_run_observer", return_value=observer):
+            with self.assertRaisesRegex(ReportCriticalDataMissingError, "日报数据为空"):
+                daily_report_entry_demo.main()
+
+        self.assertEqual(
+            [name for name, _ in observer.steps],
+            ["source_health", "load_daily_data", "report_preflight", "daily_report_entry"],
+        )
+        self.assertEqual(observer.finish_payload["status"], "error")
+        self.assertIn("关键数据不完整，停止生成", observer.finish_payload["output_payload"]["error"])
 
     def test_main_audits_full_report_with_chanlun_html_after_generation(self):
         import daily_report_entry_demo
@@ -1062,6 +1539,72 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertFalse(daily_report_entry_demo._POSTGRES_ONLY_RUNTIME)
         self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
 
+    def test_main_auto_postgres_fast_render_reuses_selected_data(self):
+        import daily_report_entry_demo
+
+        data = _with_html_required_facts({
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "postgresql.daily_report_facts"},
+            "turnover_rank": [{"code": "000001", "data_source": "postgresql.daily_report_facts"}],
+            "market_stats": {
+                "up_count": 2600,
+                "down_count": 2100,
+                "trade_date": "2026-05-29",
+                "source_date": "2026-05-29",
+            },
+        })
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0%不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+        selection = {
+            "eligible": True,
+            "selected_path": "postgres_only",
+            "target_date": "2026-05-29",
+            "reason": "目标日期 PostgreSQL 事实和关键数据检查均已通过",
+            "data": data,
+            "preflight": {"status": "success", "failures": []},
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29"]), \
+             patch.object(daily_report_entry_demo, "_select_daily_report_data_path", return_value=selection), \
+             patch.object(daily_report_entry_demo, "build_report_run_observer") as observer_builder, \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value=_source_health_success()) as health_mock, \
+             patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres") as load_mock, \
+             patch.object(daily_report_entry_demo, "get_daily_data") as get_daily_mock, \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot") as save_snapshot_mock, \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "unit", "field_count": 1}):
+            result = daily_report_entry_demo.main()
+
+        self.assertEqual(result, 0)
+        self.assertTrue(health_mock.call_args.kwargs["postgres_only"])
+        trace_input = observer_builder.call_args.kwargs["trace_input"]
+        self.assertEqual(trace_input["data_path"], "postgres_only")
+        self.assertEqual(trace_input["data_path_reason"], selection["reason"])
+        finish_output = observer_builder.return_value.finish.call_args.kwargs["output_payload"]
+        self.assertEqual(finish_output["data_path"], "postgres_only")
+        self.assertEqual(finish_output["data_path_reason"], selection["reason"])
+        load_mock.assert_not_called()
+        get_daily_mock.assert_not_called()
+        save_snapshot_mock.assert_not_called()
+        self.assertFalse(daily_report_entry_demo._POSTGRES_ONLY_RUNTIME)
+        self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
+
     def test_main_postgres_only_logs_total_report_runtime(self):
         import daily_report_entry_demo
 
@@ -1094,11 +1637,17 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
                 "run_log": str(run_log_path),
             }
             stdout = io.StringIO()
+            observer = SimpleNamespace(record_step=Mock(), finish=Mock())
 
             with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--postgres-only"]), \
                  patch.object(sys, "stdout", stdout), \
                  patch.object(daily_report_entry_demo, "run_source_health_check", return_value=_source_health_success()), \
-                 patch.object(daily_report_entry_demo.time, "perf_counter", side_effect=[100.0, 112.345]), \
+                 patch.object(
+                     daily_report_entry_demo.time,
+                     "perf_counter",
+                     side_effect=[100.0, 101.0, 102.0, 104.0, 108.0, 109.0, 111.0, 112.0, 112.345],
+                 ), \
+                 patch.object(daily_report_entry_demo, "build_report_run_observer", return_value=observer), \
                  patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
                  patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
                  patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
@@ -1119,6 +1668,23 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             self.assertIn("| 项目 | 值 |\n|------|------|\n| 开始到完成 | 12.35 秒 |", run_log_text)
             self.assertIn("| 开始到完成 | 12.35 秒 |", run_log_text)
             self.assertIn("| 数据路径 | PostgreSQL-only |", run_log_text)
+            self.assertIn("| 阶段 | 耗时 | 占比 |", run_log_text)
+            self.assertIn("| 日报构建与首次检查 | 4.00 秒 | 32.4% |", run_log_text)
+            self.assertIn("| 其他收尾 | 0.35 秒 | 2.8% |", run_log_text)
+            finish_output = observer.finish.call_args.kwargs["output_payload"]
+            phase_timings = finish_output["phase_timings"]
+            self.assertEqual(phase_timings[-1]["phase"], "其他收尾")
+            self.assertTrue(
+                all(
+                    set(item) == {"phase", "elapsed_seconds", "share_pct"}
+                    for item in phase_timings
+                )
+            )
+            self.assertAlmostEqual(
+                sum(item["elapsed_seconds"] for item in phase_timings),
+                12.35,
+                places=2,
+            )
 
     def test_main_postgres_only_rejects_replay_mode(self):
         import daily_report_entry_demo

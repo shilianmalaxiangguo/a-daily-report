@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PostgreSQL 日报事实、replay 与 JSON 兼容边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "失败时不得写入无效或不完整产物"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "存储、replay、界面和发布器跨层数据流"}
+{"file": ".trellis/tasks/07-29-daily-report-postgres-replay-compact-snapshot/research/snapshot-root-cause-and-postgres-coverage-summary.md", "reason": "超大快照根因、磁盘证据与 PostgreSQL 覆盖缺口"}

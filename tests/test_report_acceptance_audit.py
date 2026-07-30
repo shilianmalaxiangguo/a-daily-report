@@ -1042,7 +1042,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 今日关注标的 | 无当前对象；个股仅保留在过程候选回放 |\n"
             "| 明天观察池 | 无当前对象；个股仅保留在过程候选回放 |\n"
             "**观察优先对象**: 暂无\n"
-            "- 👀 和远气体(002971) - 过程候选，09:50-10:10观察价待盘中确认\n"
+            "- 👀 和远气体(002971) - 过程候选，只作过程回放，不新增参与\n"
             "- **跨线回看样本**: 康强电子(002119)（过程证据，不是当前对象）\n"
             "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
             "|----------|------|------|----------|-----------|\n"
@@ -4045,6 +4045,47 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("zero_position_tomorrow_action_conflict", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_flags_empty_final_object_with_named_tomorrow_watch_in_appendix(self):
+        bad = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：Step 5 - 过程候选最终复核\n"
+            "**明天先盯哪只**: 明新旭腾(605068)\n"
+            "- **跨线明天先盯哪只**: 明新旭腾(605068) - 09:50-10:10观察价待盘中确认\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        matching = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "empty_final_object_appendix_current_object_conflict"
+        ]
+        self.assertEqual(len(matching), 2, result["findings"])
+        self.assertTrue(any("明天先盯哪只" in finding["message"] for finding in matching))
+        self.assertTrue(any("跨线明天先盯哪只" in finding["message"] for finding in matching))
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_empty_final_object_with_equivalent_future_candidate_actions(self):
+        bad = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：Step 3 - 过程候选复核\n"
+            "**明天重点候选组**（过程证据）:\n"
+            "| 股票 | 代码 | 明日资格 |\n"
+            "| 明新旭腾 | 605068 | 可做 |\n"
+            "- ⏳ 明新旭腾(605068) - 过程候选，09:50-10:10观察价18.72\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        matching = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "empty_final_object_appendix_current_object_conflict"
+        ]
+        self.assertEqual(len(matching), 3, result["findings"])
+        self.assertTrue(any("明天重点候选组" in finding["message"] for finding in matching))
+        self.assertTrue(any("明日资格=可做" in finding["message"] for finding in matching))
+        self.assertTrue(any("未来观察价" in finding["message"] for finding in matching))
+        self.assertFalse(result["passed"])
+
     def test_audit_allows_zero_position_plan_without_new_position_stop(self):
         report = self.zero_position_report_with_decision_attribution()
 
@@ -4054,6 +4095,76 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertNotIn("execution_condition_missing", {finding["code"] for finding in result["findings"]})
         self.assertNotIn("zero_position_tomorrow_action_conflict", {finding["code"] for finding in result["findings"]})
         self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_allows_zero_position_elimination_rows_that_deny_participation(self):
+        report = self.zero_position_report_with_decision_attribution().replace(
+            "## 五、个股解读",
+            "## 板块资金扩散淘汰赛\n"
+            "| 层级 | 输入 | 淘汰 | 剩余 | 关键理由 | 下一层依据 |\n"
+            "|---|---:|---|---|---|---|\n"
+            "| 价格行为确认 | 5 | 4 | 1（通富微电(002156)） | 趋势载体已识别，但价格接受度不足，不能取得新增参与资格 | 进入周期窗口 |\n"
+            "| 周期窗口 | 1 | 1 | 0（无） | 通富微电(002156): 最终动作未给出新增参与资格：无明日执行对象，保持观察 | 进入下一层复核 |\n\n"
+            "## 五、个股解读",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn(
+            "zero_position_tomorrow_action_conflict",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_zero_position_conflict_line_keeps_positive_action_before_no_action_note(self):
+        self.assertTrue(
+            report_acceptance_audit._is_zero_position_conflict_line(
+                [
+                    "明日主买对象",
+                    "通富微电(002156)",
+                    "新增参与；备注：无明日执行对象",
+                ]
+            )
+        )
+        self.assertTrue(
+            report_acceptance_audit._is_zero_position_conflict_line(
+                [
+                    "观察路径",
+                    "通富微电(002156)",
+                    "条件成立则新增参与；不成立则不新增参与",
+                ]
+            )
+        )
+
+    def test_zero_position_conflict_line_allows_explicit_negative_participation_phrases(self):
+        for action_text in (
+            "最终0%时只作观察样本，不构成明日新增参与",
+            "没有新增参与资格",
+            "禁止新增参与",
+            "不能新增参与",
+            "不具备新增参与资格",
+            "不取得新增参与资格",
+        ):
+            with self.subTest(action_text=action_text):
+                self.assertFalse(
+                    report_acceptance_audit._is_zero_position_conflict_line(
+                        ["观察路径", "通富微电(002156)", action_text]
+                    )
+                )
+
+    def test_audit_flags_zero_position_positive_research_action_even_with_zero_suffix(self):
+        bad = self.zero_position_report_with_decision_attribution() + (
+            "\n## 八、详细附录\n"
+            "**明日裁决**: 🟢 跟随主线\n"
+            "**开盘前动作**: B1先到1x/50%取得参与权；不满足继续0%不参与\n"
+            "- **明天具体怎么做**: 固定窗口条件成立才参与，不满足回到0%\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn(
+            "zero_position_participation_language",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_chanlun_html_zero_position_mismatch(self):
         report = self.zero_position_report_with_decision_attribution()

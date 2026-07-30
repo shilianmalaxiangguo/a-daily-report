@@ -140,6 +140,86 @@ class MarketOverviewNodesTest(unittest.TestCase):
             rendered,
         )
 
+    def test_market_base_excludes_etf_turnover_rows_after_target_date(self):
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-07-29",
+                "enabled_node_keys": ["header", "indices", "volume"],
+                "data": {
+                    "total_turnover": 29246.59,
+                    "indices": {"上证指数": {"点位": 3900.0, "涨跌幅": 0.18}},
+                    "market_stats": {"up_count": 2600, "down_count": 2100},
+                    "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                    "new_high_feedback": {"available": True, "all_a_share_pct": 3.2},
+                    "etf_turnover_series": {
+                        "available": True,
+                        "rows": [
+                            {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                            {"trade_date": "2026-07-30", "etf_turnover_yi": 9000.0},
+                        ],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| ETF两市成交额 | 4484.90亿 |", rendered)
+        self.assertNotIn("9000.00亿", rendered)
+
+    def test_market_base_sorts_etf_rows_and_ignores_invalid_dates(self):
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-07-29",
+                "enabled_node_keys": ["header", "indices", "volume"],
+                "data": {
+                    "total_turnover": 29246.59,
+                    "indices": {"上证指数": {"点位": 3900.0, "涨跌幅": 0.18}},
+                    "market_stats": {"up_count": 2600, "down_count": 2100},
+                    "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                    "new_high_feedback": {"available": True, "all_a_share_pct": 3.2},
+                    "etf_turnover_series": {
+                        "available": True,
+                        "rows": [
+                            {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                            {"trade_date": "07/30/2026", "etf_turnover_yi": 9999.0},
+                            {"trade_date": "2026-07-28", "etf_turnover_yi": 4100.0},
+                        ],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| ETF两市成交额 | 4484.90亿 |", rendered)
+        self.assertNotIn("9999.00亿", rendered)
+
+    def test_market_base_rejects_etf_turnover_when_target_date_row_is_missing(self):
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-07-29",
+                "enabled_node_keys": ["header", "indices", "volume"],
+                "data": {
+                    "total_turnover": 29246.59,
+                    "indices": {"上证指数": {"点位": 3900.0, "涨跌幅": 0.18}},
+                    "market_stats": {"up_count": 2600, "down_count": 2100},
+                    "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                    "new_high_feedback": {"available": True, "all_a_share_pct": 3.2},
+                    "etf_turnover_series": {
+                        "available": True,
+                        "rows": [
+                            {"trade_date": "2026-07-24", "etf_turnover_yi": 4484.9},
+                            {"trade_date": "2026-07-28", "etf_turnover_yi": 4600.0},
+                        ],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertNotIn("| ETF两市成交额 |", rendered)
+        self.assertNotIn("4484.90亿", rendered)
+        self.assertNotIn("4600.00亿", rendered)
+
     def test_market_base_marks_etf_turnover_coverage_anomaly_as_review_needed(self):
         rows = [
             {"trade_date": "2026-06-05", "etf_turnover_yi": 2300.93, "change_pct": "待累计", "covered_etf_count": 1142},

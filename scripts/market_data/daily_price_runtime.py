@@ -504,6 +504,8 @@ def _fetch_quicktiny_daily_price_bars_legacy_body(security_code, start_date, end
                 "low": _safe_float(item.get("low")),
                 "close": _safe_float(item.get("close")),
                 "volume": _safe_float(item.get("volume") or item.get("vol")),
+                "amount": _safe_float(item.get("amount")),
+                "data_source": "quicktiny.merged_kline.index_daily" if is_index else "quicktiny.merged_kline",
             })
         return sorted(bars, key=lambda x: x.get("date", ""))
     except Exception:
@@ -522,6 +524,8 @@ def _merge_daily_price_bars_legacy_body(primary_bars, fallback_bars):
                 "low": _safe_float(bar.get("low")),
                 "close": _safe_float(bar.get("close")),
                 "volume": _safe_float(bar.get("volume")),
+                "amount": _safe_float(bar.get("amount")),
+                "data_source": str(bar.get("data_source") or ""),
             }
     for bar in primary_bars or []:
         date_text = _normalize_kline_date_str(bar.get("date"))
@@ -533,6 +537,8 @@ def _merge_daily_price_bars_legacy_body(primary_bars, fallback_bars):
                 "low": _safe_float(bar.get("low")),
                 "close": _safe_float(bar.get("close")),
                 "volume": _safe_float(bar.get("volume")),
+                "amount": _safe_float(bar.get("amount")),
+                "data_source": str(bar.get("data_source") or ""),
             }
     return [merged_by_date[key] for key in sorted(merged_by_date.keys())]
 

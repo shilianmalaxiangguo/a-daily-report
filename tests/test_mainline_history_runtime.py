@@ -2,6 +2,7 @@ import importlib
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -41,6 +42,44 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["state_code"], "expand")
         self.assertEqual(result["rotation_summary"], "军工继续聚焦")
         self.assertEqual(result["source"], "market_research_snapshot")
+
+    def test_default_history_fallback_uses_compact_snapshot_loader(self):
+        runtime = self._load_module()
+        full_loader = Mock(side_effect=AssertionError("完整快照 loader 不应被调用"))
+        compact_loader = Mock(
+            return_value=(
+                {
+                    "mainline_history_records": [
+                        {
+                            "date": "2026-07-22",
+                            "primary_mainline": "脑机接口",
+                            "leading_line": "脑机接口",
+                        }
+                    ]
+                },
+                "",
+            )
+        )
+
+        with patch.object(runtime, "load_data_snapshot", full_loader), \
+             patch.object(runtime, "_DEFAULT_LOAD_DATA_SNAPSHOT", full_loader):
+            result = runtime.load_recent_mainline_history(
+                "2026-07-23",
+                lookback_days=1,
+                max_scan_days=1,
+                helpers={
+                    "DatabaseService": None,
+                    "_normalize_kline_date_str": lambda value: str(value),
+                    "get_previous_date_str": lambda value: "2026-07-22" if value == "2026-07-23" else "",
+                    "load_compact_metric_history_snapshot": compact_loader,
+                    "_load_replay_snapshot_data": lambda target_date: None,
+                    "_load_mainline_series_replay_data": lambda target_date: None,
+                },
+            )
+
+        self.assertEqual([row["primary_mainline"] for row in result], ["脑机接口"])
+        compact_loader.assert_called_once_with("2026-07-22")
+        full_loader.assert_not_called()
 
     def test_build_mainline_history_record_falls_back_to_observation_candidates(self):
         runtime = self._load_module()
@@ -501,6 +540,44 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result, [])
+
+    def test_postgres_only_mainline_history_does_not_backfill_short_database_history_from_replay(self):
+        runtime = self._load_module()
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_mainline_daily_series(self, end_date, *, window_days=25):
+                return [
+                    {
+                        "date": "2026-05-19",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "postgresql.mainline_daily",
+                    }
+                ]
+
+        class FakeDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return FakeService()
+
+        def fail_series_replay(target_date):
+            raise AssertionError(f"postgres-only must not read series replay {target_date}")
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            max_scan_days=60,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "_load_mainline_series_replay_data": fail_series_replay,
+                "postgres_only_runtime": True,
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-19"])
 
     def test_load_recent_mainline_history_rebuilds_fact_db_when_index_is_stale(self):
         runtime = self._load_module()

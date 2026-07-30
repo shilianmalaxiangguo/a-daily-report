@@ -313,6 +313,20 @@ LEGACY_OBSERVATION_SURFACE_MARKERS = (
 )
 ZERO_POSITION_ACTION_MARKERS = ("明日主买对象", "明日补位对象", "新增参与", _m("条件", "50%"), "50%条件执行", "才评估50%条件执行")
 ZERO_POSITION_CURRENT_DECISION_ACTION_LABELS = ("主买对象", "补位对象")
+ZERO_POSITION_NO_ACTION_ROW_MARKERS = (
+    "不新增参与",
+    "不构成明日新增参与",
+    "没有新增参与资格",
+    "禁止新增参与",
+    "不能新增参与",
+    "不具备新增参与资格",
+    "不取得新增参与资格",
+    "不能转成新增参与",
+    "不能取得新增参与资格",
+    "暂无新增参与资格",
+    "未给出新增参与资格",
+    "无明日执行对象",
+)
 ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS = (
     "明日可能反包",
     "关注埋伏",
@@ -396,10 +410,31 @@ ZERO_POSITION_POSITIVE_PARTICIPATION_MARKERS = (
     "恢复参与资格",
     "提高参与资格",
     "提高参与质量",
+    "🟢 跟随主线",
+    "B1先到1x/50%取得参与权",
+    "按昨晚1x/50%半仓预案检查B1执行资格",
+    "市场已允许参与",
+    "市场允许参与",
+    "窗口条件成立才参与",
+    "买也只买最强",
+    "最终操作状态**: 进攻态",
+    "次日市场环境**: 只观察 / 进攻态",
+    "明日市场环境：只观察 / 进攻态",
+    "日线预估买入区间**:",
+    "硬止损底线**:",
+    "止盈观察位**:",
+    "买入后按失效价",
+    "买后用失效价",
 )
 ZERO_POSITION_ALLOWED_PARTICIPATION_MARKERS = (
     "不参与",
     "不新增参与",
+    "不构成明日新增参与",
+    "没有新增参与资格",
+    "禁止新增参与",
+    "不能新增参与",
+    "不具备新增参与资格",
+    "不取得新增参与资格",
     "不能转成新增参与",
     "暂无新增参与资格",
     "没有可买对象",
@@ -2611,9 +2646,10 @@ def _audit_incomplete_candidate_execution_plan(lines):
 
 
 def _line_has_zero_position_positive_participation_language(text):
-    if not any(marker in text for marker in ZERO_POSITION_POSITIVE_PARTICIPATION_MARKERS):
-        return False
-    return not any(marker in text for marker in ZERO_POSITION_ALLOWED_PARTICIPATION_MARKERS)
+    action_text = str(text or "")
+    for marker in sorted(ZERO_POSITION_ALLOWED_PARTICIPATION_MARKERS, key=len, reverse=True):
+        action_text = action_text.replace(marker, "")
+    return any(marker in action_text for marker in ZERO_POSITION_POSITIVE_PARTICIPATION_MARKERS)
 
 
 def _has_strong_zero_position_basis(text):
@@ -2628,6 +2664,8 @@ def _has_strong_zero_position_basis(text):
 def _audit_zero_position_participation_language(lines):
     front = _front_page_lines(lines)
     if not _final_summary_is_zero_position(front):
+        return []
+    if _final_summary_has_conditional_zero_plan(front):
         return []
     findings = []
     for index, line in enumerate(lines, 1):
@@ -3721,13 +3759,14 @@ def _audit_opportunity_comparison_contract(lines):
 
 def _is_zero_position_conflict_line(cells):
     row_text = " ".join(cells)
-    if any(marker in row_text for marker in ("不新增参与", "不能转成新增参与", "暂无新增参与资格")):
-        return False
     if not _has_stock_reference(cells):
         return False
     if len(cells) >= 2 and cells[0] in ZERO_POSITION_CURRENT_DECISION_ACTION_LABELS and not _is_empty_target(cells[1]):
         return True
-    return any(marker in row_text for marker in ZERO_POSITION_ACTION_MARKERS)
+    action_text = row_text
+    for marker in sorted(ZERO_POSITION_NO_ACTION_ROW_MARKERS, key=len, reverse=True):
+        action_text = action_text.replace(marker, "")
+    return any(marker in action_text for marker in ZERO_POSITION_ACTION_MARKERS)
 
 
 def _audit_zero_position_tomorrow_action_consistency(lines):
@@ -4843,6 +4882,18 @@ def _front_declares_no_current_object(lines):
 def _line_names_current_object_when_front_empty(text):
     stripped = str(text or "").strip()
     process_markers = ("过程候选", "过程样本", "回看样本", "过程证据", "非当前对象", "只回放")
+    if "明天重点候选组" in stripped:
+        return "明天重点候选组"
+    tomorrow_watch_match = re.search(
+        r"(?P<label>(?:跨线)?明天先盯哪只)(?:\*\*)?\s*[:：]\s*(?P<target>[^|\n]+)",
+        stripped,
+    )
+    if tomorrow_watch_match:
+        target_text = str(tomorrow_watch_match.group("target") or "").strip()
+        if target_text and not _is_empty_target(target_text) and _target_identity(target_text):
+            return tomorrow_watch_match.group("label")
+    if re.search(r"09:50-10:10观察价(?:待盘中确认|\d+(?:\.\d+)?)", stripped) and _target_identity(stripped):
+        return "未来观察价"
     cells = _split_md_row(stripped)
     if cells:
         current_object_labels = {
@@ -4864,6 +4915,8 @@ def _line_names_current_object_when_front_empty(text):
                 return cells[0]
         if "明天具体怎么做" in cells and "股票" in cells:
             return ""
+        if _target_identity(" ".join(cells)) and any(cell in {"可做", "50%条件执行", "100%核心进攻"} for cell in cells):
+            return "明日资格=可做"
         if len(cells) >= 3 and any("确认后执行预案" in cell for cell in cells):
             if _target_identity(" ".join(cells)):
                 return "最终动作表"

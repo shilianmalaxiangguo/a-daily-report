@@ -7,6 +7,7 @@ from domains.market_activity.new_high_structure import (
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
 from domains.market_state.two_market_turnover.node_registry import build_two_market_turnover_node_specs
 from domains.market_state.two_market_turnover.node_runtime import run_two_market_turnover_nodes
+from market_data.kline_dates import parse_kline_date
 from report.market_overview_node_registry import build_market_overview_node_specs
 from report.market_overview_node_runtime import run_market_overview_nodes
 from storage.database_service import DatabaseService
@@ -465,33 +466,46 @@ def _format_amount_yi(value):
     return f"{_safe_float(value):.2f}亿"
 
 
-def _etf_turnover_rows(data):
+def _etf_turnover_rows(data, target_date=""):
     snapshot = (data or {}).get("etf_turnover_series") or {}
     if isinstance(snapshot, dict):
         source_rows = snapshot.get("rows") or snapshot.get("trend_rows") or []
     else:
         source_rows = snapshot
 
-    rows = []
-    previous_amount = None
+    dated_rows = []
+    target_day = parse_kline_date(target_date)
+    if target_date and target_day is None:
+        return []
     for item in source_rows or []:
-        row = dict(item or {})
-        trade_date = str(row.get("trade_date") or row.get("date") or "").strip()
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        trade_day = parse_kline_date(row.get("trade_date") or row.get("date"))
         amount = _safe_float(
             row.get(
                 "etf_turnover_yi",
                 row.get("amount_yi", row.get("turnover_yi", row.get("amount"))),
             )
         )
-        if not trade_date or amount <= 0:
+        if trade_day is None or amount <= 0 or (target_day and trade_day > target_day):
             continue
+        dated_rows.append((trade_day, row, amount))
+
+    dated_rows.sort(key=lambda item: item[0])
+    if target_day and (not dated_rows or dated_rows[-1][0] != target_day):
+        return []
+
+    rows = []
+    previous_amount = None
+    for trade_day, row, amount in dated_rows:
         change_pct = row.get("change_pct", row.get("pct_change"))
         if change_pct in (None, "") and previous_amount:
             change_pct = _pct_change_between(amount, previous_amount)
         rows.append(
             {
                 **row,
-                "trade_date": trade_date,
+                "trade_date": trade_day.isoformat(),
                 "etf_turnover_yi": amount,
                 "change_pct": "待累计" if change_pct in (None, "") else change_pct,
                 "covered_etf_count": row.get("covered_etf_count", row.get("etf_count", row.get("count", ""))),
@@ -513,8 +527,8 @@ def _etf_turnover_coverage_anomaly(data, rows):
     return False, ""
 
 
-def _etf_capacity_signal(data):
-    rows = _etf_turnover_rows(data)
+def _etf_capacity_signal(data, target_date=""):
+    rows = _etf_turnover_rows(data, target_date)
     if not rows:
         return {
             "available": False,
@@ -782,13 +796,26 @@ def _margin_pressure_latest_date(snapshot):
     ).strip()
 
 
+def _margin_pressure_stale_trade_days(snapshot):
+    value = (snapshot or {}).get("stale_trade_days")
+    if value in (None, ""):
+        return None
+    days = _safe_float(value, None)
+    if days is None or days < 0:
+        return None
+    return int(days)
+
+
 def _margin_pressure_date_note(snapshot, target_date=""):
     latest_date = _margin_pressure_latest_date(snapshot)
     target_date = str(target_date or (snapshot or {}).get("target_date") or "").strip()
     if not latest_date:
         return ""
     if target_date and latest_date < target_date:
-        return f"截至{latest_date}，较报告日{target_date}滞后一交易日"
+        stale_trade_days = _margin_pressure_stale_trade_days(snapshot)
+        if stale_trade_days is None:
+            return f"截至{latest_date}，较报告日{target_date}为滞后事实"
+        return f"截至{latest_date}，较报告日{target_date}滞后{stale_trade_days}个交易日"
     return f"截至{latest_date}"
 
 
@@ -805,7 +832,11 @@ def _margin_pressure_basis(snapshot, target_date=""):
     if latest_date and ratio > 0:
         text = f"截至{latest_date}，融资承接比 {_format_pct(ratio)}"
         if target_date and latest_date < target_date:
-            text = f"{text}；较报告日{target_date}滞后一交易日"
+            stale_trade_days = _margin_pressure_stale_trade_days(snapshot)
+            if stale_trade_days is None:
+                text = f"{text}；较报告日{target_date}为滞后事实"
+            else:
+                text = f"{text}；较报告日{target_date}滞后{stale_trade_days}个交易日"
     elif latest_date:
         text = f"截至{latest_date}"
     elif ratio > 0:
@@ -824,8 +855,8 @@ def _margin_pressure_usage_note(snapshot, target_date=""):
     if not note:
         note = "融资余额是杠杆存量，两市成交额是承接流量。"
     note = note.replace("目标日", "报告日")
-    if "滞后一交易日" in note and "滞后一交易日" in _margin_pressure_basis(snapshot, target_date):
-        parts = [part for part in note.split("。") if "滞后一交易日" not in part]
+    if _margin_pressure_latest_date(snapshot) < str(target_date or (snapshot or {}).get("target_date") or "").strip() and "滞后" in note:
+        parts = [part for part in note.split("。") if "滞后" not in part]
         note = "。".join(part.strip() for part in parts if part.strip())
         if note:
             note = f"{note}。"
@@ -1039,6 +1070,7 @@ def build_market_overview_header_node(context, node_meta=None, node_lookup=None)
 def build_market_overview_indices_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     target_date = _target_date(context)
+    target_date = _target_date(context)
     margin_pressure = _margin_pressure_snapshot(data, target_date, db_path=_daily_fact_db_path(context))
     turnover_result = run_two_market_turnover_nodes(
         build_two_market_turnover_node_specs(enabled_node_keys=["compare"]),
@@ -1169,7 +1201,7 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     up_count, down_count = _resolve_breadth_counts(data)
     top50_share = resolve_top50_turnover_share(data)
     top20_capacity = resolve_top20_turnover_capacity(data)
-    etf_capacity = _etf_capacity_signal(data)
+    etf_capacity = _etf_capacity_signal(data, target_date)
     turnover_basis = str(turnover_comparison.get("condition_text") or "").strip()
     turnover_label = str(turnover_comparison.get("label") or "").strip()
     if turnover_label and turnover_label != "量能历史不足":
@@ -1237,7 +1269,7 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
     daily_fact_db_path = _daily_fact_db_path(context)
     top50_share = resolve_top50_turnover_share(data)
     top20_capacity = resolve_top20_turnover_capacity(data)
-    etf_capacity = _etf_capacity_signal(data)
+    etf_capacity = _etf_capacity_signal(data, target_date)
     new_high = data.get("new_high_feedback") or {}
     new_high_regime = (
         _new_high_regime(new_high.get("all_a_share_pct"), new_high.get("new_high_count"))

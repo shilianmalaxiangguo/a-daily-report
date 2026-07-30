@@ -1008,6 +1008,65 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertIn("趋势龙头/二波预期", role_layer["entries"][0]["reason"])
         self.assertIn("进入量化参与痕迹层", role_layer["entries"][0]["next_basis"])
 
+    def test_leader_reverse_reason_excludes_unrelated_global_sector_evidence(self):
+        source = build_elimination_tournament_payload(
+            trade_date="2026-07-29",
+            variant="replay",
+            selection_workflow={
+                "schema_version": "selection_workflow.v1",
+                "target_date": "2026-07-29",
+                "final": {
+                    "execution_object": {},
+                    "position_pct": 0,
+                    "action_text": "0%不参与",
+                    "source_node": "N8",
+                },
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                        "source_pools": ["extreme_conviction_list"],
+                        "entered_reason": "T字板只作过程证据",
+                        "entry_basis": "涨停、热榜或旧龙头记忆不能作为新仓入口",
+                        "candidate_origin": "legacy_signal_only",
+                        "sector": "汽车配件",
+                        "sector_role": "板块锚",
+                        "reversal_decision": "降级观察",
+                    }
+                ],
+            },
+        )
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-07-29",
+            variant="replay",
+            source_payloads={
+                "daily_context": {
+                    "hot_rank_top50": [
+                        {"code": "605068", "name": "明新旭腾", "rank": 8, "concepts": ["汽车零部件"]}
+                    ],
+                    "hot_plates": [{"name": "半导体", "order": 1}],
+                    "current_mainline_history_record": {
+                        "leading_line": "国产芯片替代",
+                        "primary_mainline": "半导体",
+                    },
+                    "current_sector_turnover_snapshot": {
+                        "sector_name": "半导体",
+                        "turnover_share_pct": 7.2,
+                    },
+                }
+            },
+            elimination_tournament_payload=source,
+        )
+
+        market_layer = next(layer for layer in payload["layers"] if layer["id"] == "market_capital_structure")
+        entry = market_layer["entries"][0]
+
+        self.assertEqual(entry["stock_label"], "明新旭腾(605068)")
+        self.assertEqual(entry["status"], "eliminated")
+        self.assertIn("热榜第8", entry["reason"])
+        self.assertNotIn("当日记录主线=国产芯片替代", entry["reason"])
+        self.assertNotIn("成交跟踪板块=半导体", entry["reason"])
+
     def test_sector_capital_preflight_still_rejects_hot_rank_without_trend_role(self):
         source = build_elimination_tournament_payload(
             trade_date="2026-06-08",
@@ -1755,8 +1814,8 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertIn("T+1参与日预案", html)
         self.assertIn("T+2处理日预案", html)
         self.assertIn("后验只用于批改", html)
-        self.assertIn("板块资金载体预案", html)
-        self.assertIn("T0同源策略，只作差异复核，不新增第二个明日对象", html)
+        self.assertIn("板块资金载体差异复核", html)
+        self.assertIn("T0同源策略只作差异复核；最终0%不新增明日对象", html)
         self.assertIn("和远气体(002971)", html)
         self.assertIn("相关决策列表", html)
         self.assertIn("白痴指数复核表", html)
@@ -1815,12 +1874,28 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
                         "stock_label": "长电科技(600584)",
                         "reason": "半导体进入板块候选；个股证据：热榜关注、容量成交；角色：趋势容量核心",
                     },
+                    "stages": [
+                        {
+                            "title": "纸面动作",
+                            "input_count": 1,
+                            "eliminated_count": 0,
+                            "survivor_count": 1,
+                            "survivors": [
+                                {
+                                    "label": "长电科技(600584)",
+                                    "reason": "板块被资金选择，且主样本具备资金载体证据",
+                                }
+                            ],
+                            "eliminated": [],
+                        }
+                    ],
                 }
             },
             elimination_tournament_payload=self._payload(),
         )
 
         final_layer = payload["layers"][-1]
+        html = render_sector_capital_preflight_html(payload)
 
         self.assertEqual(payload["final_action"]["label"], "0%不参与")
         self.assertEqual(payload["final_action"]["position_pct"], 0)
@@ -1837,6 +1912,11 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertEqual(final_layer["input_count"], 0)
         self.assertEqual(final_layer["survivor_count"], 0)
         self.assertEqual(payload["tplus_rehearsal"]["tplus1"]["participation_qualification"], "只观察承接，不新增参与")
+        self.assertIn("板块资金载体差异复核", html)
+        self.assertIn("差异复核收口", html)
+        self.assertIn("复核样本", html)
+        self.assertNotIn("<td>纸面动作</td>", html)
+        self.assertNotIn("<td>参与或观察</td>", html)
 
     def test_sector_capital_preflight_tplus_rehearsal_keeps_confirmed_old_position_visible(self):
         payload = build_sector_capital_preflight_payload(

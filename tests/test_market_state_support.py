@@ -849,6 +849,50 @@ assert leader["name"] == "军工龙头"
         self.assertGreaterEqual(sector_match_mock.call_count, 2)
         self.assertGreaterEqual(safe_float_mock.call_count, 4)
 
+    def test_default_market_history_fallback_uses_compact_snapshot_loader(self):
+        support = self._load_module()
+        full_loader = unittest.mock.Mock(side_effect=AssertionError("完整快照 loader 不应被调用"))
+        compact_loader = unittest.mock.Mock(
+            return_value=(
+                {
+                    "sector_fund_flow": {
+                        "inflow": [{"name": "脑机接口", "zljlr": 18.5}],
+                        "outflow": [],
+                    },
+                    "total_turnover": 12345.0,
+                },
+                "",
+            )
+        )
+        support._COMPACT_HISTORY_SNAPSHOT_CACHE.clear()
+
+        with patch.object(support, "load_data_snapshot", full_loader), \
+             patch.object(support, "_DEFAULT_LOAD_DATA_SNAPSHOT", full_loader), \
+             patch.object(support, "DatabaseService", None, create=True):
+            helpers = {
+                "_normalize_kline_date_str": lambda value: str(value),
+                "get_previous_date_str": lambda value: "2026-07-22" if value == "2026-07-23" else "",
+                "load_compact_metric_history_snapshot": compact_loader,
+            }
+            flow_result = support.load_recent_sector_flow_history(
+                "2026-07-23",
+                "脑机接口",
+                lookback_days=1,
+                max_scan_days=1,
+                helpers=helpers,
+            )
+            turnover_result = support.load_recent_market_turnover_history(
+                "2026-07-23",
+                lookback_days=1,
+                max_scan_days=1,
+                helpers=helpers,
+            )
+
+        self.assertEqual(flow_result, [{"date": "2026-07-22", "inflow": 18.5}])
+        self.assertEqual(turnover_result, [{"date": "2026-07-22", "turnover": 12345.0}])
+        compact_loader.assert_called_once_with("2026-07-22")
+        full_loader.assert_not_called()
+
     def test_market_state_support_builds_exit_and_leader_helpers_locally(self):
         support = self._load_module()
 

@@ -8,6 +8,8 @@ from pathlib import Path
 from daily_report_snapshot_io import load_data_snapshot
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 
+_DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
+
 try:
     from storage.database_service import DatabaseService
 except Exception:  # pragma: no cover - optional runtime dependency
@@ -16,9 +18,11 @@ except Exception:  # pragma: no cover - optional runtime dependency
 try:
     from domains.market_state.daily_metric_history_index import (
         ensure_daily_metric_history_index as _default_ensure_daily_metric_history_index,
+        load_compact_metric_history_snapshot as _default_load_compact_metric_history_snapshot,
     )
 except Exception:  # pragma: no cover - optional runtime dependency
     _default_ensure_daily_metric_history_index = None
+    _default_load_compact_metric_history_snapshot = None
 
 __all__ = [
     "build_mainline_history_record",
@@ -84,6 +88,21 @@ def ensure_daily_metric_history_index(**kwargs):
     if callable(_default_ensure_daily_metric_history_index):
         return _default_ensure_daily_metric_history_index(**kwargs)
     return {"indexed_count": 0, "dates": []}
+
+
+def load_compact_metric_history_snapshot(target_date):
+    if callable(_default_load_compact_metric_history_snapshot):
+        return _default_load_compact_metric_history_snapshot(target_date)
+    return None, None
+
+
+def _load_history_snapshot(target_date):
+    if globals().get("load_data_snapshot") is not _DEFAULT_LOAD_DATA_SNAPSHOT:
+        return globals()["load_data_snapshot"](target_date)
+    loader = globals().get("load_compact_metric_history_snapshot")
+    if callable(loader):
+        return loader(target_date)
+    return None, None
 
 
 def _postgres_only_runtime():
@@ -360,7 +379,7 @@ def _load_recent_mainline_history_from_fact_db(target_date, lookback_days=25, *,
         record = _normalize_history_record(row, fallback_date=row.get("trade_date") if isinstance(row, dict) else "")
         if record and str(record.get("date") or "") < str(target_date):
             normalized.append(record)
-    if len(normalized) < lookback_days:
+    if len(normalized) < lookback_days and not _postgres_only_runtime():
         series_history = _load_recent_mainline_history_from_series_replay(
             target_date,
             lookback_days=lookback_days,
@@ -462,7 +481,7 @@ def load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20,
                 break
             scanned_days += 1
 
-            snapshot_data, _ = load_data_snapshot(cursor)
+            snapshot_data, _ = _load_history_snapshot(cursor)
             payloads = []
             if snapshot_data:
                 payloads.append(snapshot_data)

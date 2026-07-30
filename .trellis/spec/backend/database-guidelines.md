@@ -641,6 +641,131 @@ return build_turnover_history(rows)
 
 The 25-day import is only the seed; PostgreSQL is the replay source after that.
 
+## Scenario: Bounded Daily Snapshot Serialization
+
+### 1. Scope / Trigger
+
+- Trigger: changing daily-report runtime context, JSON serialization, snapshot
+  persistence, replay snapshot writes, or snapshot observability.
+
+### 2. Signatures
+
+- Runtime compaction:
+  `_compact_execution_stage_context_for_persistence(execution_stage_context) -> dict`
+- Serializer:
+  `_make_serializable(obj, _depth=0, _active_ids=None) -> Any`
+- Persistence:
+  `_save_data_snapshot(data, target_date, mode="frozen") -> str`
+- Limit: `MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024`
+
+### 3. Contracts
+
+- `data.execution_stage_context` must not contain the complete parent `data`
+  mapping or callable runtime dependencies. It must retain business outputs
+  such as candidate evidence, selection results, final decisions, and source
+  dates.
+- The active runtime stage context keeps its callables until all dependent
+  rerenders finish. Persistence compaction returns a shallow copy and must not
+  mutate the active context; otherwise later PK rendering loses price-focus and
+  stop-plan helpers.
+- Circular-reference detection uses the current recursion path, not a global
+  visited-object set. A reference already on the current path becomes
+  `<circular_reference>`; the same shared value used by sibling fields remains
+  fully serialized in both fields.
+- The 50-level recursion limit remains a final malformed-depth fallback. It is
+  not the normal way to stop a direct or indirect object cycle.
+- New official and replay snapshots must not exceed 64MiB of actual UTF-8 JSON
+  bytes. Crossing the limit raises before a target file is replaced.
+- Snapshot JSON is written to a unique temporary file in the target directory.
+  Only a complete dump, flush, and file sync may be followed by `os.replace()`.
+  Every failure removes the temporary file and preserves an existing target
+  byte-for-byte.
+- An existing official snapshot remains frozen. A later frozen save applies
+  the same bounded atomic contract to the replay path.
+- The main daily-report entry records the requested mode, actual mode, target
+  path, actual file size, and size-limit result for every official or replay
+  snapshot attempt. Logs must not contain the complete report payload or
+  database secrets. Alternate orchestrator observation remains a separate
+  migration item; it still uses the same bounded atomic writer.
+- The 64MiB snapshot is transitional recovery material. After PostgreSQL-only
+  replay and downstream consumers pass their migration checks, stop creating
+  new full-report JSON while retaining the old reader for explicit import and
+  repair.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required handling |
+|---|---|
+| `data -> execution_stage_context -> data` | Remove the runtime parent reference before persistence; serializer fallback emits one circular marker |
+| Same mapping appears under two sibling keys without a cycle | Serialize the value under both keys |
+| Serialized bytes exceed 64MiB | Raise a clear size error, remove the temporary file, preserve the target |
+| JSON encoding or file sync fails | Remove the temporary file and preserve the target |
+| First official save succeeds | Produce valid JSON at the official path and report actual bytes |
+| Official path already exists | Leave it unchanged and apply the same atomic limit to the replay path |
+| Snapshot save is mocked and returns a non-path test value | Observation may omit size; production save still returns a real path |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an 8MiB report object with a direct self-reference serializes to about
+  8MiB plus metadata and one circular marker instead of repeating the object.
+- Good: a replay write stays below 64MiB, replaces the old replay file only
+  after complete JSON is durable, and records the final byte count.
+- Base: a legacy object contains a deeper indirect cycle not removed by runtime
+  compaction; the serializer stops at the first repeated object on the active
+  path.
+- Bad: use a global `seen` set and replace a legitimate shared candidate object
+  in the second sibling field with a circular marker.
+- Bad: open the final target with mode `w` before checking size; an oversized or
+  failed dump destroys the previous recoverable snapshot.
+- Bad: rely on the 50-level fallback for a direct self-reference, producing a
+  GB-scale file from a tens-of-MB report object.
+
+### 6. Tests Required
+
+- Unit test a direct `data -> context -> data` cycle and assert one
+  `<circular_reference>` marker without repeated expansion.
+- Unit test a shared sibling mapping and assert both serialized values remain
+  complete.
+- Unit test a valid small frozen save parses as complete JSON and leaves no
+  temporary files.
+- Unit test an oversized replay save raises, leaves the prior replay bytes
+  unchanged, and leaves no temporary files.
+- Report-runtime tests must assert compaction returns a persistence copy without
+  `data` or callable dependencies, preserves selection output, and leaves the
+  active stage context unchanged until dependent rerenders finish.
+- Entry verification must confirm snapshot observation includes the real file
+  size when a production path is returned.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+data["execution_stage_context"] = {"data": data, **runtime_dependencies}
+with snapshot_path.open("w", encoding="utf-8") as file_obj:
+    json.dump(_make_serializable(data), file_obj)
+```
+
+This creates a self-reference, expands it until the depth fallback, and
+truncates an existing target before size or encoding success is known.
+
+#### Correct
+
+```python
+persisted_context = {
+    key: value
+    for key, value in context.items()
+    if key != "data" and not callable(value)
+}
+data["execution_stage_context"] = persisted_context
+
+write_bounded_temp_json(data, max_bytes=64 * 1024 * 1024)
+os.replace(temp_path, snapshot_path)
+```
+
+The persisted context retains business facts, circular fallback remains at the
+serializer boundary, and only a complete bounded file replaces the target.
+
 ## Scenario: Bear Tomorrow-Action Calendar History
 
 ### 1. Scope / Trigger

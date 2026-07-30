@@ -186,10 +186,16 @@ _COMPACT_METRIC_HISTORY_KEYS = (
     "market_stats",
     "sector_fund_flow",
     "current_mainline_history_record",
+    "current_mainline_history_records",
     "mainline_history_record",
+    "mainline_history_records",
     "recent_mainline_history",
     "current_sector_turnover_snapshot",
     "sector_turnover_snapshot",
+    "sector_turnover_snapshots",
+    "market_amount_yi",
+    "total_amount_yi",
+    "turnover_data",
     "mainline_turnover_summary",
     "new_high_feedback",
 )
@@ -309,6 +315,10 @@ def _load_compact_snapshot_file(snapshot_path):
 def _load_compact_metric_history_snapshot(target_date):
     snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN))
     return _load_compact_snapshot_file(snapshot_path)
+
+
+def load_compact_metric_history_snapshot(target_date):
+    return _load_compact_metric_history_snapshot(target_date)
 
 
 def _new_high_record_from_report_markdown(markdown, fallback_date):
@@ -699,4 +709,4 @@ def ensure_daily_metric_history_index(
     return result
 
 
-__all__ = ["ensure_daily_metric_history_index"]
+__all__ = ["ensure_daily_metric_history_index", "load_compact_metric_history_snapshot"]

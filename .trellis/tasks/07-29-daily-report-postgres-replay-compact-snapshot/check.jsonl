@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "检查 PostgreSQL-only 路径与 JSON 兼容边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查原子写入与失败保护"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查 replay、snap-ui、发布器和持久化链路遗漏"}
+{"file": ".trellis/tasks/07-29-daily-report-postgres-replay-compact-snapshot/research/snapshot-root-cause-and-postgres-coverage-summary.md", "reason": "检查实现是否处理已确认根因和覆盖缺口"}

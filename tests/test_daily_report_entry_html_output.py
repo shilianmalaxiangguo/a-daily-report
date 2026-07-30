@@ -46,6 +46,39 @@ def _complete_wiki_context(target_date):
 
 class DailyReportEntryHtmlOutputTest(unittest.TestCase):
     def setUp(self):
+        report_output_tempdir = TemporaryDirectory()
+        self.addCleanup(report_output_tempdir.cleanup)
+
+        def temporary_report_output_path(target_date, mode="frozen", variant="full"):
+            replay_suffix = "_replay" if mode == daily_report_entry_demo.LEDGER_MODE_REPLAY else ""
+            return str(
+                Path(report_output_tempdir.name)
+                / f"{target_date}_A股日报_{variant}{replay_suffix}.md"
+            )
+
+        report_output_path_patcher = patch.object(
+            daily_report_entry_demo,
+            "_get_report_output_path",
+            side_effect=temporary_report_output_path,
+        )
+        report_output_path_patcher.start()
+        self.addCleanup(report_output_path_patcher.stop)
+
+        path_selection_patcher = patch.object(
+            daily_report_entry_demo,
+            "_select_daily_report_data_path",
+            side_effect=lambda args, target_date: {
+                "eligible": False,
+                "selected_path": daily_report_entry_demo._daily_report_data_path_label(args),
+                "target_date": target_date,
+                "reason": "保留测试指定路径",
+                "data": {},
+                "preflight": {},
+            },
+        )
+        path_selection_patcher.start()
+        self.addCleanup(path_selection_patcher.stop)
+
         def accept_legacy_save_stub(report_path, expected_markdown):
             return str(expected_markdown or "")
 
@@ -409,14 +442,17 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ["bear_render", "sync", "bear_render", "runtime_artifacts", "markdown", "chanlun", "html"],
+            ["bear_render", "sync", "bear_render", "runtime_artifacts", "chanlun", "html", "markdown"],
         )
         self.assertEqual(html_mock.call_count, 1)
         self.assertEqual(html_mock.call_args.args[0], "2026-06-05")
         self.assertEqual(html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
         self.assertEqual(
             html_mock.call_args.kwargs["saved_report_paths"],
-            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+            {
+                daily_report_entry_demo.REPORT_VARIANT_FULL:
+                daily_report_entry_demo._get_report_output_path("2026-06-05")
+            },
         )
         self.assertEqual(html_mock.call_args.kwargs["html_text"], "<html>bear</html>")
 
@@ -448,7 +484,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(bear_html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
         self.assertEqual(
             bear_html_mock.call_args.kwargs["saved_report_paths"],
-            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+            {
+                daily_report_entry_demo.REPORT_VARIANT_FULL:
+                daily_report_entry_demo._get_report_output_path("2026-06-10")
+            },
         )
         prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
         self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))
@@ -1461,9 +1500,11 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                 "sync",
                 "audit",
                 "runtime_artifacts",
-                "markdown",
+                "audit",
+                "audit",
                 "chanlun",
                 "html",
+                "markdown",
                 "snapshot",
             ],
         )
@@ -1686,6 +1727,75 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             self.assertFalse(html_path.exists())
             self.assertFalse(html_path.with_suffix(".html.tmp").exists())
 
+    def test_bear_html_write_failure_stops_before_markdown_save(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()))
+            stack.enter_context(patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo.os.path, "exists", return_value=False))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_markdown_report_html", return_value="<html>bear</html>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", return_value={}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-05", "field_count": 8}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_elimination_tournament_html", return_value=None))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_sector_capital_preflight_html", return_value=None))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_audit_generated_report_with_companion_html_paths", return_value={"passed": True}))
+            save_chanlun_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")))
+            html_mock = stack.enter_context(patch.object(
+                daily_report_entry_demo,
+                "_try_save_daily_report_html_from_saved_markdown",
+                side_effect=daily_report_entry_demo.ReportCriticalDataMissingError("Bear HTML 写入失败，停止生成"),
+            ))
+            save_markdown_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_report_outputs"))
+            with self.assertRaises(daily_report_entry_demo.ReportCriticalDataMissingError):
+                daily_report_entry_demo.main()
+
+        save_chanlun_mock.assert_called_once()
+        html_mock.assert_called_once()
+        save_markdown_mock.assert_not_called()
+
+    def test_companion_html_check_failure_stops_before_main_artifact_save(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()))
+            stack.enter_context(patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={"position_context_provided": True}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]))
+            stack.enter_context(patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo.os.path, "exists", return_value=False))
+            stack.enter_context(patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()))
+            stack.enter_context(patch.object(daily_report_entry_demo, "render_markdown_report_html", return_value="<html>bear</html>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", return_value={}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"))
+            stack.enter_context(patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-05", "field_count": 8}))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_elimination_tournament_html", return_value=None))
+            stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_sector_capital_preflight_html", return_value=None))
+            companion_audit_mock = stack.enter_context(patch.object(
+                daily_report_entry_demo,
+                "_audit_generated_report_with_companion_html_paths",
+                side_effect=daily_report_entry_demo.ReportCriticalDataMissingError("附属页面事实不一致，停止生成"),
+            ))
+            save_chanlun_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"))
+            html_mock = stack.enter_context(patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown"))
+            save_markdown_mock = stack.enter_context(patch.object(daily_report_entry_demo, "save_report_outputs"))
+            with self.assertRaises(daily_report_entry_demo.ReportCriticalDataMissingError):
+                daily_report_entry_demo.main()
+
+        companion_audit_mock.assert_called_once()
+        save_chanlun_mock.assert_not_called()
+        html_mock.assert_not_called()
+        save_markdown_mock.assert_not_called()
+
     def test_runtime_artifact_failure_does_not_prevent_markdown_save(self):
         order = []
 
@@ -1722,9 +1832,9 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         persist_mock.assert_called_once()
         save_markdown_mock.assert_called_once()
-        self.assertEqual(order, ["markdown", "chanlun", "html"])
+        self.assertEqual(order, ["chanlun", "html", "markdown"])
 
-    def test_main_saves_sector_capital_preflight_after_markdown(self):
+    def test_main_checks_sector_capital_preflight_before_markdown(self):
         order = []
         tempdir = TemporaryDirectory()
         self.addCleanup(tempdir.cleanup)
@@ -1783,7 +1893,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html):
             daily_report_entry_demo.main()
 
-        self.assertEqual(order, ["sync", "runtime_artifacts", "markdown", "elimination", "preflight", "chanlun", "html"])
+        self.assertEqual(order, ["sync", "runtime_artifacts", "elimination", "preflight", "chanlun", "html", "markdown"])
 
     def test_chart_html_fact_missing_still_saves_bear_html(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
@@ -1817,7 +1927,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
         self.assertEqual(
             html_mock.call_args.kwargs["saved_report_paths"],
-            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+            {
+                daily_report_entry_demo.REPORT_VARIANT_FULL:
+                daily_report_entry_demo._get_report_output_path("2026-06-05")
+            },
         )
         prepend_markdown = html_mock.call_args.kwargs["prepend_markdown"]
         self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))
@@ -1897,7 +2010,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         self.assertEqual(
             order,
-            ["build", "sync", "runtime_artifacts", "markdown", "html", "snapshot"],
+            ["build", "sync", "runtime_artifacts", "html", "markdown", "snapshot"],
         )
         persist_mock.assert_called_once_with(
             data,
@@ -2090,7 +2203,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(bear_html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
         self.assertEqual(
             bear_html_mock.call_args.kwargs["saved_report_paths"],
-            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+            {
+                daily_report_entry_demo.REPORT_VARIANT_FULL:
+                daily_report_entry_demo._get_report_output_path("2026-06-05")
+            },
         )
         prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
         self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))

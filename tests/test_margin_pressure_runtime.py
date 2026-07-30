@@ -78,8 +78,49 @@ class MarginPressureRuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["target_date"], "2026-05-22")
         self.assertTrue(snapshot["is_stale_for_target"])
         self.assertIn("截至2026-05-21", snapshot["summary"])
-        self.assertIn("较目标日2026-05-22滞后一交易日", snapshot["usage_note"])
+        self.assertEqual(snapshot["stale_trade_days"], 1)
+        self.assertIn("较目标日2026-05-22滞后1个交易日", snapshot["usage_note"])
         self.assertEqual(snapshot["source"], "eastmoney.rzrq.total.RZYE")
+
+    def test_build_margin_pressure_snapshot_reports_actual_stale_trade_days(self):
+        from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
+
+        snapshot = build_margin_pressure_snapshot(
+            [
+                {
+                    "trade_date": "2026-07-23",
+                    "margin_balance_yi": 26666.03,
+                    "market_turnover_yi": 17577.86,
+                    "exchange_count": 3,
+                }
+            ],
+            target_date="2026-07-27",
+        )
+
+        self.assertFalse(snapshot["available"])
+        self.assertEqual(snapshot["status"], "stale_fact_date")
+        self.assertEqual(snapshot["stale_trade_days"], 2)
+        self.assertIn("较目标日2026-07-27滞后2个交易日", snapshot["message"])
+
+    def test_build_margin_pressure_snapshot_allows_one_trade_day_lag_from_trade_calendar(self):
+        from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
+
+        snapshot = build_margin_pressure_snapshot(
+            [
+                {
+                    "trade_date": "2026-07-24",
+                    "margin_balance_yi": 26666.03,
+                    "market_turnover_yi": 15379.48,
+                    "exchange_count": 3,
+                }
+            ],
+            target_date="2026-07-27",
+            trade_dates=["2026-07-24", "2026-07-27"],
+        )
+
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["stale_trade_days"], 1)
+        self.assertIn("较目标日2026-07-27滞后1个交易日", snapshot["usage_note"])
 
 
 if __name__ == "__main__":

@@ -487,7 +487,7 @@ def _fallback_call(fn, target_date):
     return fn(target_date=target_date)
 
 
-def _fetch_turnover_rows_with_retry(fetcher, target_date, retry_count=1):
+def _fetch_turnover_rows_with_retry(fetcher, target_date, retry_count=2):
     attempts = max(int(retry_count or 0), 0) + 1
     last_rows = []
     for attempt in range(attempts):
@@ -1133,9 +1133,20 @@ def get_new_high_feedback_from_tushare_first(
     history_rows_was_provided = history_rows is not None
 
     def _fetch_factor_rows(trade_date):
-        if pro is not None:
-            return factor_fetcher(trade_date, pro=pro) or []
-        return factor_fetcher(trade_date) or []
+        rows = []
+        last_error = None
+        for _attempt in range(3):
+            try:
+                if pro is not None:
+                    rows = factor_fetcher(trade_date, pro=pro) or []
+                else:
+                    rows = factor_fetcher(trade_date) or []
+            except Exception as error:
+                last_error = error
+                rows = []
+            if rows:
+                break
+        return rows, last_error
 
     def _refill_recent_quote_history(service, *, start_date, end_date):
         if service is None or not start_date or not end_date:
@@ -1268,7 +1279,7 @@ def get_new_high_feedback_from_tushare_first(
     refill_quote_dates = []
     factor_error = None
     try:
-        factor_rows = _fetch_factor_rows(factor_trade_date)
+        factor_rows, factor_error = _fetch_factor_rows(factor_trade_date)
     except Exception as error:
         factor_rows = []
         factor_error = error
@@ -1483,7 +1494,7 @@ def get_new_high_feedback_from_tushare_first(
                     ensure_daily_metric_history_index_fn = ensure_daily_metric_history_index
                 if callable(ensure_daily_metric_history_index_fn):
                     def _build_new_high_for_history(history_date):
-                        rows = _fetch_factor_rows(history_date)
+                        rows, _history_factor_error = _fetch_factor_rows(history_date)
                         return build_new_high_feedback_snapshot(
                             rows,
                             stock_basic_map=stock_basic_map,
@@ -1713,19 +1724,42 @@ def _median_positive_int(values):
     return int(round((numbers[middle - 1] + numbers[middle]) / 2))
 
 
+def _latest_etf_turnover_data_date(rows, target_date_text=""):
+    target_text = normalize_kline_date_str(target_date_text)
+    dates = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        trade_date = normalize_kline_date_str(row.get("trade_date") or row.get("date"))
+        if not trade_date or (target_text and trade_date > target_text):
+            continue
+        dates.append(trade_date)
+    return max(dates, default="")
+
+
 def _annotate_etf_turnover_coverage_quality(rows, target_date_text, total_symbol_count=0):
     rows = [dict(row or {}) for row in rows or []]
+    normalized_target_date = normalize_kline_date_str(target_date_text)
+    latest_data_date = _latest_etf_turnover_data_date(rows, normalized_target_date)
+    is_stale_for_target = bool(
+        normalized_target_date
+        and latest_data_date
+        and latest_data_date < normalized_target_date
+    )
     if not rows:
         return rows, {
             "coverage_status": "empty",
             "coverage_anomaly": False,
             "coverage_anomaly_reason": "",
+            "latest_data_date": "",
+            "is_stale_for_target": False,
         }
 
     target_index = len(rows) - 1
-    if target_date_text:
+    current_data_date = normalized_target_date if latest_data_date == normalized_target_date else latest_data_date
+    if current_data_date:
         for index, row in enumerate(rows):
-            if str(row.get("trade_date") or row.get("date") or "").strip() == target_date_text:
+            if normalize_kline_date_str(row.get("trade_date") or row.get("date")) == current_data_date:
                 target_index = index
 
     current = rows[target_index]
@@ -1767,16 +1801,25 @@ def _annotate_etf_turnover_coverage_quality(rows, target_date_text, total_symbol
         "latest_covered_etf_count": current_count,
         "total_etf_universe_count": total_count,
         "coverage_anomaly_reason": "",
+        "latest_data_date": latest_data_date,
+        "is_stale_for_target": is_stale_for_target,
     }
     if is_anomaly:
         reasons = []
+        coverage_date_label = (
+            "目标日"
+            if normalized_target_date and latest_data_date == normalized_target_date
+            else f"最后事实日{latest_data_date or '缺失'}"
+        )
         if relative_anomaly:
             reasons.append(
-                f"目标日有成交ETF数{current_count}只，低于近10个前序样本中位数"
+                f"{coverage_date_label}有成交ETF数{current_count}只，低于近10个前序样本中位数"
                 f"{reference_count}只的70%"
             )
         if overall_anomaly:
-            reasons.append(f"目标日有成交ETF数{current_count}只，仅覆盖ETF样本池{total_count}只的95%以下")
+            reasons.append(
+                f"{coverage_date_label}有成交ETF数{current_count}只，仅覆盖ETF样本池{total_count}只的95%以下"
+            )
         if sequence_anomaly:
             reasons.append(f"历史序列最低有成交ETF数{min_sequence_count}只，仅覆盖ETF样本池{total_count}只的95%以下")
         reason = "；".join(reasons) + "，样本覆盖不足"
@@ -1952,10 +1995,12 @@ def _build_etf_turnover_series_payload(
         target_date_text,
         total_symbol_count=total_symbol_count,
     )
+    requested_trade_date = normalize_kline_date_str(target_date_text) or str(target_date_text or "").strip()
+    latest_data_date = str(coverage_quality.get("latest_data_date") or "").strip()
     return {
-        "available": bool(rows),
+        "available": bool(rows) and (not requested_trade_date or latest_data_date == requested_trade_date),
         "source": source,
-        "requested_trade_date": target_date_text,
+        "requested_trade_date": requested_trade_date,
         "usable_etf_count": usable_etf_count,
         "empty_etf_count": empty_etf_count,
         **coverage_quality,
@@ -2236,14 +2281,28 @@ def _etf_turnover_series_from_tushare_fund_daily(
             "available": False,
             "source": "tushare.fund_daily.etf_amount",
             "requested_trade_date": target_date_text,
+            "latest_data_date": "",
+            "is_stale_for_target": False,
             "error": "ETF成交额备用来源超过时间预算",
             "rows": [],
         }
     start_date = (target_dt - datetime.timedelta(days=max(int(window_days or 25) * 3, 90))).strftime("%Y-%m-%d")
     date_fetcher = fetch_tushare_open_trade_dates_fn or fetch_tushare_open_trade_dates
+    try:
+        fetched_trade_dates = date_fetcher(start_date, target_date_text) or []
+    except Exception as error:
+        return {
+            "available": False,
+            "source": "tushare.fund_daily.etf_amount",
+            "requested_trade_date": target_date_text,
+            "latest_data_date": "",
+            "is_stale_for_target": False,
+            "error": str(error),
+            "rows": [],
+        }
     trade_dates = [
         normalize_kline_date_str(item)
-        for item in (date_fetcher(start_date, target_date_text) or [])
+        for item in fetched_trade_dates
     ]
     trade_dates = sorted({item for item in trade_dates if item and item <= target_date_text})
     selected_dates = trade_dates[-int(window_days or 25):]
@@ -2254,6 +2313,8 @@ def _etf_turnover_series_from_tushare_fund_daily(
             "available": False,
             "source": "tushare.fund_daily.etf_amount",
             "requested_trade_date": target_date_text,
+            "latest_data_date": "",
+            "is_stale_for_target": False,
             "error": "ETF成交额备用来源超过时间预算",
             "rows": [],
         }
@@ -2267,10 +2328,10 @@ def _etf_turnover_series_from_tushare_fund_daily(
     )
     amount_by_date = {}
     symbols_by_date = {}
+    fallback_error = ""
 
     if fetch_tushare_fund_daily_rows_fn is None:
         source_rows = []
-        fallback_error = ""
         chunk_size = 5
         for chunk_start in range(0, len(selected_dates), chunk_size):
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
@@ -2294,6 +2355,8 @@ def _etf_turnover_series_from_tushare_fund_daily(
                 "available": False,
                 "source": "tushare.fund_daily.etf_amount",
                 "requested_trade_date": target_date_text,
+                "latest_data_date": "",
+                "is_stale_for_target": False,
                 "error": fallback_error,
                 "rows": [],
             }
@@ -2308,8 +2371,13 @@ def _etf_turnover_series_from_tushare_fund_daily(
         rows_by_date = {}
         for trade_date in selected_dates:
             if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                fallback_error = "ETF成交额备用来源超过时间预算"
                 break
-            rows_by_date[trade_date] = list(row_fetcher(trade_date) or [])
+            try:
+                rows_by_date[trade_date] = list(row_fetcher(trade_date) or [])
+            except Exception as error:
+                fallback_error = str(error)
+                break
 
     for trade_date in selected_dates:
         for row in rows_by_date.get(trade_date) or []:
@@ -2349,7 +2417,7 @@ def _etf_turnover_series_from_tushare_fund_daily(
         if payload.get("rows"):
             payload["rows"][-1]["coverage_anomaly"] = True
             payload["rows"][-1]["coverage_anomaly_reason"] = reason
-    if fetch_tushare_fund_daily_rows_fn is None and fallback_error:
+    if fallback_error:
         payload["error"] = fallback_error
     return payload
 
@@ -2618,6 +2686,8 @@ def get_etf_turnover_series_from_sina_first(
             "available": False,
             "source": "sina.etf.daily_amount",
             "requested_trade_date": normalize_kline_date_str(target_date) or str(target_date or "").strip(),
+            "latest_data_date": "",
+            "is_stale_for_target": False,
             "error": str(error),
             "rows": [],
         }
@@ -3173,6 +3243,9 @@ def _merge_margin_and_turnover_rows(margin_rows, amount_rows):
             "trade_date": trade_date,
             "market_turnover_yi": _safe_float(amount_row.get("market_turnover_yi")),
             "stock_count": _safe_int(amount_row.get("stock_count")),
+            "margin_source_date": normalize_kline_date_str((row or {}).get("source_date") or trade_date),
+            "turnover_source_date": normalize_kline_date_str(amount_row.get("source_date") or trade_date),
+            "query_date": normalize_kline_date_str(amount_row.get("query_date") or ""),
             "source_policy": "{}+{}".format(
                 (row or {}).get("source_policy") or (row or {}).get("source") or "tushare.margin",
                 amount_row.get("source_policy") or "tushare.index_daily.market_amount"
@@ -3180,6 +3253,72 @@ def _merge_margin_and_turnover_rows(margin_rows, amount_rows):
         }
         rows.append(item)
     return sorted(rows, key=lambda item: item.get("trade_date", ""))
+
+
+def _paired_margin_pressure_trade_dates(rows, *, end_date=""):
+    end = normalize_kline_date_str(end_date)
+    return sorted(
+        {
+            trade_date
+            for row in rows or []
+            for trade_date in [normalize_kline_date_str((row or {}).get("trade_date"))]
+            if (
+                trade_date
+                and (not end or trade_date <= end)
+                and _safe_float((row or {}).get("margin_balance_yi")) > 0
+                and _safe_float((row or {}).get("market_turnover_yi")) > 0
+            )
+        }
+    )
+
+
+def _has_target_index_bar(bars, target_date):
+    target_date_text = normalize_kline_date_str(target_date)
+    return bool(
+        target_date_text
+        and any(
+            normalize_kline_date_str((bar or {}).get("date")) == target_date_text
+            for bar in bars or []
+        )
+    )
+
+
+def _fetch_index_price_bars_with_target_fallback(
+    code,
+    start_date,
+    end_date,
+    *,
+    fetch_daily_price_bars_fn=None,
+):
+    fetcher = fetch_daily_price_bars_fn or fetch_daily_price_bars
+    try:
+        primary_bars = fetcher(code, start_date, end_date, is_index=True) or []
+    except Exception:
+        primary_bars = []
+    if _has_target_index_bar(primary_bars, end_date) or fetch_daily_price_bars_fn is not None:
+        return primary_bars
+    try:
+        from market_data.daily_price_runtime import fetch_daily_price_bars as fetch_fallback_price_bars
+
+        fallback_bars = fetch_fallback_price_bars(
+            code,
+            start_date,
+            end_date,
+            is_index=True,
+            prefer_fast=True,
+            allow_baostock_fallback=False,
+        ) or []
+    except Exception:
+        return primary_bars
+    if not _has_target_index_bar(fallback_bars, end_date):
+        return primary_bars
+    return [
+        {
+            **dict(bar or {}),
+            "data_source": (bar or {}).get("data_source") or "quicktiny.merged_kline.index_daily",
+        }
+        for bar in fallback_bars
+    ]
 
 
 def get_margin_pressure_from_tushare_first(
@@ -3241,17 +3380,19 @@ def get_margin_pressure_from_tushare_first(
     margin_fetcher = fetch_margin_balance_rows_fn or fetch_margin_balance_rows
     amount_fetcher = fetch_market_daily_amount_rows_fn or fetch_market_index_amount_rows_fn or fetch_market_index_amount_rows
     market_margin_fetcher = fetch_market_margin_balance_rows_fn or fetch_market_margin_balance_rows
+    trade_dates = []
     try:
         trade_dates = [
             normalize_kline_date_str(item)
             for item in (date_fetcher(start_date, target_date_text) or [])
         ]
         trade_dates = sorted({item for item in trade_dates if item and item <= target_date_text})
-        selected_dates = trade_dates[-max(int(calibration_days or 250), int(window_days or 25)) :]
-        if not selected_dates:
-            return build_margin_pressure_snapshot([])
-        start = selected_dates[0]
-        end = selected_dates[-1]
+        calendar_available = bool(trade_dates)
+        staleness_trade_dates = trade_dates if calendar_available else None
+        requested_days = max(int(calibration_days or 250), int(window_days or 25))
+        selected_dates = trade_dates[-requested_days:]
+        start = selected_dates[0] if selected_dates else start_date
+        end = selected_dates[-1] if selected_dates else target_date_text
         margin_error = ""
         try:
             margin_rows = margin_fetcher(start, end, pro=pro) if pro is not None else margin_fetcher(start, end)
@@ -3260,6 +3401,11 @@ def get_margin_pressure_from_tushare_first(
             margin_rows = []
         amount_rows = amount_fetcher(start, end, pro=pro) if pro is not None else amount_fetcher(start, end)
         rows = _merge_margin_and_turnover_rows(margin_rows, amount_rows)
+        if not calendar_available:
+            selected_dates = _paired_margin_pressure_trade_dates(
+                rows,
+                end_date=target_date_text,
+            )[-requested_days:]
         selected_set = set(selected_dates)
         rows = [row for row in rows if row.get("trade_date") in selected_set]
         primary_snapshot = build_margin_pressure_snapshot(
@@ -3267,11 +3413,22 @@ def get_margin_pressure_from_tushare_first(
             window_days=window_days,
             calibration_days=calibration_days,
             target_date=target_date_text,
+            trade_dates=staleness_trade_dates,
         )
-        if not primary_snapshot.get("available") and primary_snapshot.get("status") in {"incomplete_exchange_rows", "upstream_empty"}:
+        if not primary_snapshot.get("available") and primary_snapshot.get("status") in {
+            "incomplete_exchange_rows",
+            "stale_fact_date",
+            "upstream_empty",
+        }:
             try:
                 market_margin_rows = market_margin_fetcher(start, end)
                 fallback_rows = _merge_margin_and_turnover_rows(market_margin_rows, amount_rows)
+                if not calendar_available:
+                    selected_dates = _paired_margin_pressure_trade_dates(
+                        fallback_rows,
+                        end_date=target_date_text,
+                    )[-requested_days:]
+                    selected_set = set(selected_dates)
                 fallback_rows = [row for row in fallback_rows if row.get("trade_date") in selected_set]
                 if fallback_rows:
                     rows = fallback_rows
@@ -3302,6 +3459,7 @@ def get_margin_pressure_from_tushare_first(
                     window_days=window_days,
                     calibration_days=calibration_days,
                     target_date=target_date_text,
+                    trade_dates=staleness_trade_dates,
                 )
                 if refreshed_snapshot.get("available"):
                     rows = refreshed_rows
@@ -3312,6 +3470,7 @@ def get_margin_pressure_from_tushare_first(
             window_days=window_days,
             calibration_days=calibration_days,
             target_date=target_date_text,
+            trade_dates=staleness_trade_dates,
         )
         if margin_error:
             if snapshot.get("available"):
@@ -3332,6 +3491,7 @@ def get_margin_pressure_from_tushare_first(
                     window_days=window_days,
                     calibration_days=calibration_days,
                     target_date=target_date_text,
+                    trade_dates=trade_dates or None,
                 )
                 if fallback_snapshot.get("available"):
                     fallback_snapshot.setdefault("refresh_error", str(error))
@@ -4292,9 +4452,10 @@ def get_lhb_snapshot_from_tushare_first(
 ):
     fetcher = fetch_tushare_top_list_fn or fetch_tushare_top_list
     try:
+        source_rows = list(fetcher(target_date) or [])
         grouped_rows = [
             row
-            for row in _normalize_tushare_lhb_group(fetcher(target_date) or [])
+            for row in _normalize_tushare_lhb_group(source_rows)
             if row.get("net_amount_available")
         ]
         if grouped_rows:
@@ -4354,6 +4515,8 @@ def get_lhb_snapshot_from_tushare_first(
                 "lhb_analysis": analysis_rows,
                 "lhb_inst_detail": inst_detail,
                 "lhb_inst_detail_status": inst_status,
+                "lhb_source_record_count": len(source_rows),
+                "lhb_grouped_record_count": len(grouped_rows),
                 "provider": "tushare.top_list+top_inst" if inst_detail else "tushare.top_list",
                 "fallback_used": False,
             }
@@ -4362,13 +4525,22 @@ def get_lhb_snapshot_from_tushare_first(
 
     if callable(legacy_get_lhb_snapshot_fn):
         fallback = legacy_get_lhb_snapshot_fn(target_date=target_date) or {}
-        return {**fallback, "provider": fallback.get("provider") or "legacy.lhb_snapshot", "fallback_used": True}
+        fallback_rows = list(fallback.get("lhb_analysis") or [])
+        return {
+            **fallback,
+            "lhb_source_record_count": fallback.get("lhb_source_record_count", len(fallback_rows)),
+            "lhb_grouped_record_count": fallback.get("lhb_grouped_record_count", len(fallback_rows)),
+            "provider": fallback.get("provider") or "legacy.lhb_snapshot",
+            "fallback_used": True,
+        }
     return {
         "lhb_net_buy_top10": [],
         "lhb_net_sell_top10": [],
         "lhb_analysis": [],
         "lhb_inst_detail": [],
         "lhb_inst_detail_status": "empty",
+        "lhb_source_record_count": 0,
+        "lhb_grouped_record_count": 0,
         "provider": "legacy.lhb_snapshot",
         "fallback_used": True,
     }
@@ -4799,7 +4971,7 @@ def get_limit_pool_snapshot_from_tushare_first(
             database_service_cls=database_service_cls,
             db_path=db_path,
         )
-    if daily_stats.get("up_count") > 0 and daily_stats.get("down_count") > 0:
+    if _market_stats_complete(daily_stats):
         return {
             "zt_pool": [],
             "dt_pool": [],
@@ -4873,7 +5045,7 @@ def _latest_index_payload(name, code, bars, target_date=None):
         "change_pct": change_pct,
         "turnover": _safe_float(latest_bar.get("amount_yi")) or _safe_float(latest_bar.get("amount")),
         "涨跌幅": change_pct,
-        "data_source": "tushare.index_daily",
+        "data_source": latest_bar.get("data_source") or "tushare.index_daily",
         "trade_date": latest_bar.get("date"),
     }
 
@@ -4891,7 +5063,6 @@ def get_major_indices_from_tushare_first(
     fetch_daily_price_bars_fn=None,
     legacy_get_major_indices_fn=None,
 ):
-    fetcher = fetch_daily_price_bars_fn or fetch_daily_price_bars
     start_date, end_date = _index_query_window(target_date)
     index_map = {
         "上证指数": "000001",
@@ -4905,7 +5076,12 @@ def get_major_indices_from_tushare_first(
             payload = _latest_index_payload(
                 name,
                 code,
-                fetcher(code, start_date, end_date, is_index=True),
+                _fetch_index_price_bars_with_target_fallback(
+                    code,
+                    start_date,
+                    end_date,
+                    fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+                ),
                 target_date=target_date,
             )
             if payload:
@@ -4927,7 +5103,6 @@ def _get_single_index_from_tushare_first(
     fetch_daily_price_bars_fn=None,
     legacy_get_index_fn=None,
 ):
-    fetcher = fetch_daily_price_bars_fn or fetch_daily_price_bars
     start_date, end_date = _index_query_window(target_date)
 
     attempts = 3 if fetch_daily_price_bars_fn is None else 1
@@ -4936,7 +5111,12 @@ def _get_single_index_from_tushare_first(
             payload = _latest_index_payload(
                 name,
                 code,
-                fetcher(code, start_date, end_date, is_index=True),
+                _fetch_index_price_bars_with_target_fallback(
+                    code,
+                    start_date,
+                    end_date,
+                    fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+                ),
                 target_date=target_date,
             )
             if payload and _safe_float(payload.get("price")) > 0:

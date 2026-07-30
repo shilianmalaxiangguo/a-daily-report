@@ -4,6 +4,7 @@ import datetime as _dt
 import os
 
 from market_data.tushare_client import load_local_env_file as _load_runtime_env_file
+from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
 from domains.calendar_events.request import collect_calendar_events_request_bundle
 from domains.market_activity.infer import (
     build_market_activity_quant_signal_bundle,
@@ -96,6 +97,58 @@ def _fetch_quicktiny_exchange_monitor_payload(*, requests_module=None, env=None,
 def _margin_pressure_payload_available(payload):
     rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
     return bool((payload or {}).get("available") and rows)
+
+
+def _latest_etf_turnover_data_date(payload, target_date=""):
+    target_day = parse_kline_date(target_date)
+    rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
+    dates = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        trade_day = parse_kline_date(row.get("trade_date") or row.get("date"))
+        if trade_day is None or (target_day and trade_day > target_day):
+            continue
+        dates.append(trade_day)
+    latest = max(dates, default=None)
+    return latest.isoformat() if latest else ""
+
+
+def _future_etf_turnover_data_dates(payload, target_date=""):
+    target_day = parse_kline_date(target_date)
+    if target_day is None:
+        return []
+    rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
+    dates = {
+        parse_kline_date(row.get("trade_date") or row.get("date"))
+        for row in rows or []
+        if isinstance(row, dict)
+    }
+    return sorted(date.isoformat() for date in dates if date and date > target_day)
+
+
+def _invalid_etf_turnover_data_dates(payload):
+    rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
+    invalid = []
+    for index, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            invalid.append(f"第{index + 1}行非结构化")
+            continue
+        raw_date = row.get("trade_date") or row.get("date")
+        if parse_kline_date(raw_date) is None:
+            invalid.append(str(raw_date or f"第{index + 1}行缺失"))
+    return invalid
+
+
+def _etf_turnover_coverage_anomaly(payload):
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("coverage_anomaly") is True or str(payload.get("coverage_status") or "").strip() == "partial":
+        return True
+    return any(
+        isinstance(row, dict) and row.get("coverage_anomaly") is True
+        for row in (payload.get("rows") or [])
+    )
 
 
 def _fetch_margin_pressure_with_retry(fetcher, target_date):
@@ -541,13 +594,48 @@ def _run_input_runtime_legacy_body(target_date=None):
                 etf_turnover_series = {}
             results["etf_turnover_series"] = etf_turnover_series or {}
             etf_rows = (etf_turnover_series or {}).get("rows") or []
-            etf_coverage_anomaly = bool((etf_turnover_series or {}).get("coverage_anomaly"))
-            etf_usable = bool(etf_rows) and not etf_coverage_anomaly
+            etf_coverage_anomaly = _etf_turnover_coverage_anomaly(etf_turnover_series)
+            etf_latest_data_date = _latest_etf_turnover_data_date(etf_turnover_series, target_date)
+            etf_future_data_dates = _future_etf_turnover_data_dates(etf_turnover_series, target_date)
+            etf_invalid_data_dates = _invalid_etf_turnover_data_dates(etf_turnover_series)
+            target_day = parse_kline_date(target_date)
+            target_text = target_day.isoformat() if target_day else ""
+            etf_date_matches_target = bool(target_text and etf_latest_data_date == target_text)
+            etf_available = (etf_turnover_series or {}).get("available") is True
+            etf_is_stale_for_target = bool(
+                target_text
+                and etf_latest_data_date
+                and etf_latest_data_date < target_text
+            )
+            etf_usable = bool(
+                etf_available
+                and etf_rows
+                and etf_date_matches_target
+                and not etf_future_data_dates
+                and not etf_invalid_data_dates
+                and not etf_coverage_anomaly
+            )
             data_status["ETF两市成交额趋势"] = etf_usable
             step_status["ETF两市成交额趋势获取"] = etf_usable
             etf_message = "已获取ETF两市成交额趋势"
-            if etf_rows and etf_coverage_anomaly:
+            if etf_invalid_data_dates:
+                etf_message = f"ETF成交额包含无效事实日期：{etf_invalid_data_dates[-1]}"
+            elif etf_future_data_dates:
+                etf_message = (
+                    f"ETF成交额包含目标日之后事实：目标日 {target_text or target_date}，"
+                    f"未来事实日 {etf_future_data_dates[-1]}"
+                )
+            elif etf_rows and not etf_date_matches_target:
+                etf_message = (
+                    f"ETF成交额缺少目标日事实：目标日 {target_text or target_date}，"
+                    f"最后事实日 {etf_latest_data_date or '缺失'}"
+                )
+            elif etf_rows and etf_coverage_anomaly:
                 etf_message = "ETF两市成交额趋势样本覆盖不足"
+            elif not etf_rows:
+                etf_message = "ETF两市成交额趋势暂无有效事实"
+            elif not etf_available:
+                etf_message = "ETF两市成交额趋势不可用"
             module_logs.append(
                 {
                     "module": "input.runtime",
@@ -558,6 +646,13 @@ def _run_input_runtime_legacy_body(target_date=None):
                         "provider": (etf_turnover_series or {}).get("source") or "sina.etf.daily_amount",
                         "target_keys": ["etf_turnover_series"],
                         "row_count": len(etf_rows),
+                        "available": etf_available,
+                        "requested_trade_date": target_date,
+                        "payload_requested_trade_date": (etf_turnover_series or {}).get("requested_trade_date", ""),
+                        "latest_data_date": etf_latest_data_date,
+                        "future_data_dates": etf_future_data_dates,
+                        "invalid_data_dates": etf_invalid_data_dates,
+                        "is_stale_for_target": etf_is_stale_for_target,
                         "usable_etf_count": (etf_turnover_series or {}).get("usable_etf_count", 0),
                         "empty_etf_count": (etf_turnover_series or {}).get("empty_etf_count", 0),
                         "coverage_status": (etf_turnover_series or {}).get("coverage_status", ""),

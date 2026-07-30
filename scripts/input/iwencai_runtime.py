@@ -703,6 +703,7 @@ def get_total_turnover_from_iwencai(
 
 
 def _default_fetch_daily_price_bars(code, start_date, end_date, *, is_index=False):
+    tushare_bars = []
     try:
         from market_data.tushare_service import fetch_daily_price_bars as fetch_tushare_daily_price_bars
 
@@ -712,14 +713,15 @@ def _default_fetch_daily_price_bars(code, start_date, end_date, *, is_index=Fals
             end_date,
             is_index=is_index,
         )
-        if tushare_bars:
+        target_date = normalize_kline_date_str(end_date)
+        if any(normalize_kline_date_str((bar or {}).get("date")) == target_date for bar in tushare_bars or []):
             return tushare_bars
     except Exception:
-        pass
+        tushare_bars = []
 
     from market_data.daily_price_runtime import fetch_daily_price_bars
 
-    return fetch_daily_price_bars(
+    fallback_bars = fetch_daily_price_bars(
         code,
         start_date,
         end_date,
@@ -734,6 +736,10 @@ def _default_fetch_daily_price_bars(code, start_date, end_date, *, is_index=Fals
             "_logout_baostock_silently": _logout_baostock_silently,
         },
     )
+    target_date = normalize_kline_date_str(end_date)
+    if any(normalize_kline_date_str((bar or {}).get("date")) == target_date for bar in fallback_bars or []):
+        return fallback_bars
+    return tushare_bars or fallback_bars
 
 
 def _build_major_index_bar_fallback(

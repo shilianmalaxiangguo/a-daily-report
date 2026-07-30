@@ -56,6 +56,165 @@ class _FakePro:
 
 
 class TushareTurnoverServiceTest(unittest.TestCase):
+    def test_market_index_amount_uses_quicktiny_only_for_missing_target_date(self):
+        from market_data.tushare_turnover_service import fetch_market_index_amount_rows
+
+        class IndexPro:
+            def index_daily(self, **_kwargs):
+                return _FakeFrame(
+                    [
+                        {"trade_date": "20260723", "amount": 1000000},
+                    ]
+                )
+
+        fallback_calls = []
+
+        result = fetch_market_index_amount_rows(
+            "2026-07-23",
+            "2026-07-24",
+            pro=IndexPro(),
+            quicktiny_fetcher=lambda start, end, *, index_codes: fallback_calls.append((start, end, index_codes)) or [
+                {
+                    "trade_date": "2026-07-24",
+                    "market_turnover_yi": 15379.4784439685,
+                    "index_count": 2,
+                    "source_policy": "quicktiny.merged_kline.index_daily.market_amount",
+                    "source_date": "2026-07-24",
+                    "query_date": "2026-07-24",
+                }
+            ],
+        )
+
+        self.assertEqual(fallback_calls, [("2026-07-23", "2026-07-24", ("000001.SH", "399001.SZ"))])
+        self.assertEqual(result[-1]["trade_date"], "2026-07-24")
+        self.assertAlmostEqual(result[-1]["market_turnover_yi"], 15379.478444, places=6)
+        self.assertEqual(result[-1]["source_policy"], "quicktiny.merged_kline.index_daily.market_amount")
+
+    def test_market_index_amount_keeps_complete_tushare_target_without_quicktiny(self):
+        from market_data.tushare_turnover_service import fetch_market_index_amount_rows
+
+        class IndexPro:
+            def index_daily(self, **kwargs):
+                code = kwargs["ts_code"]
+                amount = 1000000 if code == "000001.SH" else 2000000
+                return _FakeFrame([{"trade_date": "20260724", "amount": amount}])
+
+        result = fetch_market_index_amount_rows(
+            "2026-07-24",
+            "2026-07-24",
+            pro=IndexPro(),
+            quicktiny_fetcher=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("QuickTiny should not run")),
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["source_policy"], "tushare.index_daily.market_amount")
+        self.assertAlmostEqual(result[0]["market_turnover_yi"], 30.0)
+
+    def test_market_index_amount_uses_quicktiny_when_tushare_request_fails(self):
+        from market_data.tushare_turnover_service import fetch_market_index_amount_rows
+
+        class IndexPro:
+            def index_daily(self, **_kwargs):
+                raise RuntimeError("Tushare unavailable")
+
+        result = fetch_market_index_amount_rows(
+            "2026-07-27",
+            "2026-07-27",
+            pro=IndexPro(),
+            quicktiny_fetcher=lambda start, end, *, index_codes: [
+                {
+                    "trade_date": "2026-07-27",
+                    "market_turnover_yi": 16649.19416,
+                    "index_count": 2,
+                    "source_policy": "quicktiny.merged_kline.index_daily.market_amount",
+                    "source_date": "2026-07-27",
+                    "query_date": "2026-07-27",
+                }
+            ],
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["trade_date"], "2026-07-27")
+        self.assertEqual(result[0]["source_policy"], "quicktiny.merged_kline.index_daily.market_amount")
+        self.assertAlmostEqual(result[0]["market_turnover_yi"], 16649.19416)
+
+    def test_market_index_amount_uses_quicktiny_when_tushare_client_init_fails(self):
+        from market_data.tushare_turnover_service import fetch_market_index_amount_rows
+
+        with patch(
+            "market_data.tushare_turnover_service.create_tushare_pro_api",
+            side_effect=RuntimeError("client init failed"),
+        ):
+            result = fetch_market_index_amount_rows(
+                "2026-07-27",
+                "2026-07-27",
+                quicktiny_fetcher=lambda start, end, *, index_codes: [
+                    {
+                        "trade_date": "2026-07-27",
+                        "market_turnover_yi": 16649.19416,
+                        "index_count": 2,
+                        "source_policy": "quicktiny.merged_kline.index_daily.market_amount",
+                        "source_date": "2026-07-27",
+                        "query_date": "2026-07-27",
+                    }
+                ],
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["trade_date"], "2026-07-27")
+        self.assertEqual(result[0]["source_policy"], "quicktiny.merged_kline.index_daily.market_amount")
+
+    def test_quicktiny_index_amount_adapter_filters_source_and_converts_yuan_to_yi(self):
+        from market_data.tushare_turnover_service import fetch_quicktiny_index_amount_rows
+
+        class FakeResponse:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": list(self._rows)}
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url, timeout=None):
+                self.calls.append((url, timeout))
+                if "/sh000001" in url:
+                    return FakeResponse(
+                        [
+                            {"date": "2026-07-27", "amount": 100_000_000, "source": "index_daily"},
+                            {"date": "2026-07-27", "amount": 900_000_000, "source": "stock_daily"},
+                        ]
+                    )
+                return FakeResponse(
+                    [
+                        {"date": "2026-07-27", "amount": 200_000_000, "source": ""},
+                        {"date": "2026-07-26", "amount": 300_000_000, "source": "index_daily"},
+                    ]
+                )
+
+        session = FakeSession()
+        result = fetch_quicktiny_index_amount_rows(
+            "2026-07-27",
+            "2026-07-27",
+            session=session,
+        )
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertTrue(session.calls[0][0].endswith("/sh000001?days=20"))
+        self.assertTrue(session.calls[1][0].endswith("/sz399001?days=20"))
+        self.assertEqual([call[1] for call in session.calls], [(2, 6), (2, 6)])
+        self.assertEqual(result[0]["trade_date"], "2026-07-27")
+        self.assertEqual(result[0]["index_count"], 2)
+        self.assertEqual(result[0]["stock_count"], 2)
+        self.assertAlmostEqual(result[0]["market_turnover_yi"], 3.0)
+        self.assertEqual(result[0]["source_date"], "2026-07-27")
+        self.assertEqual(result[0]["query_date"], "2026-07-27")
+
     def test_fetch_stock_daily_turnover_records_normalizes_daily_rows(self):
         from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
 
@@ -92,7 +251,7 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
 
         class AChannelPro:
-            _DataApi__http_url = "https://fastapic.stockai888.top"
+            _DataApi__http_url = "http://a.sszhixia.cn/"
 
             def __init__(self):
                 self.calls = []
@@ -128,7 +287,7 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
 
         class AChannelPro:
-            _DataApi__http_url = "https://fastapic.stockai888.top"
+            _DataApi__http_url = "http://a.sszhixia.cn/"
 
             def __init__(self):
                 self.calls = []

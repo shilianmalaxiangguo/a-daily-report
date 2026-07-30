@@ -129,6 +129,42 @@ class RunLogRuntimeTest(unittest.TestCase):
             self.assertEqual(latest_failure["run_log_path"], str(run_logs[0]))
             self.assertTrue(any("RuntimeError: boom" in line for line in latest_failure["recent_important_lines"]))
 
+    def test_success_clears_current_failure_summary_and_preserves_error_history(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            try:
+                with self.assertRaises(RuntimeError):
+                    run_with_log_capture(
+                        lambda: (_ for _ in ()).throw(RuntimeError("first run failed")),
+                        argv=["daily_report_entry_demo.py", "2026-07-27"],
+                        logs_root=tmpdir,
+                        now=datetime(2026, 7, 28, 1, 0, 0),
+                    )
+                error_paths = sorted((Path(tmpdir) / "errors").glob("*.json"))
+                self.assertEqual(len(error_paths), 1)
+                self.assertTrue((Path(tmpdir) / "latest_failure.json").exists())
+
+                exit_code = run_with_log_capture(
+                    lambda: 0,
+                    argv=["daily_report_entry_demo.py", "2026-07-27", "--postgres-only"],
+                    logs_root=tmpdir,
+                    now=datetime(2026, 7, 28, 1, 5, 0),
+                )
+            finally:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+
+            latest_run = json.loads((Path(tmpdir) / "latest_run.json").read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(latest_run["status"], "success")
+            self.assertFalse((Path(tmpdir) / "latest_failure.json").exists())
+            self.assertTrue(error_paths[0].exists())
+            error_payload = json.loads(error_paths[0].read_text(encoding="utf-8"))
+            self.assertEqual(error_payload["error_message"], "first run failed")
+
     def test_run_with_log_capture_keeps_account_day_order_finding_in_error_summary(self):
         from daily_report_render import ReportCriticalDataMissingError
 

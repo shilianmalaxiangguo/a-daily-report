@@ -8,6 +8,13 @@ from domains.market_state.two_market_turnover.nodes import build_turnover_compar
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 
+try:
+    from domains.market_state.daily_metric_history_index import (
+        load_compact_metric_history_snapshot as _default_load_compact_metric_history_snapshot,
+    )
+except Exception:  # pragma: no cover - optional runtime dependency
+    _default_load_compact_metric_history_snapshot = None
+
 _DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
 
 __all__ = [
@@ -785,13 +792,25 @@ def _compact_history_snapshot(snapshot_data):
     return compact
 
 
+def load_compact_metric_history_snapshot(target_date):
+    if callable(_default_load_compact_metric_history_snapshot):
+        return _default_load_compact_metric_history_snapshot(target_date)
+    return None, None
+
+
 def _load_compact_history_snapshot(cursor):
     cursor = str(cursor or "").strip()
     if not cursor:
         return {}
-    cache_key = (load_data_snapshot, cursor)
+    if load_data_snapshot is _DEFAULT_LOAD_DATA_SNAPSHOT:
+        snapshot_loader = globals().get("load_compact_metric_history_snapshot")
+    else:
+        snapshot_loader = load_data_snapshot
+    if not callable(snapshot_loader):
+        return {}
+    cache_key = (snapshot_loader, cursor)
     if cache_key not in _COMPACT_HISTORY_SNAPSHOT_CACHE:
-        snapshot_data, _ = load_data_snapshot(cursor)
+        snapshot_data, _ = snapshot_loader(cursor)
         _COMPACT_HISTORY_SNAPSHOT_CACHE[cache_key] = _compact_history_snapshot(snapshot_data)
     return _COMPACT_HISTORY_SNAPSHOT_CACHE.get(cache_key) or {}
 

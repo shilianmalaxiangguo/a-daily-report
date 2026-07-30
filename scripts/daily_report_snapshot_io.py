@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import tempfile
 import traceback
 import types
 from enum import Enum
@@ -23,10 +24,13 @@ from typing import Any, Tuple
 
 LEDGER_MODE_FROZEN = "frozen"
 LEDGER_MODE_REPLAY = "replay"
+MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+_CIRCULAR_REFERENCE = "<circular_reference>"
 
 __all__ = [
     "LEDGER_MODE_FROZEN",
     "LEDGER_MODE_REPLAY",
+    "SnapshotWriteError",
     "_make_serializable",
     "_get_snapshot_path",
     "_save_data_snapshot",
@@ -34,6 +38,29 @@ __all__ = [
     "add_supplementary_perspective",
     "save_data_snapshot",
 ]
+
+
+class SnapshotWriteError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        snapshot_path: str = "",
+        mode: str = "",
+        bytes_written: int = 0,
+        attempted_size_bytes: int = 0,
+        size_limited: bool = False,
+    ):
+        super().__init__(message)
+        self.snapshot_path = str(snapshot_path or "")
+        self.mode = str(mode or "")
+        self.bytes_written = int(bytes_written or 0)
+        self.attempted_size_bytes = int(attempted_size_bytes or 0)
+        self.size_limited = bool(size_limited)
+
+
+class _SnapshotTargetExistsError(SnapshotWriteError):
+    """Raised when a no-replace snapshot publish loses a concurrent race."""
 
 
 def _module_dir() -> Path:
@@ -59,11 +86,12 @@ def _get_snapshot_path(target_date: str, mode: str = LEDGER_MODE_FROZEN) -> str:
     return str(snapshots_dir / f"{target_date}{suffix}.json")
 
 
-def _make_serializable(obj: Any, _depth: int = 0) -> Any:
+def _make_serializable(obj: Any, _depth: int = 0, _active_ids: set[int] | None = None) -> Any:
     """Recursively convert non-JSON-serializable objects into JSON-safe values."""
     MAX_DEPTH = 50
     if _depth > MAX_DEPTH:
         return "<recursion_limit>"
+    active_ids = _active_ids if _active_ids is not None else set()
 
     # Pandas objects are common in this project but the dependency is optional
     try:
@@ -75,15 +103,36 @@ def _make_serializable(obj: Any, _depth: int = 0) -> Any:
         pass
 
     if isinstance(obj, (list, tuple)):
-        return [_make_serializable(item, _depth + 1) for item in obj]
-    if isinstance(obj, dict):
-        return {str(k): _make_serializable(v, _depth + 1) for k, v in obj.items()}
-    if isinstance(obj, set):
-        converted = [_make_serializable(item, _depth + 1) for item in obj]
+        obj_id = id(obj)
+        if obj_id in active_ids:
+            return _CIRCULAR_REFERENCE
+        active_ids.add(obj_id)
         try:
-            return sorted(converted, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True))
-        except Exception:
-            return converted
+            return [_make_serializable(item, _depth + 1, active_ids) for item in obj]
+        finally:
+            active_ids.discard(obj_id)
+    if isinstance(obj, dict):
+        obj_id = id(obj)
+        if obj_id in active_ids:
+            return _CIRCULAR_REFERENCE
+        active_ids.add(obj_id)
+        try:
+            return {str(k): _make_serializable(v, _depth + 1, active_ids) for k, v in obj.items()}
+        finally:
+            active_ids.discard(obj_id)
+    if isinstance(obj, set):
+        obj_id = id(obj)
+        if obj_id in active_ids:
+            return _CIRCULAR_REFERENCE
+        active_ids.add(obj_id)
+        try:
+            converted = [_make_serializable(item, _depth + 1, active_ids) for item in obj]
+            try:
+                return sorted(converted, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True))
+            except Exception:
+                return converted
+        finally:
+            active_ids.discard(obj_id)
     if isinstance(obj, (int, float, str, bool, type(None))):
         return obj
     if isinstance(obj, bytes):
@@ -95,28 +144,124 @@ def _make_serializable(obj: Any, _depth: int = 0) -> Any:
     if isinstance(obj, Enum):
         return {"__enum__": obj.__class__.__name__, "name": obj.name, "value": obj.value}
     if hasattr(obj, "__dataclass_fields__"):
-        data = {}
-        for k, v in obj.__dict__.items():
-            data[k] = _make_serializable(v, _depth + 1)
-        data["__class__"] = obj.__class__.__name__
-        return data
+        obj_id = id(obj)
+        if obj_id in active_ids:
+            return _CIRCULAR_REFERENCE
+        active_ids.add(obj_id)
+        try:
+            data = {}
+            for k, v in obj.__dict__.items():
+                data[k] = _make_serializable(v, _depth + 1, active_ids)
+            data["__class__"] = obj.__class__.__name__
+            return data
+        finally:
+            active_ids.discard(obj_id)
     if hasattr(obj, "__dict__"):
+        obj_id = id(obj)
+        if obj_id in active_ids:
+            return _CIRCULAR_REFERENCE
+        active_ids.add(obj_id)
         skip_attrs = {"__class__", "__module__", "__doc__", "__dict__", "__weakref__"}
-        data = {}
-        for k, v in obj.__dict__.items():
-            if k.startswith("_") and k not in ("__class__",):
-                continue
-            if isinstance(v, (type, types.ModuleType, types.FunctionType, types.LambdaType)):
-                continue
-            if k in skip_attrs:
-                continue
-            try:
-                data[k] = _make_serializable(v, _depth + 1)
-            except (RecursionError, TypeError):
-                data[k] = str(v) if not isinstance(v, str) else v
-        data["__class__"] = obj.__class__.__name__
-        return data
+        try:
+            data = {}
+            for k, v in obj.__dict__.items():
+                if k.startswith("_") and k not in ("__class__",):
+                    continue
+                if isinstance(v, (type, types.ModuleType, types.FunctionType, types.LambdaType)):
+                    continue
+                if k in skip_attrs:
+                    continue
+                try:
+                    data[k] = _make_serializable(v, _depth + 1, active_ids)
+                except (RecursionError, TypeError):
+                    data[k] = str(v) if not isinstance(v, str) else v
+            data["__class__"] = obj.__class__.__name__
+            return data
+        finally:
+            active_ids.discard(obj_id)
     return str(obj)
+
+
+class _SizeLimitedTextWriter:
+    def __init__(self, file_obj, max_bytes: int, *, snapshot_path: Path, mode: str):
+        self._file_obj = file_obj
+        self._max_bytes = int(max_bytes)
+        self._snapshot_path = snapshot_path
+        self._mode = str(mode or "")
+        self.bytes_written = 0
+
+    def write(self, text: str) -> int:
+        encoded_size = len(text.encode("utf-8"))
+        next_size = self.bytes_written + encoded_size
+        if next_size > self._max_bytes:
+            raise SnapshotWriteError(
+                f"数据快照超过写入上限（{self._max_bytes} 字节），停止保存",
+                snapshot_path=str(self._snapshot_path),
+                mode=self._mode,
+                bytes_written=self.bytes_written,
+                attempted_size_bytes=next_size,
+                size_limited=True,
+            )
+        written = self._file_obj.write(text)
+        self.bytes_written = next_size
+        return written
+
+
+def _write_snapshot_payload(
+    snapshot_path: Path,
+    payload: dict,
+    *,
+    mode: str,
+    replace_existing: bool = True,
+) -> int:
+    temp_path = None
+    limited_writer = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=snapshot_path.parent,
+            prefix=f".{snapshot_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            temp_path = Path(file_obj.name)
+            limited_writer = _SizeLimitedTextWriter(
+                file_obj,
+                MAX_SNAPSHOT_BYTES,
+                snapshot_path=snapshot_path,
+                mode=mode,
+            )
+            json.dump(payload, limited_writer, ensure_ascii=False, indent=2)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+            snapshot_size = limited_writer.bytes_written
+        if replace_existing:
+            os.replace(temp_path, snapshot_path)
+        else:
+            try:
+                os.link(temp_path, snapshot_path)
+            except FileExistsError as error:
+                raise _SnapshotTargetExistsError(
+                    "正式数据快照已由另一进程保存，本次转存实验快照",
+                    snapshot_path=str(snapshot_path),
+                    mode=mode,
+                    bytes_written=snapshot_size,
+                ) from error
+            temp_path.unlink()
+        temp_path = None
+        return snapshot_size
+    except Exception as error:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        if isinstance(error, SnapshotWriteError):
+            raise
+        raise SnapshotWriteError(
+            f"数据快照保存失败: {error}",
+            snapshot_path=str(snapshot_path),
+            mode=mode,
+            bytes_written=limited_writer.bytes_written if limited_writer is not None else 0,
+        ) from error
 
 
 def _snapshot_payload(data: Any, target_date: str, mode: str, existing_perspective: str = "") -> dict:
@@ -172,29 +317,70 @@ def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FRO
       replay copy to snapshots/replay/<date>_replay.json.
     - Replay mode writes directly to the replay path.
     """
-    snapshot_path = _get_snapshot_path(target_date, mode=mode)
+    requested_path = Path(_get_snapshot_path(target_date, mode=mode))
+    official_exists = mode == LEDGER_MODE_FROZEN and requested_path.exists()
+    actual_mode = LEDGER_MODE_REPLAY if official_exists else mode
+    actual_path = (
+        Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
+        if actual_mode == LEDGER_MODE_REPLAY
+        else requested_path
+    )
+    existing_perspective = (
+        _load_existing_supplementary_perspective(requested_path)
+        if requested_path.exists()
+        else ""
+    )
 
-    existing_perspective = ""
-    if os.path.exists(snapshot_path):
-        existing_perspective = _load_existing_supplementary_perspective(Path(snapshot_path))
+    try:
+        payload = _snapshot_payload(
+            data,
+            target_date,
+            actual_mode,
+            existing_perspective=existing_perspective,
+        )
+    except Exception as error:
+        if mode == LEDGER_MODE_FROZEN and requested_path.exists():
+            actual_mode = LEDGER_MODE_REPLAY
+            actual_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
+        raise SnapshotWriteError(
+            f"数据快照序列化失败: {error}",
+            snapshot_path=str(actual_path),
+            mode=actual_mode,
+            bytes_written=0,
+        ) from error
 
-    payload = _snapshot_payload(data, target_date, mode, existing_perspective=existing_perspective)
+    if actual_mode == LEDGER_MODE_REPLAY and mode == LEDGER_MODE_FROZEN:
+        snapshot_size = _write_snapshot_payload(
+            actual_path,
+            payload,
+            mode=LEDGER_MODE_REPLAY,
+        )
+        print(f"🧊 官方快照已冻结，未覆盖历史: {requested_path}")
+        print(f"🧪 当前结果已转存为实验快照: {actual_path} ({snapshot_size} 字节)")
+        return str(actual_path)
 
-    # Freeze the official snapshot once it exists; keep newer data in replay.
-    if mode == LEDGER_MODE_FROZEN and os.path.exists(snapshot_path):
-        replay_snapshot_path = _get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY)
+    try:
+        snapshot_size = _write_snapshot_payload(
+            actual_path,
+            payload,
+            mode=actual_mode,
+            replace_existing=mode != LEDGER_MODE_FROZEN,
+        )
+    except _SnapshotTargetExistsError:
+        replay_snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
         payload["mode"] = LEDGER_MODE_REPLAY
-        with open(replay_snapshot_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"🧊 官方快照已冻结，未覆盖历史: {snapshot_path}")
-        print(f"🧪 当前结果已转存为实验快照: {replay_snapshot_path}")
-        return replay_snapshot_path
+        payload["supplementary_perspective"] = _load_existing_supplementary_perspective(requested_path)
+        snapshot_size = _write_snapshot_payload(
+            replay_snapshot_path,
+            payload,
+            mode=LEDGER_MODE_REPLAY,
+        )
+        print(f"🧊 官方快照已冻结，未覆盖历史: {requested_path}")
+        print(f"🧪 当前结果已转存为实验快照: {replay_snapshot_path} ({snapshot_size} 字节)")
+        return str(replay_snapshot_path)
 
-    with open(snapshot_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-    print(f"📸 数据快照已保存: {snapshot_path}")
-    return snapshot_path
+    print(f"📸 数据快照已保存: {actual_path} ({snapshot_size} 字节)")
+    return str(actual_path)
 
 
 # Backwards-compatible alias used by some callers.

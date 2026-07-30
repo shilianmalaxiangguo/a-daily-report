@@ -1758,6 +1758,34 @@ Top50长趋势表不该进入轻量版
         self.assertEqual(preflight["status"], "failed")
         self.assertEqual(preflight["failures"], ["中证全指", "中证1000"])
 
+    def test_report_preflight_accepts_quicktiny_index_target_date_fallback(self):
+        data = _complete_report_facts({
+            "wind_a_alternative": {
+                "price": 6686.86,
+                "trade_date": "2026-07-10",
+                "data_source": "quicktiny.merged_kline.index_daily",
+            },
+            "csi1000_index": {
+                "price": 8081.26,
+                "trade_date": "2026-07-10",
+                "data_source": "quicktiny.merged_kline.index_daily",
+            },
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily", "row_count": 5523}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "quicktiny.merged_kline.index_daily", "price": 6686.86}},
+                {"step": "request.csi1000", "status": "success", "details": {"provider": "quicktiny.merged_kline.index_daily", "price": 8081.26}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily", "row_count": 50}},
+                {"step": "request.market_stats", "status": "success", "details": {"provider": "tushare.daily", "row_count": 5523}},
+                {"step": "request.hot_rank.primary", "status": "success", "details": {"provider": "tushare.ths_hot", "hot_rank_count": 50}},
+            ],
+        })
+
+        preflight = build_report_preflight(data, "2026-07-10")
+
+        self.assertEqual(preflight["status"], "success")
+        self.assertNotIn("中证全指", preflight["failures"])
+        self.assertNotIn("中证1000", preflight["failures"])
+
     def test_report_preflight_accepts_akshare_turnover_rank_fallback(self):
         data = _complete_report_facts({
             "turnover_rank": [
@@ -2060,6 +2088,138 @@ Top50长趋势表不该进入轻量版
         self.assertEqual(preflight["status"], "failed")
         self.assertIn("ETF两市成交额趋势", preflight["failures"])
 
+    def test_report_preflight_fails_when_etf_turnover_series_stops_before_target(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"ETF两市成交额趋势": True},
+                "step_status": {"ETF两市成交额趋势获取": True},
+                "etf_turnover_series": {
+                    "available": True,
+                    "coverage_anomaly": False,
+                    "coverage_status": "normal",
+                    "rows": [{"trade_date": "2026-07-24", "etf_turnover_yi": 4484.9}],
+                },
+                "module_logs": [
+                    {
+                        "step": "request.etf_turnover_series",
+                        "status": "success",
+                        "details": {"provider": "sina.etf.daily_amount", "row_count": 25},
+                    },
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-27")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("ETF两市成交额趋势", preflight["failures"])
+        etf_check = next(
+            check
+            for check in preflight["decision_checks"]
+            if check.get("payload_key") == "etf_turnover_series"
+        )
+        self.assertIn("目标日 2026-07-27", etf_check["note"])
+        self.assertIn("最后事实日 2026-07-24", etf_check["note"])
+        self.assertIn("最后事实日 2026-07-24", "\n".join(render_report_preflight_lines(preflight)))
+
+    def test_report_preflight_accepts_exact_date_etf_turnover_series(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"ETF两市成交额趋势": True},
+                "step_status": {"ETF两市成交额趋势获取": True},
+                "etf_turnover_series": {
+                    "available": True,
+                    "latest_data_date": "2026-06-11",
+                    "is_stale_for_target": False,
+                    "coverage_anomaly": False,
+                    "coverage_status": "normal",
+                    "rows": [{"trade_date": "2026-06-11", "etf_turnover_yi": 4484.9}],
+                },
+                "module_logs": [
+                    {
+                        "step": "request.etf_turnover_series",
+                        "status": "success",
+                        "details": {"provider": "sina.etf.daily_amount", "row_count": 25},
+                    },
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-06-11")
+
+        self.assertEqual(preflight["status"], "success")
+        self.assertNotIn("ETF两市成交额趋势", preflight["failures"])
+
+    def test_report_preflight_rejects_etf_turnover_series_with_future_rows(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"ETF两市成交额趋势": True},
+                "step_status": {"ETF两市成交额趋势获取": True},
+                "etf_turnover_series": {
+                    "available": True,
+                    "coverage_anomaly": False,
+                    "coverage_status": "normal",
+                    "rows": [
+                        {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                        {"trade_date": "2026-07-30", "etf_turnover_yi": 4588.1},
+                    ],
+                },
+                "module_logs": [
+                    {
+                        "step": "request.etf_turnover_series",
+                        "status": "success",
+                        "details": {"provider": "sina.etf.daily_amount", "row_count": 2},
+                    },
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-29")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("ETF两市成交额趋势", preflight["failures"])
+        etf_check = next(
+            check
+            for check in preflight["decision_checks"]
+            if check.get("payload_key") == "etf_turnover_series"
+        )
+        self.assertIn("未来事实日 2026-07-30", etf_check["note"])
+
+    def test_report_preflight_rejects_invalid_etf_turnover_dates(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"ETF两市成交额趋势": True},
+                "step_status": {"ETF两市成交额趋势获取": True},
+                "etf_turnover_series": {
+                    "available": True,
+                    "coverage_anomaly": False,
+                    "coverage_status": "normal",
+                    "rows": [
+                        {"trade_date": "2026-07-29", "etf_turnover_yi": 4484.9},
+                        {"trade_date": "2026-02-30", "etf_turnover_yi": 9999.0},
+                    ],
+                },
+                "module_logs": [
+                    {
+                        "step": "request.etf_turnover_series",
+                        "status": "success",
+                        "details": {"provider": "sina.etf.daily_amount", "row_count": 2},
+                    },
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-29")
+
+        self.assertEqual(preflight["status"], "failed")
+        etf_check = next(
+            check
+            for check in preflight["decision_checks"]
+            if check.get("payload_key") == "etf_turnover_series"
+        )
+        self.assertIn("无效事实日期", etf_check["note"])
+        self.assertIn("2026-02-30", etf_check["note"])
+
     def test_report_preflight_fails_when_lhb_factor_missing(self):
         data = {
             "data_status": {
@@ -2245,7 +2405,12 @@ Top50长趋势表不该进入轻量版
                 {
                     "step": "request.lhb_snapshot",
                     "status": "success",
-                    "details": {"provider": "tushare.top_list", "lhb_count": 0, "buy_count": 1},
+                    "details": {
+                        "provider": "tushare.top_list",
+                        "source_record_count": 85,
+                        "lhb_count": 76,
+                        "buy_count": 1,
+                    },
                 },
             ],
         }
@@ -2253,6 +2418,79 @@ Top50长趋势表不该进入轻量版
         preflight = build_report_preflight(data, "2026-05-19")
 
         self.assertNotIn("龙虎榜数据", preflight["failures"])
+        lhb_check = next(check for check in preflight["decision_checks"] if check["label"] == "龙虎榜数据")
+        self.assertEqual(lhb_check["row_count"], 85)
+        self.assertEqual(lhb_check["note"], "原始85条 / 归并76只 / 净买排行1只")
+        self.assertIn(
+            "| 龙虎榜数据 | 成功 | tushare.top_list | 85 | 是 | 原始85条 / 归并76只 / 净买排行1只 |",
+            build_run_log_text(preflight, "2026-05-19"),
+        )
+
+    def test_report_preflight_reads_persisted_lhb_counts_without_request_logs(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"龙虎榜数据": True},
+                "postgres_only": True,
+                "lhb_analysis": [],
+                "lhb_net_buy_top10": [
+                    {"code": "000001", "name": "军工一号", "data_source": "tushare.top_list"}
+                ],
+                "lhb_net_sell_top10": [{"code": "000002", "name": "军工二号"}],
+                "lhb_source_record_count": 85,
+                "lhb_grouped_record_count": 76,
+                "lhb_provider": "tushare.top_list",
+                "lhb_data_status": "available",
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-28")
+
+        lhb_check = next(check for check in preflight["decision_checks"] if check["label"] == "龙虎榜数据")
+        self.assertEqual(lhb_check["status"], "success")
+        self.assertEqual(lhb_check["provider"], "tushare.top_list")
+        self.assertEqual(lhb_check["row_count"], 85)
+        self.assertTrue(lhb_check["step_status"])
+        self.assertEqual(
+            lhb_check["note"],
+            "原始85条 / 归并76只 / 净买排行1只 / 净卖排行1只",
+        )
+        self.assertIn(
+            "| 龙虎榜数据 | 成功 | tushare.top_list | 85 | 是 | 原始85条 / 归并76只 / 净买排行1只 / 净卖排行1只 |",
+            build_run_log_text(preflight, "2026-07-28"),
+        )
+
+    def test_report_preflight_does_not_add_lhb_buy_and_sell_rank_counts(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"龙虎榜数据": True},
+                "lhb_analysis": [],
+                "lhb_net_buy_top10": [{"code": "000001"}, {"code": "000002"}],
+                "lhb_net_sell_top10": [{"code": "000003"}],
+                "lhb_source_record_count": 0,
+                "lhb_grouped_record_count": 0,
+                "lhb_provider": "tushare.top_list",
+                "lhb_data_status": "available",
+                "module_logs": [
+                    {
+                        "step": "request.lhb_snapshot",
+                        "status": "success",
+                        "details": {
+                            "provider": "tushare.top_list",
+                            "source_record_count": 0,
+                            "lhb_count": 0,
+                            "buy_count": 0,
+                            "sell_count": 0,
+                        },
+                    }
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-07-28")
+
+        lhb_check = next(check for check in preflight["decision_checks"] if check["label"] == "龙虎榜数据")
+        self.assertEqual(lhb_check["row_count"], 2)
+        self.assertEqual(lhb_check["note"], "净买排行2只 / 净卖排行1只")
 
     def test_report_preflight_fails_when_resonance_factor_not_computed(self):
         data = {

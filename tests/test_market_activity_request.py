@@ -139,6 +139,39 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(any("涨停池" in line for line in emitted))
         self.assertEqual(timer.records[-1], ("涨停跌停数据获取", 4))
 
+    def test_limit_up_pool_groups_brain_computer_stocks_by_trade_narrative(self):
+        result = collect_market_activity_pool_request_bundle(
+            "2026-07-28",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub(
+                    [
+                        {
+                            "代码": "002195",
+                            "名称": "岩山科技",
+                            "所属行业": "软件服务",
+                            "涨停统计": "脑机接口+AI大模型+AI PC+人形机器人",
+                        },
+                        {
+                            "代码": "002173",
+                            "名称": "创新医疗",
+                            "所属行业": "医疗保健",
+                            "涨停统计": "脑机接口+医疗器械注册证+医疗服务",
+                        },
+                    ]
+                ),
+                {"002195", "002173"},
+            ),
+            get_limit_down_pool=lambda date_str: (_FrameStub([]), set()),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub([]),
+            timer=_TimerStub(),
+            emit=lambda message: None,
+        )
+
+        brain_computer_rows = result["results"]["zt_pool_by_sector"]["脑机接口"]
+        self.assertEqual({row["code"] for row in brain_computer_rows}, {"002195", "002173"})
+        self.assertEqual(result["results"]["zt_pool"][0]["所属行业"], "软件服务")
+        self.assertEqual(result["results"]["zt_pool"][1]["所属行业"], "医疗保健")
+
     def test_collect_market_activity_pool_request_bundle_parses_akshare_market_activity_columns(self):
         import pandas as pd
 
@@ -1372,6 +1405,58 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(lianban["xuangubao_stock_reason"], "拟置入文旅体育资产")
         self.assertEqual(lianban["xuangubao_related_plate_names"], ["资产重组"])
 
+    def test_lianban_snapshot_groups_brain_computer_stocks_by_trade_narrative(self):
+        limit_up_df = _FrameStub(
+            [
+                {
+                    "代码": "002195",
+                    "名称": "岩山科技",
+                    "连板数": 1,
+                    "所属行业": "软件服务",
+                    "涨停统计": "脑机接口+AI大模型+AI PC+人形机器人",
+                },
+                {
+                    "代码": "002173",
+                    "名称": "创新医疗",
+                    "连板数": 1,
+                    "所属行业": "医疗保健",
+                    "涨停统计": "脑机接口+医疗器械注册证+医疗服务",
+                },
+            ]
+        )
+        result = collect_market_activity_capital_snapshot_request_bundle(
+            "2026-07-28",
+            limit_up_df=limit_up_df,
+            existing_results={
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {
+                            "symbol": "002195.SZ",
+                            "stock_reason": "脑机接口+AI大模型+AI PC+人形机器人",
+                            "related_plates": [{"plate_name": "脑科学"}],
+                        },
+                        {
+                            "symbol": "002173.SZ",
+                            "stock_reason": "运用脑机接口技术帮助偏瘫患者恢复自主控制",
+                            "related_plates": [{"plate_name": "脑科学"}],
+                        },
+                    ]
+                }
+            },
+            fetch_lhb_rows=lambda target_date: [],
+            timer=_TimerStub(),
+            emit=lambda message: None,
+        )
+
+        sectors = {row["code"]: row["sector"] for row in result["results"]["lianban_data"]}
+        self.assertEqual(sectors, {"002195": "脑机接口", "002173": "脑机接口"})
+        by_code = {row["code"]: row for row in result["results"]["lianban_data"]}
+        self.assertEqual(by_code["002195"]["raw_sector"], "软件服务")
+        self.assertEqual(by_code["002173"]["raw_sector"], "医疗保健")
+        for row in by_code.values():
+            self.assertEqual(row["trade_narrative_sector"], "脑机接口")
+            self.assertIn("脑机接口", row["trade_narrative_reason"])
+
     def test_lianban_snapshot_replaces_market_board_sector_from_xuangubao_plate(self):
         timer = _TimerStub()
         limit_up_df = _FrameStub(
@@ -1492,6 +1577,8 @@ class MarketActivityRequestTest(unittest.TestCase):
                     ],
                     "lhb_net_sell_top10": [],
                     "lhb_analysis": [{"代码": "000001", "data_source": "tushare.top_list"}],
+                    "lhb_source_record_count": 3,
+                    "lhb_grouped_record_count": 1,
                     "provider": "tushare.top_list",
                     "fallback_used": False,
                 },
@@ -1503,8 +1590,13 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(registry_calls, ["2026-05-13"])
         self.assertEqual(legacy_calls, [])
         self.assertEqual(result["results"]["lhb_net_buy_top10"][0]["code"], "000001")
+        self.assertEqual(result["results"]["lhb_source_record_count"], 3)
+        self.assertEqual(result["results"]["lhb_grouped_record_count"], 1)
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.lhb_snapshot"], "tushare.top_list")
+        lhb_log = next(log for log in result["module_logs"] if log["step"] == "request.lhb_snapshot")
+        self.assertEqual(lhb_log["details"]["source_record_count"], 3)
+        self.assertEqual(lhb_log["details"]["lhb_count"], 1)
 
     def test_collect_market_activity_capital_snapshot_request_bundle_keeps_lhb_inst_detail(self):
         timer = _TimerStub()

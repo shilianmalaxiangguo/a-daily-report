@@ -82,7 +82,9 @@ from daily_report_render import (
     assert_report_required_facts_complete,
     build_report_outputs,
     build_report_preflight,
+    etf_turnover_series_date_failure,
     finalize_run_log_text,
+    margin_pressure_date_failure,
     persist_report_runtime_artifacts,
     read_verified_saved_report_markdown,
     render_report_preflight_lines,
@@ -113,6 +115,7 @@ from daily_report_snapshot_io import (
 from knowledge.llm_wiki_context import is_complete_fresh_llm_wiki_context
 from daily_report_source_health import (
     OVERALL_STOP as SOURCE_HEALTH_STOP,
+    redact_sensitive_text,
     render_source_health_terminal_lines,
     run_source_health_check,
     source_health_failure_message,
@@ -1906,6 +1909,58 @@ def _get_strategy_performance_path(mode=LEDGER_MODE_FROZEN):
 
 def _get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN):
     return run_get_snapshot_path(target_date, mode=mode)
+
+
+def _snapshot_observation_payload(snapshot_path, requested_mode, *, error=None):
+    error_path = str(getattr(error, "snapshot_path", "") or "")
+    resolved_path = error_path or str(snapshot_path or "")
+    error_mode = str(getattr(error, "mode", "") or "")
+    actual_mode = error_mode or str(requested_mode or "")
+    if not error_mode and resolved_path:
+        path_obj = Path(resolved_path)
+        if path_obj.parent.name == "replay" or path_obj.name.endswith("_replay.json"):
+            actual_mode = LEDGER_MODE_REPLAY
+
+    output = {
+        "snapshot_path": resolved_path,
+        "requested_mode": str(requested_mode or ""),
+        "actual_mode": actual_mode,
+        "size_limited": bool(getattr(error, "size_limited", False)),
+    }
+    bytes_written = getattr(error, "bytes_written", None)
+    attempted_size_bytes = getattr(error, "attempted_size_bytes", None)
+    if isinstance(bytes_written, int):
+        output["snapshot_size_bytes"] = bytes_written
+    elif resolved_path:
+        try:
+            output["snapshot_size_bytes"] = Path(resolved_path).stat().st_size
+        except (OSError, TypeError, ValueError):
+            pass
+    if isinstance(attempted_size_bytes, int) and attempted_size_bytes > 0:
+        output["attempted_size_bytes"] = attempted_size_bytes
+    return output
+
+
+def _save_data_snapshot_with_observation(data, target_date, run_mode, observer):
+    input_payload = {"target_date": target_date, "requested_mode": run_mode}
+    try:
+        snapshot_path = _save_data_snapshot(data, target_date, mode=run_mode)
+    except Exception as error:
+        observer.record_step(
+            "save_data_snapshot",
+            status="error",
+            input_payload=input_payload,
+            output_payload=_snapshot_observation_payload("", run_mode, error=error),
+            error=error,
+        )
+        raise
+    observer.record_step(
+        "save_data_snapshot",
+        status="success",
+        input_payload=input_payload,
+        output_payload=_snapshot_observation_payload(snapshot_path, run_mode),
+    )
+    return snapshot_path
 
 
 def _get_factor_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN):
@@ -4194,7 +4249,7 @@ def _restore_postgres_sector_first_runtime_facts(data, target_date):
     return data
 
 
-def load_daily_report_data_from_postgres(target_date):
+def load_daily_report_data_from_postgres(target_date, *, allow_live_refresh=True):
     service = _postgres_daily_report_service()
     result = service.load_daily_report_snapshot(target_date)
     data = result.get("data") if isinstance(result, dict) else {}
@@ -4220,7 +4275,8 @@ def load_daily_report_data_from_postgres(target_date):
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True
     normalize_inferred_previous_target_records(data)
-    _refresh_postgres_new_high_feedback_if_stale(data, target_date)
+    if allow_live_refresh:
+        _refresh_postgres_new_high_feedback_if_stale(data, target_date)
     _fill_new_high_feedback_trend_rows_from_report_files(data, target_date)
     _restore_postgres_sector_first_runtime_facts(data, target_date)
     normalize_inferred_previous_target_records(data)
@@ -4581,6 +4637,115 @@ def _daily_report_data_path_label(args):
     if getattr(args, "replay", False):
         return "replay-json"
     return "live"
+
+
+def _auto_postgres_fast_render_eligible(args):
+    return not any(
+        (
+            getattr(args, "postgres_only", False),
+            getattr(args, "replay", False),
+            getattr(args, "no_report", False),
+            getattr(args, "source_health_only", False),
+            bool(getattr(args, "stock", None)),
+            getattr(args, "force_live", False),
+        )
+    )
+
+
+def _postgres_fast_render_date_failure(data, target_date):
+    target_text = str(target_date or "").strip()[:10]
+    market_stats = (data or {}).get("market_stats") if isinstance(data, dict) else {}
+    market_stats = market_stats if isinstance(market_stats, dict) else {}
+    fact_dates = {
+        key: str(market_stats.get(key) or "").strip()[:10]
+        for key in ("trade_date", "source_date")
+    }
+    if not all(fact_dates.values()):
+        return "大盘涨跌统计缺少目标日期来源"
+    if any(value != target_text for value in fact_dates.values()):
+        return "大盘涨跌统计来源日期与目标日期不一致"
+    if isinstance(data, dict) and "etf_turnover_series" in data:
+        etf_date_failure = etf_turnover_series_date_failure(
+            data.get("etf_turnover_series"),
+            target_text,
+        )
+        if etf_date_failure:
+            return etf_date_failure
+    if isinstance(data, dict) and "margin_pressure" in data:
+        margin_date_failure = margin_pressure_date_failure(
+            data.get("margin_pressure"),
+            target_text,
+        )
+        if margin_date_failure:
+            return margin_date_failure
+    return ""
+
+
+def _select_daily_report_data_path(args, target_date):
+    if getattr(args, "postgres_only", False):
+        selected_path = "postgres_only"
+    elif getattr(args, "replay", False):
+        selected_path = "replay"
+    else:
+        selected_path = "live"
+    if not _auto_postgres_fast_render_eligible(args):
+        return {
+            "eligible": False,
+            "selected_path": selected_path,
+            "target_date": str(target_date or ""),
+            "reason": "保留显式命令的数据路径",
+            "data": {},
+            "preflight": {},
+        }
+
+    try:
+        data = load_daily_report_data_from_postgres(
+            target_date,
+            allow_live_refresh=False,
+        )
+    except Exception as exc:
+        safe_reason = redact_sensitive_text(str(exc))
+        return {
+            "eligible": True,
+            "selected_path": "live",
+            "target_date": str(target_date or ""),
+            "reason": safe_reason or "目标日期 PostgreSQL 事实不可用",
+            "data": {},
+            "preflight": {},
+        }
+
+    try:
+        date_failure = _postgres_fast_render_date_failure(data, target_date)
+        preflight = build_report_preflight(data, target_date)
+        failures = list(preflight.get("failures") or [])
+    except Exception as exc:
+        safe_reason = redact_sensitive_text(str(exc))
+        return {
+            "eligible": True,
+            "selected_path": "live",
+            "target_date": str(target_date or ""),
+            "reason": safe_reason or "目标日期关键数据检查异常",
+            "data": {},
+            "preflight": {},
+        }
+    if date_failure or failures:
+        reason = date_failure or "关键数据检查未通过：{}".format("、".join(failures))
+        return {
+            "eligible": True,
+            "selected_path": "live",
+            "target_date": str(target_date or ""),
+            "reason": redact_sensitive_text(reason),
+            "data": {},
+            "preflight": preflight,
+        }
+    return {
+        "eligible": True,
+        "selected_path": "postgres_only",
+        "target_date": str(target_date or ""),
+        "reason": "目标日期 PostgreSQL 事实和关键数据检查均已通过",
+        "data": data,
+        "preflight": preflight,
+    }
 
 
 _REPORT_TARGET_PATTERNS = (
@@ -5059,8 +5224,11 @@ def _try_save_daily_report_html_from_saved_markdown(
 ):
     temporary_path = None
     try:
-        full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
-        if not full_report_path.exists():
+        full_report_value = str((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "").strip()
+        if not full_report_value:
+            raise FileNotFoundError("完整版日报路径缺失")
+        full_report_path = Path(full_report_value)
+        if html_text is None and not full_report_path.exists():
             raise FileNotFoundError(str(full_report_path))
         path = full_report_path.with_suffix(".html")
         if html_text is None:
@@ -5129,9 +5297,10 @@ def _try_save_elimination_tournament_html(data, target_date, *, saved_report_pat
         )
         if isinstance(display_payload, dict) and display_payload:
             payload = display_payload
-        full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
-        if not full_report_path.exists():
-            raise FileNotFoundError(str(full_report_path))
+        full_report_value = str((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "").strip()
+        if not full_report_value:
+            raise FileNotFoundError("完整版日报路径缺失")
+        full_report_path = Path(full_report_value)
         path = save_elimination_tournament_html(
             payload,
             full_report_path,
@@ -5154,9 +5323,10 @@ def _try_save_sector_capital_preflight_html(data, target_date, *, saved_report_p
         )
         if not isinstance(payload, dict) or not payload:
             raise ValueError("板块资金扩散生成前复核数据缺失")
-        full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
-        if not full_report_path.exists():
-            raise FileNotFoundError(str(full_report_path))
+        full_report_value = str((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "").strip()
+        if not full_report_value:
+            raise FileNotFoundError("完整版日报路径缺失")
+        full_report_path = Path(full_report_value)
         path = save_sector_capital_preflight_html(
             payload,
             full_report_path,
@@ -5283,11 +5453,73 @@ def _format_elapsed_seconds(elapsed_seconds):
     return f"{max(0.0, float(elapsed_seconds)) + 1e-9:.2f}"
 
 
-def _append_daily_report_duration_log(saved_paths, *, target_date, elapsed_seconds, data_path_label, report_write_label):
+def _record_daily_report_phase(phase_timings, phase, started_at):
+    ended_at = time.perf_counter()
+    phase_timings.append(
+        {
+            "phase": str(phase or "").strip(),
+            "elapsed_seconds": max(0.0, ended_at - float(started_at)),
+        }
+    )
+    return ended_at
+
+
+def _build_daily_report_phase_timing_rows(phase_timings, elapsed_seconds):
+    total_hundredths = max(int(round((max(0.0, float(elapsed_seconds)) + 1e-9) * 100)), 0)
+    remaining_hundredths = total_hundredths
+    rows = []
+    for item in phase_timings or []:
+        phase = str((item or {}).get("phase") or "").strip()
+        if not phase:
+            continue
+        requested_hundredths = max(
+            int(round(max(0.0, float((item or {}).get("elapsed_seconds") or 0.0)) * 100)),
+            0,
+        )
+        duration_hundredths = min(requested_hundredths, remaining_hundredths)
+        remaining_hundredths -= duration_hundredths
+        rows.append(
+            {
+                "phase": phase,
+                "elapsed_seconds": duration_hundredths / 100.0,
+                "share_pct": round(duration_hundredths / total_hundredths * 100, 1)
+                if total_hundredths
+                else 0.0,
+            }
+        )
+    rows.append(
+        {
+            "phase": "其他收尾",
+            "elapsed_seconds": remaining_hundredths / 100.0,
+            "share_pct": round(remaining_hundredths / total_hundredths * 100, 1)
+            if total_hundredths
+            else 0.0,
+        }
+    )
+    return rows
+
+
+def _append_daily_report_duration_log(
+    saved_paths,
+    *,
+    target_date,
+    elapsed_seconds,
+    data_path_label,
+    report_write_label,
+    phase_timing_rows=None,
+):
     elapsed_text = _format_elapsed_seconds(elapsed_seconds)
     print(
         f"⏱ 日报生成总耗时: {elapsed_text} 秒 | 日期: {target_date} | 数据路径: {data_path_label} | 报告: {report_write_label}"
     )
+    for row in phase_timing_rows or []:
+        print(
+            "   - {}: {} 秒（{}%）".format(
+                row.get("phase", ""),
+                _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                row.get("share_pct", 0.0),
+            )
+        )
     run_log_path = (saved_paths or {}).get(REPORT_VARIANT_RUN_LOG)
     if not run_log_path:
         return None
@@ -5306,6 +5538,25 @@ def _append_daily_report_duration_log(saved_paths, *, target_date, elapsed_secon
                 f"| 报告写入 | {report_write_label} |",
             ]
         )
+        if phase_timing_rows:
+            append_text = "\n".join(
+                [
+                    append_text,
+                    "",
+                    "### 阶段耗时",
+                    "",
+                    "| 阶段 | 耗时 | 占比 |",
+                    "|------|-----:|-----:|",
+                    *[
+                        "| {} | {} 秒 | {}% |".format(
+                            row.get("phase", ""),
+                            _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                            row.get("share_pct", 0.0),
+                        )
+                        for row in phase_timing_rows
+                    ],
+                ]
+            )
         path.write_text(f"{current_text.rstrip()}\n\n{append_text}\n", encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         print(f"⚠️ 耗时统计写入失败，已保留日报正文: {exc}")
@@ -5317,6 +5568,9 @@ def main():
     """主函数"""
     import argparse
     report_started_at = time.perf_counter()
+    phase_started_at = report_started_at
+    phase_timings = []
+    report_phase_timing_rows = []
     
     parser = argparse.ArgumentParser(description='A股日报数据获取入口 - SKILL.md对齐版')
     parser.add_argument('date', nargs='?', default=None,
@@ -5341,6 +5595,8 @@ def main():
                        help='显式覆盖该日期正式日报；默认保护已有正式历史')
     parser.add_argument('--source-health-only', action='store_true',
                        help='只生成日报数据源检查 JSON/HTML，不进入完整日报生成')
+    parser.add_argument('--force-live', action='store_true',
+                       help='明确重新采集实时数据，不自动使用目标日期 PostgreSQL 事实重渲染')
     
     args = parser.parse_args()
     
@@ -5356,6 +5612,8 @@ def main():
         raise ReportCriticalDataMissingError("PostgreSQL-only 不能与 --replay 同时使用")
     if args.import_json_to_postgres and (args.postgres_only or args.replay):
         raise ReportCriticalDataMissingError("--import-json-to-postgres 不能与 --postgres-only 或 --replay 同时使用")
+    if args.force_live and (args.postgres_only or args.replay or args.import_json_to_postgres):
+        raise ReportCriticalDataMissingError("--force-live 不能与 --postgres-only、--replay 或 --import-json-to-postgres 同时使用")
 
     if args.import_json_to_postgres:
         snapshot_data, _ = load_data_snapshot(target_date)
@@ -5365,6 +5623,23 @@ def main():
         print(f"🐘 PostgreSQL 复盘取证事实已导入: {result.get('source', '')} / fields={result.get('field_count', 0)}")
         print(f"   structured={result.get('structured_counts', {})}")
         return 0
+
+    requested_postgres_only = bool(args.postgres_only)
+    data_path_selection = _select_daily_report_data_path(args, target_date)
+    selected_data_path = str(data_path_selection.get("selected_path") or "live")
+    data_path_reason = redact_sensitive_text(data_path_selection.get("reason", ""))
+    auto_postgres_fast_render = selected_data_path == "postgres_only" and not requested_postgres_only
+    preloaded_postgres_data = data_path_selection.get("data") if auto_postgres_fast_render else {}
+    if auto_postgres_fast_render:
+        args.postgres_only = True
+        print(f"🐘 目标日事实已就绪，采用 PostgreSQL 快速重渲染: {target_date}")
+    elif data_path_selection.get("eligible"):
+        print(f"🌐 目标日快速重渲染不可用，继续实时采集: {data_path_reason}")
+    phase_started_at = _record_daily_report_phase(
+        phase_timings,
+        "参数解析与目标日事实判断",
+        phase_started_at,
+    )
 
     global _POSTGRES_ONLY_RUNTIME, _LAST_DAILY_REPORT_POSTGRES_SERVICE
     _POSTGRES_ONLY_RUNTIME = bool(args.postgres_only)
@@ -5380,6 +5655,11 @@ def main():
             "target_date": target_date,
             "replay": bool(args.replay),
             "postgres_only": bool(args.postgres_only),
+            "requested_postgres_only": requested_postgres_only,
+            "auto_postgres_fast_render": auto_postgres_fast_render,
+            "data_path": selected_data_path,
+            "data_path_reason": data_path_reason,
+            "force_live": bool(args.force_live),
             "no_report": bool(args.no_report),
             "stock": args.stock or "",
         },
@@ -5412,6 +5692,9 @@ def main():
                 "target_date": target_date,
                 "replay": bool(args.replay),
                 "postgres_only": bool(args.postgres_only),
+                "auto_postgres_fast_render": auto_postgres_fast_render,
+                "data_path": selected_data_path,
+                "data_path_reason": data_path_reason,
                 "source_health_only": bool(args.source_health_only),
             },
             output_payload={
@@ -5427,10 +5710,15 @@ def main():
             run_status = "error"
             run_error = ReportCriticalDataMissingError(source_health_failure_message(source_health))
             return 1
+        phase_started_at = _record_daily_report_phase(
+            phase_timings,
+            "数据源检查",
+            phase_started_at,
+        )
 
         if args.postgres_only:
             print(f"📅 从 PostgreSQL 读取日报事实: {target_date}")
-            data = load_daily_report_data_from_postgres(target_date)
+            data = preloaded_postgres_data or load_daily_report_data_from_postgres(target_date)
         elif args.replay:
             data, target_date = replay_from_snapshot(target_date)
         else:
@@ -5439,9 +5727,10 @@ def main():
                 target_date,
                 skip_tushare_precheck=_source_health_check_passed(source_health, "tushare.runtime"),
             )
-            if isinstance(data, dict):
+            if isinstance(data, dict) and data:
                 data.setdefault("target_date", target_date)
                 data.setdefault("source_date", target_date)
+        data_is_empty = not isinstance(data, dict) or not data
         observer.record_step(
             "load_daily_data",
             status="success",
@@ -5450,8 +5739,20 @@ def main():
                 "replay": bool(args.replay),
                 "postgres_only": bool(args.postgres_only),
             },
-            output_payload={"data_keys": list((data or {}).keys())[:30], "empty": not bool(data)},
+            output_payload={"data_keys": list((data or {}).keys())[:30], "empty": data_is_empty},
         )
+        if data_is_empty:
+            error = ReportCriticalDataMissingError(
+                f"{target_date} 日报数据为空，关键数据不完整，停止生成"
+            )
+            observer.record_step(
+                "report_preflight",
+                status="error",
+                input_payload={"target_date": target_date},
+                output_payload={"failure_count": 1, "failures": ["日报数据"]},
+                error=error,
+            )
+            raise error
         if data:
             if not args.tomorrow_empty:
                 _clear_cached_explicit_cli_tomorrow_account_action(data)
@@ -5492,6 +5793,11 @@ def main():
                 )
                 run_mode = LEDGER_MODE_REPLAY
                 print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
+        phase_started_at = _record_daily_report_phase(
+            phase_timings,
+            "数据读取与生成前检查",
+            phase_started_at,
+        )
 
         # 生成日报（除非指定不生成）
         if not args.no_report and data:
@@ -5566,6 +5872,7 @@ def main():
                 market_language_translation=market_language_translation,
             )
             planned_report_path = Path(_get_report_output_path(target_date, mode=run_mode))
+            planned_report_paths = {REPORT_VARIANT_FULL: str(planned_report_path)}
             position_strategy_report = render_position_strategy_report(
                 data,
                 target_date,
@@ -5625,6 +5932,11 @@ def main():
                 run_mode=run_mode,
             )
             fresh_wiki_persistence_ready = True
+        phase_started_at = _record_daily_report_phase(
+            phase_timings,
+            "日报构建与首次检查",
+            phase_started_at,
+        )
 
         postgres_synced = False
         if data:
@@ -5697,8 +6009,66 @@ def main():
                 prefer_postgres_history=True,
             )
             _try_persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
+        phase_started_at = _record_daily_report_phase(
+            phase_timings,
+            "事实同步与 Bear 复核",
+            phase_started_at,
+        )
 
         if not args.no_report and data:
+            companion_html_paths = []
+            elimination_html_path = _try_save_elimination_tournament_html(
+                data,
+                target_date,
+                saved_report_paths=planned_report_paths,
+            )
+            if elimination_html_path:
+                companion_html_paths.append(elimination_html_path)
+            sector_preflight_html_path = _try_save_sector_capital_preflight_html(
+                data,
+                target_date,
+                saved_report_paths=planned_report_paths,
+            )
+            if sector_preflight_html_path:
+                companion_html_paths.append(sector_preflight_html_path)
+            _audit_generated_report_with_companion_html_paths(
+                report_outputs,
+                companion_html_paths,
+                source_path=planned_report_path,
+                expected_position_summary=_existing_position_summary_for_audit(data),
+                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
+                prefer_postgres_history=True,
+            )
+            chanlun_html_path = save_sh_index_chanlun_html_report(
+                target_date,
+                root=Path(__file__).resolve().parents[1],
+                tomorrow_decision=tomorrow_decision,
+                fetch_minute_bars=_postgres_only_index_minute_fetcher if args.postgres_only else None,
+                sse_loader=_postgres_only_index_daily_loader if args.postgres_only else None,
+                allow_live_fallback=not args.postgres_only,
+            )
+            print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
+            if not position_strategy_report:
+                position_strategy_report = render_position_strategy_report(
+                    data,
+                    target_date,
+                    positions,
+                    source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
+                    output_root=planned_report_path.parent,
+                    prefer_postgres_history=True,
+                )
+            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
+            position_timeline_markdown = _extract_position_timeline_markdown(position_strategy_report)
+
+            if postgres_synced:
+                _try_save_daily_report_html_from_saved_markdown(
+                    target_date,
+                    run_mode=run_mode,
+                    saved_report_paths=planned_report_paths,
+                    prepend_markdown=position_timeline_markdown,
+                    html_text=bear_html_text,
+                    t0_market_breadth=t0_market_breadth,
+                )
             saved_report_paths = save_report_outputs(
                 report_outputs,
                 target_date,
@@ -5712,34 +6082,9 @@ def main():
                 input_payload={"target_date": target_date, "run_mode": run_mode},
                 output_payload={"output_variants": list(saved_report_paths.keys())},
             )
-            saved_full_markdown = read_verified_saved_report_markdown(
+            read_verified_saved_report_markdown(
                 saved_report_paths.get(REPORT_VARIANT_FULL),
                 report_outputs.get(REPORT_VARIANT_FULL, ""),
-            )
-            saved_report_outputs = dict(report_outputs)
-            saved_report_outputs[REPORT_VARIANT_FULL] = saved_full_markdown
-            companion_html_paths = []
-            elimination_html_path = _try_save_elimination_tournament_html(
-                data,
-                target_date,
-                saved_report_paths=saved_report_paths,
-            )
-            if elimination_html_path:
-                companion_html_paths.append(elimination_html_path)
-            sector_preflight_html_path = _try_save_sector_capital_preflight_html(
-                data,
-                target_date,
-                saved_report_paths=saved_report_paths,
-            )
-            if sector_preflight_html_path:
-                companion_html_paths.append(sector_preflight_html_path)
-            _audit_generated_report_with_companion_html_paths(
-                saved_report_outputs,
-                companion_html_paths,
-                source_path=saved_report_paths.get(REPORT_VARIANT_FULL),
-                expected_position_summary=_existing_position_summary_for_audit(data),
-                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
-                prefer_postgres_history=True,
             )
             if run_mode == LEDGER_MODE_FROZEN:
                 if not postgres_synced:
@@ -5773,28 +6118,6 @@ def main():
                     "canonical_hash": market_language_storage.get("canonical_hash", ""),
                 },
             )
-            chanlun_html_path = save_sh_index_chanlun_html_report(
-                target_date,
-                root=Path(__file__).resolve().parents[1],
-                tomorrow_decision=tomorrow_decision,
-                fetch_minute_bars=_postgres_only_index_minute_fetcher if args.postgres_only else None,
-                sse_loader=_postgres_only_index_daily_loader if args.postgres_only else None,
-                allow_live_fallback=not args.postgres_only,
-            )
-            print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
-            if not position_strategy_report:
-                position_strategy_report = render_position_strategy_report(
-                    data,
-                    target_date,
-                    positions,
-                    source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
-                    output_root=Path(saved_report_paths.get(REPORT_VARIANT_FULL, "")).parent
-                    if saved_report_paths.get(REPORT_VARIANT_FULL)
-                    else None,
-                    prefer_postgres_history=True,
-                )
-            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
-            position_timeline_markdown = _extract_position_timeline_markdown(position_strategy_report)
 
         if args.stock and data:
             stock_report = generate_single_stock_diagnostic_markdown(
@@ -5805,37 +6128,38 @@ def main():
                 run_mode=run_mode,
             )
             save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
+        phase_started_at = _record_daily_report_phase(
+            phase_timings,
+            "附属页面检查与主日报保存",
+            phase_started_at,
+        )
 
-        # Bear 已在内存中完成联合检查；事实与 Markdown 写入后只落盘同一份 HTML。
         if data:
             if postgres_synced and not args.no_report:
-                bear_html_path = _try_save_daily_report_html_from_saved_markdown(
-                    target_date,
-                    run_mode=run_mode,
-                    saved_report_paths=saved_report_paths,
-                    prepend_markdown=position_timeline_markdown,
-                    html_text=bear_html_text,
-                    t0_market_breadth=t0_market_breadth,
-                )
                 if not args.postgres_only:
-                    snapshot_path = _save_data_snapshot(
+                    snapshot_path = _save_data_snapshot_with_observation(
                         data,
                         target_date,
-                        mode=run_mode,
+                        run_mode,
+                        observer,
                     )
-                    observer.record_step(
-                        "save_data_snapshot",
-                        status="success",
-                        input_payload={"target_date": target_date, "run_mode": run_mode},
-                        output_payload={"snapshot_path": snapshot_path},
-                    )
+            phase_started_at = _record_daily_report_phase(
+                phase_timings,
+                "快照保存",
+                phase_started_at,
+            )
             elapsed_seconds = time.perf_counter() - report_started_at
+            report_phase_timing_rows = _build_daily_report_phase_timing_rows(
+                phase_timings,
+                elapsed_seconds,
+            )
             _append_daily_report_duration_log(
                 saved_report_paths,
                 target_date=target_date,
                 elapsed_seconds=elapsed_seconds,
                 data_path_label=_daily_report_data_path_label(args),
                 report_write_label=run_mode if not args.no_report else "未生成",
+                phase_timing_rows=report_phase_timing_rows,
             )
 
         return 0
@@ -5881,9 +6205,14 @@ def main():
                 "target_date": target_date,
                 "replay": bool(args.replay),
                 "postgres_only": bool(args.postgres_only),
+                "requested_postgres_only": requested_postgres_only,
+                "auto_postgres_fast_render": auto_postgres_fast_render,
+                "data_path": selected_data_path,
+                "data_path_reason": data_path_reason,
                 "no_report": bool(args.no_report),
                 "report_saved": bool(saved_report_paths),
                 "error": str(run_error) if run_error else "",
+                "phase_timings": report_phase_timing_rows,
                 "report_quality_score": report_quality_score,
                 "report_quality_ledger": report_quality_ledger,
             },

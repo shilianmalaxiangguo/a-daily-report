@@ -1248,6 +1248,54 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(stock["raw_sector"], "通信设备")
         self.assertIn("英伟达AI平台", stock["trade_narrative_reason"])
 
+    def test_candidate_bundle_uses_brain_computer_narrative_over_raw_industry(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {
+                            "symbol": "002195.SZ",
+                            "name": "岩山科技",
+                            "stock_reason": "脑机接口+AI大模型+AI PC+人形机器人",
+                            "related_plates": [{"plate_id": 1, "plate_name": "脑科学"}],
+                        },
+                        {
+                            "symbol": "002173.SZ",
+                            "name": "创新医疗",
+                            "stock_reason": "运用脑机接口技术帮助偏瘫患者恢复自主控制",
+                            "related_plates": [{"plate_id": 1, "plate_name": "脑科学"}],
+                        },
+                    ]
+                }
+            },
+            exit_analysis={"sector_name": ""},
+            candidates=[],
+            watchlist=[
+                {"name": "岩山科技", "code": "002195", "sector": "软件服务", "score": 80},
+                {"name": "创新医疗", "code": "002173", "sector": "医疗保健", "score": 80},
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-07-28",
+            normalize_stock_code=lambda code: str(code or "").replace(".SZ", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda evaluated_stocks, *args, **kwargs: evaluated_stocks[:2],
+        )
+
+        by_code = {item["code"]: item for item in result["extreme_conviction_list"]}
+        self.assertEqual(by_code["002195"]["sector"], "脑机接口")
+        self.assertEqual(by_code["002195"]["raw_sector"], "软件服务")
+        self.assertEqual(by_code["002173"]["sector"], "脑机接口")
+        self.assertEqual(by_code["002173"]["raw_sector"], "医疗保健")
+        for stock in by_code.values():
+            self.assertEqual(stock["trade_narrative_sector"], "脑机接口")
+            self.assertIn("脑机接口", stock["trade_narrative_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

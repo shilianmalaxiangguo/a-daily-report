@@ -972,7 +972,7 @@ def _build_preflight_decision_list(layers, final_action):
             evidence=f"价格行为层剩余：{price_survivors}",
             counter_evidence=_first_entry_reason(price_layer, "eliminated") or "炸板、高换手、跌回关键线均优先视为反方证据",
             tomorrow_check="指定窗口内是否继续站回资金成本区",
-            action="参与或观察" if price_survivors != "无" else "只观察",
+            action="参与或观察" if final_position > 0 and price_survivors != "无" else "只观察",
         ),
         _preflight_decision_row(
             item="周期窗口是否打开",
@@ -2325,12 +2325,12 @@ def _leader_reverse_reason(entry, fact_indexes):
     sector_bits = []
     current_mainline = _as_dict(fact_indexes.get("current_mainline"))
     leading_line = clean_text(current_mainline.get("leading_line") or current_mainline.get("primary_mainline"))
-    if leading_line:
+    if leading_line and _sector_has_name([leading_line], sector):
         sector_bits.append(f"当日记录主线={leading_line}")
     current_snapshot = _as_dict(fact_indexes.get("current_snapshot"))
     snapshot_name = clean_text(current_snapshot.get("sector_name"))
     snapshot_share = current_snapshot.get("sector_turnover_share_pct") or current_snapshot.get("turnover_share_pct")
-    if snapshot_name:
+    if snapshot_name and _sector_has_name([snapshot_name], sector):
         if snapshot_share not in (None, ""):
             sector_bits.append(f"成交跟踪板块={snapshot_name}({snapshot_share}%)")
         else:
@@ -4165,10 +4165,12 @@ def _render_preflight_tplus_rehearsal(rehearsal):
     )
 
 
-def _render_preflight_carrier_strategy(strategy):
+def _render_preflight_carrier_strategy(strategy, final_action=None):
     strategy = _as_dict(strategy)
     if not strategy:
         return ""
+    final_action = _as_dict(final_action)
+    final_position = _normalized_position_pct(final_action.get("position_pct"))
     primary = _as_dict(strategy.get("primary_candidate"))
     rows = []
     for stage in _as_list(strategy.get("stages")):
@@ -4189,9 +4191,14 @@ def _render_preflight_carrier_strategy(strategy):
             or strategy.get("action_reason"),
             "-",
         )
+        stage_title = clean_text(stage.get("title"), "复核层")
+        if final_position <= 0 and stage_title == "纸面动作":
+            stage_title = "差异复核收口"
+        if final_position <= 0 and first_reason and "不进入明日对象" not in first_reason:
+            first_reason = f"{first_reason}；只作差异复核，不进入明日对象"
         rows.append(
             {
-                "stage": clean_text(stage.get("title"), "复核层"),
+                "stage": stage_title,
                 "input": stage.get("input_count", 0),
                 "eliminated": f"{stage.get('eliminated_count', 0)}（{'、'.join(eliminated[:5]) or '-'}）",
                 "survivor": f"{stage.get('survivor_count', 0)}（{'、'.join(survivors[:5]) or '-'}）",
@@ -4201,7 +4208,7 @@ def _render_preflight_carrier_strategy(strategy):
     if primary:
         rows.append(
             {
-                "stage": "主样本",
+                "stage": "主样本" if final_position > 0 else "复核样本",
                 "input": "-",
                 "eliminated": "-",
                 "survivor": clean_text(primary.get("stock_label"), "-"),
@@ -4209,8 +4216,12 @@ def _render_preflight_carrier_strategy(strategy):
             }
         )
     return _render_preflight_table(
-        title="板块资金载体预案",
-        summary="T0同源策略，只作差异复核，不新增第二个明日对象",
+        title="板块资金载体预案" if final_position > 0 else "板块资金载体差异复核",
+        summary=(
+            "T0同源策略，只作差异复核，不新增第二个明日对象"
+            if final_position > 0
+            else "T0同源策略只作差异复核；最终0%不新增明日对象"
+        ),
         row_class="carrier-strategy-block",
         columns=(
             ("stage", "环节"),
@@ -4976,7 +4987,7 @@ def render_sector_capital_preflight_html(payload):
 	      <pre><code>{_html_block(payload.get("mermaid"))}</code></pre>
 	    </details>
     {_render_preflight_tplus_rehearsal(payload.get("tplus_rehearsal"))}
-    {_render_preflight_carrier_strategy(payload.get("sector_capital_carrier_strategy"))}
+    {_render_preflight_carrier_strategy(payload.get("sector_capital_carrier_strategy"), final_action)}
     {_render_preflight_decision_list(payload.get("decision_list"))}
     {_render_preflight_idiot_index_review(payload.get("idiot_index_review"))}
     <section class="tournament-flow" aria-label="板块资金扩散生成前复核层">

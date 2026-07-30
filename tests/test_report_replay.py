@@ -22,6 +22,7 @@ from replay.report_replay import (
     _ensure_replay_market_breadth,
     _ensure_replay_price_band_style_series,
     _ensure_replay_stock_quotes,
+    _normalize_replay_trade_narrative_sectors,
     build_replay_snapshot_contract,
 )
 from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
@@ -181,9 +182,21 @@ def _target_date_lhb_snapshot(target_date):
 
 
 def _minimal_sector_first_preflight_inputs(target_date):
+    target_day = datetime.date.fromisoformat(target_date)
     return {
         "market_state_snapshot": {"trade_date": target_date, "source": "test.fixture"},
         "mainline_turnover_summary": {"trade_date": target_date, "source": "test.fixture"},
+        "etf_turnover_series": {
+            "available": True,
+            "source": "test.fixture",
+            "rows": [
+                {
+                    "trade_date": (target_day - datetime.timedelta(days=offset)).isoformat(),
+                    "etf_turnover_yi": 4400 + (24 - offset),
+                }
+                for offset in range(24, -1, -1)
+            ],
+        },
         "selected_position_candidate": {"code": "000988", "name": "华工科技", "trade_date": target_date},
         "final_target_resolution": {
             "target": {"code": "000988", "name": "华工科技"},
@@ -674,6 +687,7 @@ def _replay_probe(target_date, refresh_sources=None):
                     (target_date, window_days)
                 )
                 or {
+                    "available": True,
                     "source": "sina.etf.daily_amount",
                     "rows": [
                         {
@@ -699,6 +713,132 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(by_step["request.etf_turnover_series"]["details"]["provider"], "sina.etf.daily_amount")
         self.assertEqual(by_step["request.etf_turnover_series"]["details"]["row_count"], 25)
         self.assertIn("ETF两市成交额趋势获取", [row[0] for row in data["timer_summary"]["steps"]])
+
+    def test_build_replay_snapshot_contract_refreshes_etf_series_with_future_rows(self):
+        snapshot_rows = [
+            {"trade_date": f"2026-07-{day:02d}", "etf_turnover_yi": 4400 + day}
+            for day in range(5, 30)
+        ]
+        snapshot_rows.append({"trade_date": "2026-07-30", "etf_turnover_yi": 9999})
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True, "ETF两市成交额趋势": True},
+            "step_status": {"主要指数获取": True, "ETF两市成交额趋势获取": True},
+            "etf_turnover_series": {"available": True, "rows": snapshot_rows},
+        }
+        etf_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-07-29",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_etf_turnover_series_from_sina": lambda *, target_date, window_days=25: etf_calls.append(
+                    (target_date, window_days)
+                )
+                or {
+                    "available": True,
+                    "source": "sina.etf.daily_amount",
+                    "rows": [
+                        {"trade_date": f"2026-07-{day:02d}", "etf_turnover_yi": 4500 + day}
+                        for day in range(5, 30)
+                    ],
+                },
+            },
+        )
+
+        self.assertEqual(etf_calls, [("2026-07-29", 25)])
+        self.assertEqual(result["data"]["etf_turnover_series"]["rows"][-1]["trade_date"], "2026-07-29")
+
+    def test_build_replay_snapshot_contract_rejects_invalid_etf_refresh_result(self):
+        snapshot_rows = [
+            {"trade_date": f"2026-07-{day:02d}", "etf_turnover_yi": 4400 + day}
+            for day in range(5, 30)
+        ]
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True, "ETF两市成交额趋势": True},
+            "step_status": {"主要指数获取": True, "ETF两市成交额趋势获取": True},
+            "etf_turnover_series": {
+                "available": False,
+                "coverage_anomaly": True,
+                "coverage_status": "partial",
+                "rows": snapshot_rows,
+            },
+        }
+        etf_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-07-29",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_etf_turnover_series_from_sina": lambda *, target_date, window_days=25: etf_calls.append(
+                    (target_date, window_days)
+                )
+                or {
+                    "available": False,
+                    "source": "sina.etf.daily_amount",
+                    "coverage_anomaly": True,
+                    "coverage_status": "partial",
+                    "rows": [
+                        {"trade_date": f"2026-07-{day:02d}", "etf_turnover_yi": 4500 + day}
+                        for day in range(5, 30)
+                    ],
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(etf_calls, [("2026-07-29", 25)])
+        self.assertFalse(data["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(data["step_status"]["ETF两市成交额趋势获取"])
+        self.assertTrue(data["etf_turnover_series"]["coverage_anomaly"])
+        log = next(row for row in data["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertIn("刷新结果不满足目标日条件", log["message"])
+
+    def test_build_replay_snapshot_contract_rejects_stale_etf_without_refresh_function(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True, "ETF两市成交额趋势": True},
+            "step_status": {"主要指数获取": True, "ETF两市成交额趋势获取": True},
+            "etf_turnover_series": {
+                "available": True,
+                "source": "snapshot.etf_turnover_series",
+                "rows": [
+                    {"trade_date": f"2026-06-{day:02d}", "etf_turnover_yi": 4400 + day}
+                    for day in range(1, 26)
+                ],
+            },
+        }
+
+        with patch("replay.report_replay._load_default_mainline_helpers", return_value={}):
+            result = build_replay_snapshot_contract(
+                "2026-07-29",
+                refresh_sources=["noop"],
+                load_data_snapshot=lambda target_date: (snapshot, ""),
+                tencent_factory=lambda: _FakeTencentFinanceData([]),
+                get_major_indices_from_iwencai=lambda target_date="": [],
+                safe_float=lambda value: float(value or 0),
+                print_fn=lambda *args, **kwargs: None,
+                helpers={},
+            )
+
+        data = result["data"]
+        self.assertFalse(data["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(data["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in data["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertIn("刷新函数不可用", log["message"])
 
     def test_build_replay_snapshot_contract_backfills_decision_sources_from_stale_snapshot(self):
         snapshot = {
@@ -3594,6 +3734,83 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertIn("zt_pool", pool_log["details"]["preserved_keys"])
         self.assertIn("dt_pool", pool_log["details"]["target_keys"])
         self.assertIn("market_stats", pool_log["details"]["target_keys"])
+
+    def test_replay_normalizes_frozen_brain_computer_sector_derivatives(self):
+        snapshot = {
+            "zt_pool": [
+                {
+                    "代码": "002195",
+                    "名称": "岩山科技",
+                    "所属行业": "软件服务",
+                    "涨停统计": "脑机接口+AI大模型+AI PC+人形机器人",
+                },
+                {
+                    "代码": "002173",
+                    "名称": "创新医疗",
+                    "所属行业": "医疗保健",
+                    "涨停统计": "脑机接口+医疗器械注册证+医疗服务",
+                },
+                {
+                    "代码": "000988",
+                    "名称": "华工科技",
+                    "所属行业": "HS",
+                    "涨停统计": "光模块放量涨停",
+                },
+            ],
+            "zt_pool_by_sector": {
+                "软件服务": [{"code": "002195", "name": "岩山科技"}],
+                "医疗保健": [{"code": "002173", "name": "创新医疗"}],
+                "光通信": [
+                    {
+                        "code": "000988",
+                        "name": "华工科技",
+                        "zt_type": "光模块放量涨停",
+                        "frozen_source": "目标日快照",
+                    }
+                ],
+            },
+            "lianban_data": [
+                {"code": "002195", "name": "岩山科技", "sector": "软件服务", "lianban_days": 1},
+                {"code": "002173", "name": "创新医疗", "sector": "医疗保健", "lianban_days": 1},
+                {
+                    "code": "000988",
+                    "name": "华工科技",
+                    "sector": "光通信",
+                    "lianban_days": 1,
+                    "reason": "光模块放量涨停",
+                },
+            ],
+            "xuangubao_data": {
+                "xuangubao_limit_up_reasons": [
+                    {
+                        "symbol": "002195.SZ",
+                        "stock_reason": "脑机接口+AI大模型+AI PC+人形机器人",
+                        "related_plates": [{"plate_name": "脑科学"}],
+                    },
+                    {
+                        "symbol": "002173.SZ",
+                        "stock_reason": "运用脑机接口技术帮助偏瘫患者恢复自主控制",
+                        "related_plates": [{"plate_name": "脑科学"}],
+                    },
+                ]
+            },
+        }
+        frozen_huagon_bucket = list(snapshot["zt_pool_by_sector"]["光通信"])
+        frozen_huagon_lianban = dict(snapshot["lianban_data"][2])
+
+        self.assertTrue(_normalize_replay_trade_narrative_sectors(snapshot))
+        self.assertEqual(
+            {row["code"] for row in snapshot["zt_pool_by_sector"]["脑机接口"]},
+            {"002195", "002173"},
+        )
+        self.assertEqual(snapshot["zt_pool_by_sector"]["光通信"], frozen_huagon_bucket)
+        self.assertNotIn("HS", snapshot["zt_pool_by_sector"])
+        by_code = {row["code"]: row for row in snapshot["lianban_data"]}
+        self.assertEqual(by_code["002195"]["sector"], "脑机接口")
+        self.assertEqual(by_code["002195"]["raw_sector"], "软件服务")
+        self.assertEqual(by_code["002173"]["sector"], "脑机接口")
+        self.assertEqual(by_code["002173"]["raw_sector"], "医疗保健")
+        self.assertEqual(by_code["000988"], frozen_huagon_lianban)
 
     def test_replay_limit_pool_backfill_preserves_confirmed_empty_pool(self):
         replay_runtime = self._load_module()

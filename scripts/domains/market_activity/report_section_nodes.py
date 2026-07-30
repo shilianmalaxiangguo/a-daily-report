@@ -1065,7 +1065,14 @@ def build_lianban_node(context, node_meta=None, node_lookup=None):
                     "|------|------|----------|--------|----------|--------|--------|--------|--------|----------|------------|",
                 ]
             )
-            for stock in stocks[:5]:
+            display_stocks = list(stocks[:5])
+            displayed_codes = {str(stock.get("code") or "") for stock in display_stocks}
+            for stock in stocks[5:]:
+                code = str(stock.get("code") or "")
+                if stock.get("trade_narrative_sector") and code not in displayed_codes:
+                    display_stocks.append(stock)
+                    displayed_codes.add(code)
+            for stock in display_stocks:
                 name = stock.get("name", "?")
                 code = stock.get("code", "?").replace(".SZ", "").replace(".SS", "")
                 info = stock_full_info.get(code, {})
@@ -1078,7 +1085,7 @@ def build_lianban_node(context, node_meta=None, node_lookup=None):
                 reason = stock.get("reason", "-")
                 if len(reason) > 30:
                     reason = reason[:30] + "..."
-                sector = get_stock_sector(
+                sector = stock.get("trade_narrative_sector") or get_stock_sector(
                     name,
                     code,
                     hot_rank_data=_hot_rank_data(context),

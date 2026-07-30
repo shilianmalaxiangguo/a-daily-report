@@ -127,6 +127,13 @@ def _infer_sector_from_reason(text):
     return ""
 
 
+def _infer_trade_narrative_sector_from_reason(text):
+    text = str(text or "")
+    if "脑机接口" in text or "脑科学" in text:
+        return "脑机接口"
+    return ""
+
+
 def _stock_code_keys(item):
     raw_values = [
         item.get("代码", ""),
@@ -145,6 +152,14 @@ def _stock_code_keys(item):
 
 
 def _pick_sector_label(item, code_to_sector=None):
+    reason_text = " ".join(
+        str(item.get(key, "") or "")
+        for key in ("涨停原因", "涨停统计", "原因", "reason", "limit_reason", "涨停解析", "涨停分析", "上榜原因")
+    )
+    narrative_sector = _infer_trade_narrative_sector_from_reason(reason_text)
+    if _is_valid_sector_label(narrative_sector):
+        return narrative_sector
+
     for key in ("所属行业", "industry", "行业", "sector", "板块", "概念", "所属板块"):
         sector = item.get(key, "")
         if _is_valid_sector_label(sector):
@@ -156,10 +171,6 @@ def _pick_sector_label(item, code_to_sector=None):
         if _is_valid_sector_label(sector):
             return str(sector).strip()
 
-    reason_text = " ".join(
-        str(item.get(key, "") or "")
-        for key in ("涨停原因", "涨停统计", "原因", "reason", "limit_reason", "涨停解析", "涨停分析", "上榜原因")
-    )
     inferred = _infer_sector_from_reason(reason_text)
     if _is_valid_sector_label(inferred):
         return inferred
@@ -1621,25 +1632,39 @@ def _related_plate_names(related_plates):
     return names
 
 
+def _limit_up_row_narrative_text(row, xgb_reason=None, reason_text=""):
+    return " / ".join(
+        str(value or "")
+        for value in (
+            reason_text,
+            (xgb_reason or {}).get("stock_reason"),
+            " ".join(_related_plate_names((xgb_reason or {}).get("related_plates") or [])),
+            row.get("涨停统计"),
+            row.get("涨停原因"),
+            row.get("reason"),
+        )
+    )
+
+
+def _resolve_limit_up_row_trade_narrative_sector(row, xgb_reason=None, reason_text=""):
+    return _infer_trade_narrative_sector_from_reason(
+        _limit_up_row_narrative_text(row, xgb_reason, reason_text)
+    )
+
+
 def _resolve_limit_up_row_sector(row, xgb_reason=None, reason_text=""):
+    narrative_text = _limit_up_row_narrative_text(row, xgb_reason, reason_text)
+    narrative_sector = _infer_trade_narrative_sector_from_reason(narrative_text)
+    if _is_valid_sector_label(narrative_sector):
+        return narrative_sector
+
     sector = row.get("所属行业", "未知")
     if _is_valid_sector_label(sector):
         return sector
     plate_name = _first_valid_plate_name((xgb_reason or {}).get("related_plates") or [])
     if plate_name:
         return plate_name
-    inferred = _infer_sector_from_reason(
-        " / ".join(
-            str(value or "")
-            for value in (
-                reason_text,
-                (xgb_reason or {}).get("stock_reason"),
-                row.get("涨停统计"),
-                row.get("涨停原因"),
-                row.get("reason"),
-            )
-        )
-    )
+    inferred = _infer_sector_from_reason(narrative_text)
     if inferred:
         return inferred
     return "待补充板块"
@@ -1693,6 +1718,8 @@ def collect_market_activity_capital_snapshot_request_bundle(
                 xgb_reason = xuangubao_reason_map.get(_normalize_quote_code(row["代码"]), {}) or {}
                 stock_reason = xgb_reason.get("stock_reason", "")
                 reason_text = stock_reason or row.get("涨停统计", "")
+                raw_sector = str(row.get("所属行业") or "").strip()
+                narrative_sector = _resolve_limit_up_row_trade_narrative_sector(row, xgb_reason, reason_text)
                 lianban_item = {
                     "code": row["代码"],
                     "name": row["名称"],
@@ -1707,6 +1734,14 @@ def collect_market_activity_capital_snapshot_request_bundle(
                     "low_price": row.get("最低价", 0),
                     "first_limit_time": first_limit_time,
                 }
+                if narrative_sector:
+                    lianban_item.update(
+                        {
+                            "raw_sector": raw_sector,
+                            "trade_narrative_sector": narrative_sector,
+                            "trade_narrative_reason": "目标日涨停原因或关联题材命中：脑机接口",
+                        }
+                    )
                 if xgb_reason:
                     related_plates = xgb_reason.get("related_plates", []) or []
                     lianban_item.update(
@@ -1756,14 +1791,21 @@ def collect_market_activity_capital_snapshot_request_bundle(
             net_sell_top10 = list(snapshot.get("lhb_net_sell_top10") or [])
             grouped_rows = list(snapshot.get("lhb_analysis") or [])
             inst_detail = list(snapshot.get("lhb_inst_detail") or [])
+            source_record_count = int(
+                _safe_float(snapshot.get("lhb_source_record_count"), len(grouped_rows))
+            )
+            grouped_record_count = int(
+                _safe_float(snapshot.get("lhb_grouped_record_count"), len(grouped_rows))
+            )
             for item in net_buy_top10 + net_sell_top10:
                 code = item.get("code", "")
                 if code and not _is_valid_sector_label(item.get("sector")):
                     item["sector"] = _resolve_lhb_sector(code, existing_results)
         else:
-            lhb_rows = fetch_lhb_rows(target_date)
+            lhb_rows = list(fetch_lhb_rows(target_date) or [])
+            source_record_count = len(lhb_rows)
             grouped = {}
-            for row in lhb_rows or []:
+            for row in lhb_rows:
                 code = _normalize_lhb_code(row.get("fs_code", ""))
                 if not code:
                     continue
@@ -1782,6 +1824,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
                 bucket["change_rate"] = bucket.get("change_rate") or row.get("change_rate", 0)
 
             grouped_rows = list(grouped.values())
+            grouped_record_count = len(grouped_rows)
             buy_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0), reverse=True)[:10]
             sell_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0))[:10]
 
@@ -1820,6 +1863,8 @@ def collect_market_activity_capital_snapshot_request_bundle(
         results["lhb_net_sell_top10"] = net_sell_top10
         results["lhb_analysis"] = grouped_rows
         results["lhb_inst_detail"] = inst_detail
+        results["lhb_source_record_count"] = source_record_count
+        results["lhb_grouped_record_count"] = grouped_record_count
         if "snapshot" in locals() and isinstance(snapshot, dict):
             results["lhb_inst_detail_status"] = snapshot.get("lhb_inst_detail_status") or ("available" if inst_detail else "empty")
         else:
@@ -1840,8 +1885,16 @@ def collect_market_activity_capital_snapshot_request_bundle(
             "success" if has_lhb_rows else "degraded",
             "已处理龙虎榜请求" if has_lhb_rows else "龙虎榜返回空",
             provider=lhb_provider,
-            target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis", "lhb_inst_detail"],
-            lhb_count=len(grouped_rows),
+            target_keys=[
+                "lhb_net_buy_top10",
+                "lhb_net_sell_top10",
+                "lhb_analysis",
+                "lhb_inst_detail",
+                "lhb_source_record_count",
+                "lhb_grouped_record_count",
+            ],
+            source_record_count=source_record_count,
+            lhb_count=grouped_record_count,
             buy_count=len(net_buy_top10),
             sell_count=len(net_sell_top10),
             inst_detail_count=len(inst_detail),
@@ -1852,6 +1905,8 @@ def collect_market_activity_capital_snapshot_request_bundle(
         results["lhb_analysis"] = []
         results["lhb_inst_detail"] = []
         results["lhb_inst_detail_status"] = "error"
+        results["lhb_source_record_count"] = 0
+        results["lhb_grouped_record_count"] = 0
         results["lhb_provider"] = "finshare.get_lhb"
         results["lhb_data_status"] = "error"
         emit(f"   ⚠️ 龙虎榜获取失败: {error}")

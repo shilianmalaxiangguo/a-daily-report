@@ -6,6 +6,8 @@ import daily_report_analysis_utils as analysis_utils
 from daily_report_snapshot_io import load_data_snapshot
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 
+_DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
+
 try:
     from market_data.tushare_market_activity_service import fetch_tushare_sector_flow as _default_fetch_tushare_sector_flow
 except Exception:  # pragma: no cover - optional runtime dependency
@@ -19,9 +21,11 @@ except Exception:  # pragma: no cover - optional runtime dependency
 try:
     from domains.market_state.daily_metric_history_index import (
         ensure_daily_metric_history_index as _default_ensure_daily_metric_history_index,
+        load_compact_metric_history_snapshot as _default_load_compact_metric_history_snapshot,
     )
 except Exception:  # pragma: no cover - optional runtime dependency
     _default_ensure_daily_metric_history_index = None
+    _default_load_compact_metric_history_snapshot = None
 
 __all__ = [
     "extract_sector_turnover_snapshot",
@@ -102,6 +106,21 @@ def ensure_daily_metric_history_index(**kwargs):
     if callable(_default_ensure_daily_metric_history_index):
         return _default_ensure_daily_metric_history_index(**kwargs)
     return {"indexed_count": 0, "dates": []}
+
+
+def load_compact_metric_history_snapshot(target_date):
+    if callable(_default_load_compact_metric_history_snapshot):
+        return _default_load_compact_metric_history_snapshot(target_date)
+    return None, None
+
+
+def _load_history_snapshot(target_date):
+    if globals().get("load_data_snapshot") is not _DEFAULT_LOAD_DATA_SNAPSHOT:
+        return globals()["load_data_snapshot"](target_date)
+    loader = globals().get("load_compact_metric_history_snapshot")
+    if callable(loader):
+        return loader(target_date)
+    return None, None
 
 
 def _postgres_only_runtime():
@@ -454,7 +473,7 @@ def load_recent_sector_turnover_history(target_date, sector_name, lookback_days=
                 break
             scanned_days += 1
 
-            snapshot_data, _ = load_data_snapshot(cursor)
+            snapshot_data, _ = _load_history_snapshot(cursor)
             if not snapshot_data:
                 continue
 

@@ -656,6 +656,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
     normalized = []
     legacy_markers = (
         "强核心走竞价表态",
+        "日线结构中枢定环境，强核心走09:30-09:35",
         "普通结构只看09:50-10:10窗口",
         "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，按失效价和单笔-5%底线处理风险",
     )
@@ -668,11 +669,89 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
                 text = f"- **执行节奏**: {_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK}"
             elif text.startswith("> **怎么执行**："):
                 text = f"> **怎么执行**：{_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK}"
+            elif text.startswith("**怎么执行**："):
+                text = f"**怎么执行**：{_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK}"
             else:
                 text = text.replace(
                     "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，按失效价和单笔-5%底线处理风险",
                     _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK,
                 )
+        normalized.append(text)
+    return normalized
+
+
+def _normalize_zero_participation_decision_claims(lines):
+    visible_text = "\n".join(str(line or "") for line in list(lines or []))
+    has_explicit_empty_target = any(
+        marker in visible_text
+        for marker in (
+            "| 最终对象 | 无 |",
+            "| 明日执行对象 | 无 |",
+            "| 唯一重点对象 | 暂无 |",
+            "无明日执行对象",
+        )
+    )
+    if not _should_apply_zero_style_language_cleanup(lines) or not has_explicit_empty_target:
+        return list(lines or [])
+
+    replacements = (
+        (
+            "热点、趋势密度和异常承接正在同向共振，可以跟，但只能跟最强方向。",
+            "热点、趋势密度和异常承接同向改善，但最终没有形成合格对象，只作研究证据。",
+        ),
+        (
+            "只在主线和异常承接对象里按三段固定交易窗口处理；",
+            "只观察主线和异常承接对象；固定窗口结果只进入复盘；",
+        ),
+        (
+            "B1先到1x/50%取得参与权，B2只在确认后补到2x/100%；B1未变强不补B2，走弱先取消B2并检查B1",
+            "最终0%不生成B1/B2",
+        ),
+        (
+            "按昨晚1x/50%半仓预案检查B1执行资格；本计划不追加B2",
+            "最终0%不生成B1/B2",
+        ),
+        ("市场已允许参与", "市场环境偏强"),
+        ("市场允许参与", "市场环境偏强"),
+        ("🟢 跟随主线", "市场环境偏强（研究证据）"),
+        (
+            "09:30-09:35或09:50-10:10窗口条件成立才参与，不满足回到0%",
+            "固定窗口结果只进入复盘，不生成盘中买入决定",
+        ),
+        ("买也只买最强，不做分散试错", "只观察最强方向，不新增参与"),
+        ("买后用失效价和单笔-5%底线处理风险", "最终0%不生成买入后风险动作"),
+        ("买入后按失效价和单笔-5%底线处理风险", "最终0%不生成买入后风险动作"),
+        ("打板/回封", "封板/回封观察"),
+    )
+    normalized = []
+    for line in list(lines or []):
+        text = str(line or "")
+        for source, target in replacements:
+            text = text.replace(source, target)
+        stripped = text.lstrip()
+        indent = text[: len(text) - len(stripped)]
+        if stripped.startswith("**明日裁决**:") or stripped.startswith("- **明日裁决**:"):
+            prefix = "- **明日裁决**:" if stripped.startswith("- ") else "**明日裁决**:"
+            text = f"{indent}{prefix} 0%不参与；市场环境偏强只作研究证据"
+        elif stripped.startswith("**开盘前动作**:"):
+            text = f"{indent}**开盘前动作**: 最终0%不生成B1/B2；只观察主攻线承接，结果进入复盘和下一份日报判断"
+        elif stripped.startswith("**次日市场环境**: 只观察 / 进攻态"):
+            text = stripped.replace("只观察 / 进攻态", "只观察 / 环境偏强（研究证据）", 1)
+            text = indent + text
+        elif stripped.startswith("#### 附录：🟡 明日市场环境：只观察 / 进攻态"):
+            text = f"{indent}#### 附录：🟡 明日市场环境：只观察 / 环境偏强（研究证据）"
+        elif stripped.startswith("- **最终操作状态**: 进攻态"):
+            text = f"{indent}- **最终操作状态**: 只观察；环境偏强仅作研究证据"
+        elif stripped.startswith(
+            (
+                "- **日线预估买入区间**:",
+                "- **硬止损底线**:",
+                "- **止盈观察位**:",
+            )
+        ):
+            continue
+        elif stripped.startswith("- **执行说明**:") and "最终0%不生成买入后风险动作" in stripped:
+            text = f"{indent}- **执行说明**: 最终0%不生成新仓动作；只记录观察结果"
         normalized.append(text)
     return normalized
 
@@ -683,6 +762,12 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
 
     normalized = []
     replacements = (
+        ("明天重点候选组", "过程候选回看组"),
+        ("**备用观察**", "**过程候选回看**"),
+        ("明日资格", "过程处理"),
+        ("09:50-10:10观察价", "过程价位记录"),
+        ("| 可做 |", "| 条件未满足，只观察 |"),
+        ("3进4，若竞价高开可能继续", "只作过程回放，不新增参与"),
         ("买点线", "观察线"),
         ("卖点线", "失效线"),
         ("买入窗口", "观察位窗口"),
@@ -804,6 +889,12 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
     )
     for line in list(lines or []):
         text = normalize_trading_time_text(str(line or ""))
+        text = re.sub(
+            r"09:50-10:10观察价(?:待盘中确认|\d+(?:\.\d+)?)"
+            r"(?:；关键位/带[^\n|，,]+)?",
+            "不保留未来观察价",
+            text,
+        )
         for source, target in replacements:
             text = text.replace(source, target)
         legacy_observation_prefix = "观察" + "锚："
@@ -954,8 +1045,10 @@ def _sanitize_report_lines(lines, postgres_only=False):
                 [
                     _mark_process_evidence_line(sanitize_front_page_text(line))
                     for line in _normalize_legacy_execution_framework_under_zero_participation(
-                        _normalize_tomorrow_action_soft_words_under_zero_participation(
-                            _align_appendix_observation_anchor_from_front_page(_dedupe_repeated_no_trade_lines(lines))
+                        _normalize_zero_participation_decision_claims(
+                            _normalize_tomorrow_action_soft_words_under_zero_participation(
+                                _align_appendix_observation_anchor_from_front_page(_dedupe_repeated_no_trade_lines(lines))
+                            )
                         )
                     )
                 ]
@@ -2999,6 +3092,19 @@ def _sync_position_decision_with_selection_workflow(position_decision, workflow)
                 ),
             }
         )
+        for key in (
+            "trigger_text",
+            "support_price",
+            "entry_price",
+            "stop_loss",
+            "execution_stop",
+            "effective_stop",
+            "display_anchor_price",
+            "second_shot_breakout_price",
+        ):
+            updated.pop(key, None)
+        updated["candidate_feedback_reasons"] = []
+        updated["candidate_feedback_score"] = 0
     elif _runtime_selection_workflow_final_controls_candidate(workflow):
         updated["target_position_pct"] = final.get(
             "position_pct",
@@ -3011,7 +3117,24 @@ def _store_runtime_position_decision(position_decision, data=None, execution_sta
     if not isinstance(position_decision, dict):
         return {}
     stored = dict(position_decision)
+    targets = []
     for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict) and all(target is not item for item in targets):
+            targets.append(target)
+        if not isinstance(target, dict):
+            continue
+        nested_snapshot = target.get("market_research_snapshot")
+        if isinstance(nested_snapshot, dict) and all(nested_snapshot is not item for item in targets):
+            targets.append(nested_snapshot)
+        research_bundle = target.get("market_research_bundle")
+        bundled_snapshot = (
+            research_bundle.get("market_research_snapshot")
+            if isinstance(research_bundle, dict)
+            else None
+        )
+        if isinstance(bundled_snapshot, dict) and all(bundled_snapshot is not item for item in targets):
+            targets.append(bundled_snapshot)
+    for target in targets:
         if isinstance(target, dict):
             target["position_decision"] = stored
     return stored
@@ -3266,6 +3389,269 @@ def _runtime_merge_same_stock_candidate_evidence(candidate, *sources):
     return merged
 
 
+_EMPTY_FINAL_PROCESS_COLLECTION_KEYS = (
+    "candidates",
+    "evaluated_stocks",
+    "mainline_evaluated_stocks",
+    "focus_group",
+    "waiting_stocks",
+    "executable_stocks",
+    "scored_executable_stocks",
+    "keep_group",
+    "delete_group",
+    "core_stocks",
+    "secondary_stocks",
+    "ignored_stocks",
+    "untradable_stocks",
+    "rejected_stocks",
+    "crossline_observation_stocks",
+    "gem_observation_stocks",
+    "generic_watch_stocks",
+    "watchlist",
+    "observation_candidates",
+    "display_observation_candidates",
+    "extreme_conviction_list",
+)
+
+
+def _downgrade_runtime_candidate_to_process_observation(candidate):
+    if not isinstance(candidate, dict):
+        return candidate
+    original_role = _first_runtime_text(candidate.get("sniper_role"), candidate.get("candidate_role"))
+    if original_role:
+        candidate.setdefault("zero_position_role_original", original_role)
+    original_reason = _first_runtime_text(candidate.get("reason"), candidate.get("condition"))
+    if original_reason:
+        candidate.setdefault("process_evidence_reason", original_reason)
+    _normalize_extreme_observation_text_fields(candidate)
+    candidate.update(
+        {
+            "candidate_role": "过程候选",
+            "candidate_layer": "process_observation",
+            "observation_layer": "process_observation",
+            "execution_eligibility": "observation_only",
+            "new_entry_qualified": False,
+            "front_observation_qualified": False,
+            "primary_buy_candidate": False,
+            "backup_buy_candidate": False,
+            "sniper_role": "候选观察",
+            "attack_state": "0%不参与",
+            "target_position_pct": 0,
+            "position_pct": 0,
+            "planned_position_pct": 0,
+            "position_plan_pct": 0,
+            "anchor_reversal_decision": "降级观察",
+            "dest": "只作过程回放，不新增参与",
+            "condition": "统一淘汰赛已淘汰，只保留过程证据",
+            "reason": "统一淘汰赛已淘汰，只保留过程证据",
+            "current_action": "只作过程回放，不新增参与",
+            "tomorrow_action": "只作过程回放，不新增参与",
+            "tmr_forecast": "只作过程回放，不新增参与",
+            "tomorrow_expectation": "仅作过程回放",
+            "tomorrow_risk": "条件未满足，只观察",
+            "permission_label": "过程样本，无当前观察资格",
+            "permission_reason": "统一淘汰赛已淘汰，只保留过程证据",
+            "conviction_rule": "只作过程回放，不新增参与",
+            "participation_window": "只作过程回放",
+            "participation_window_type": "observation_only",
+            "buy_window": "",
+            "auction_required": False,
+            "board_or_reseal_required": False,
+            "first_minutes_required": False,
+            "ordinary_structure_confirm_allowed": False,
+            "ma_reversion_probe_allowed": False,
+            "participation_basis": {},
+            "required_steps": [],
+            "minute_plan": {},
+            "watch_anchor_type": "过程候选回看样本",
+        }
+    )
+    for key in (
+        "entry_price",
+        "observation_price",
+        "risk_price",
+        "invalid_price",
+        "stop_loss",
+        "stop_plan",
+        "support_price",
+        "confirm_price",
+        "trigger_text",
+        "display_anchor_price",
+        "execution_stop",
+        "effective_stop",
+        "second_shot_breakout_price",
+        "entry_timing",
+        "entry_timing_reason",
+        "ma_reversion_window",
+        "daily_ma_entry_probe",
+        "ma_execution_anchor",
+    ):
+        candidate.pop(key, None)
+    for key in (
+        "auction_script",
+        "board_script",
+        "first_minutes_script",
+        "reseal_script",
+        "intraday_average_line_cross_probe",
+        "intraday_yellow_line_probe",
+        "zero_axis_reclaim_probe",
+        "ma_reversion_probe",
+        "missed_action",
+        "missed_entry_policy",
+    ):
+        if key in candidate:
+            candidate[key] = "只作过程回放，不新增参与"
+    for key in ("core_identity", "final_risk_review", "selection_shape_review", "trend_aesthetic_review"):
+        nested = candidate.get(key)
+        if not isinstance(nested, dict):
+            continue
+        nested = dict(nested)
+        if key == "core_identity":
+            nested["position_state"] = "0%"
+            nested["early_participation_allowed"] = False
+        else:
+            nested["action"] = "仅保留过程证据"
+        candidate[key] = nested
+    for key in ("planned_participation", "participation_script"):
+        plan = candidate.get(key)
+        if not isinstance(plan, dict):
+            continue
+        plan = dict(plan)
+        for price_key in (
+            "entry_price",
+            "observation_price",
+            "risk_price",
+            "invalid_price",
+            "stop_loss",
+            "support_price",
+            "confirm_price",
+            "trigger_text",
+            "display_anchor_price",
+            "execution_stop",
+            "effective_stop",
+            "second_shot_breakout_price",
+        ):
+            plan.pop(price_key, None)
+        plan.update(
+            {
+                "action": "skip",
+                "attack_state": "0%不参与",
+                "target_position_pct": 0,
+                "buy_window": "",
+                "participation_window": "",
+                "minute_plan": {},
+            }
+        )
+        candidate[key] = plan
+    return candidate
+
+
+def _downgrade_empty_final_execution_stage_candidates(execution_stage_context):
+    if not isinstance(execution_stage_context, dict):
+        return
+
+    def _downgrade_item(item, *, preserve_evidence_text=False):
+        evidence_text = {}
+        if preserve_evidence_text and isinstance(item, dict):
+            evidence_text = {
+                key: item.get(key)
+                for key in ("reason", "condition")
+                if _first_runtime_text(item.get(key))
+            }
+        _downgrade_runtime_candidate_to_process_observation(item)
+        if evidence_text:
+            item.update(evidence_text)
+
+    def _downgrade_rows(container, keys, *, preserve_evidence_text=False):
+        if not isinstance(container, dict):
+            return
+        for key in keys:
+            rows = container.get(key)
+            if not isinstance(rows, list):
+                continue
+            for item in rows:
+                _downgrade_item(item, preserve_evidence_text=preserve_evidence_text)
+
+    def _downgrade_action_rows(container, keys, *, preserve_evidence_text=False):
+        if not isinstance(container, dict):
+            return
+        action_keys = {
+            "candidate_layer",
+            "execution_eligibility",
+            "attack_state",
+            "sniper_role",
+            "primary_buy_candidate",
+            "buy_window",
+            "minute_plan",
+            "entry_price",
+            "stop_loss",
+        }
+        for key in keys:
+            rows = container.get(key)
+            if not isinstance(rows, list):
+                continue
+            for item in rows:
+                if not isinstance(item, dict) or not action_keys.intersection(item):
+                    continue
+                _downgrade_item(item, preserve_evidence_text=preserve_evidence_text)
+
+    def _downgrade_mapping_values(container, keys):
+        if not isinstance(container, dict):
+            return
+        for key in keys:
+            rows = container.get(key)
+            if not isinstance(rows, dict):
+                continue
+            for item in rows.values():
+                _downgrade_runtime_candidate_to_process_observation(item)
+
+    _downgrade_rows(execution_stage_context, _EMPTY_FINAL_PROCESS_COLLECTION_KEYS)
+    _downgrade_rows(
+        execution_stage_context,
+        ("sector_derived_candidates",),
+        preserve_evidence_text=True,
+    )
+    _downgrade_action_rows(
+        execution_stage_context,
+        ("candidate_quality_samples",),
+        preserve_evidence_text=True,
+    )
+    step2_bundle = execution_stage_context.get("step2_bundle")
+    _downgrade_rows(
+        step2_bundle,
+        (
+            "evaluated_stocks",
+            "mainline_evaluated_stocks",
+            "core_stocks",
+            "secondary_stocks",
+            "ignored_stocks",
+            "crossline_evaluated_stocks",
+            "crossline_ignored_stocks",
+            "extreme_conviction_list",
+        ),
+        preserve_evidence_text=True,
+    )
+    step3_bundle = execution_stage_context.get("step3_bundle")
+    _downgrade_rows(
+        step3_bundle,
+        (
+            "all_check_stocks",
+            "focus_group",
+            "stock_rows",
+            "waiting_stocks",
+            "executable_stocks",
+            "keep_group",
+            "delete_group",
+        ),
+    )
+    _downgrade_mapping_values(step3_bundle, ("by_code",))
+    special_probe_verdict = execution_stage_context.get("special_probe_verdict")
+    if isinstance(special_probe_verdict, dict):
+        _downgrade_runtime_candidate_to_process_observation(special_probe_verdict.get("probe_candidate"))
+    for key in ("best_stock", "runner_up"):
+        _downgrade_runtime_candidate_to_process_observation(execution_stage_context.get(key))
+
+
 def _runtime_sync_selected_candidate_from_final_resolution(
     final_target_resolution=None,
     *,
@@ -3298,18 +3684,36 @@ def _runtime_sync_selected_candidate_from_final_resolution(
             target.pop("selected_position_candidate", None)
             target.pop("current_core_candidate", None)
             target["front_observation_target"] = dict(watch_target)
+            target["watch_anchor"] = dict(watch_target)
+            watch_anchor_type = _first_runtime_text(watch_target.get("watch_anchor_type"))
+            if watch_anchor_type:
+                target["watch_anchor_type"] = watch_anchor_type
+            else:
+                target.pop("watch_anchor_type", None)
         else:
             target.pop("selected_position_candidate", None)
             target.pop("current_core_candidate", None)
             target.pop("front_observation_target", None)
+            target.pop("watch_anchor", None)
+            target.pop("watch_anchor_type", None)
         candidate_snapshot = target.get("candidate_snapshot")
         if isinstance(candidate_snapshot, dict):
             if selected_key:
                 candidate_snapshot["selected_position_candidate"] = dict(selected)
                 candidate_snapshot["current_core_candidate"] = dict(selected)
+            elif watch_key:
+                candidate_snapshot.pop("selected_position_candidate", None)
+                candidate_snapshot.pop("current_core_candidate", None)
+                candidate_snapshot["front_observation_target"] = dict(watch_target)
+                candidate_snapshot["watch_anchor"] = dict(watch_target)
             else:
                 candidate_snapshot.pop("selected_position_candidate", None)
                 candidate_snapshot.pop("current_core_candidate", None)
+                candidate_snapshot.pop("front_observation_target", None)
+                candidate_snapshot.pop("watch_anchor", None)
+                candidate_snapshot.pop("watch_anchor_type", None)
+    if not selected_key and not watch_key:
+        _downgrade_empty_final_execution_stage_candidates(execution_stage_context)
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
         data["execution_stage_context"] = execution_stage_context
     if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
@@ -4667,10 +5071,14 @@ def _runtime_final_resolution_waits_without_watch_target(final_target_resolution
     capital_priority = _first_runtime_text(decision.get("capital_priority"))
     if capital_priority in {"wait", "tomorrow_empty"}:
         return True
-    if capital_priority not in {"old_position_t", "old_position", "existing_position", "existing_position_t"}:
-        return False
     watch_target = resolution.get("watch_target")
-    return not _candidate_can_be_current_observation_target(watch_target)
+    if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t"}:
+        return not _candidate_can_be_current_observation_target(watch_target)
+    if capital_priority in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
+        return not _runtime_final_resolution_core_candidate(
+            resolution
+        ) and not _candidate_can_be_current_observation_target(watch_target)
+    return False
 
 
 def _runtime_final_resolution_core_candidate(final_target_resolution=None):
@@ -4732,10 +5140,14 @@ def _replace_pk_decision_stage_lines(report_lines, replacement_lines):
     replacement_lines = list(replacement_lines or [])
     if not replacement_lines:
         return report_lines
+    stage_heading_markers = (
+        "附录：Step 5 - PK决胜局",
+        "附录：Step 5 - 过程候选最终复核",
+    )
     start = None
     for index, line in enumerate(report_lines):
         text = str(line or "")
-        if "附录：Step 5 - PK决胜局" in text:
+        if any(marker in text for marker in stage_heading_markers):
             start = index
             break
     if start is None:
@@ -4748,7 +5160,9 @@ def _replace_pk_decision_stage_lines(report_lines, replacement_lines):
     )
     for index in range(start + 1, len(report_lines)):
         text = str(report_lines[index] or "")
-        if text.startswith("##### 附录：Step ") and "PK决胜局" not in text:
+        if text.startswith("##### 附录：Step ") and not any(
+            marker in text for marker in stage_heading_markers
+        ):
             end = index
             break
         if any(text.startswith(marker) for marker in post_stage_markers):
@@ -7834,16 +8248,23 @@ def _build_effective_front_page_final_gate(
             }
         )
         return updated
-    target_pct = _front_page_target_pct(position_decision)
-    if not selected_position_candidate or target_pct < 50:
-        return final_gate
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     resolved_target = _runtime_final_resolution_core_candidate(resolution)
     if resolution and not resolved_target:
         decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+        risk_comparison_blocks = bool(
+            opportunity_comparison
+            and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison)
+        )
+        risk_final_action = (
+            (opportunity_comparison.get("comparison") or {}).get("final_action")
+            if isinstance(opportunity_comparison, dict)
+            else ""
+        )
         target_label = _target_candidate_label(selected_position_candidate)
         target_display_label = _runtime_stock_label(selected_position_candidate) or target_label
         final_action = _first_runtime_text(
+            risk_final_action if risk_comparison_blocks else "",
             decision.get("reason"),
             final_gate.get("final_action"),
             ZERO_OBSERVATION_REVIEW_SHORT_TEXT,
@@ -7859,16 +8280,30 @@ def _build_effective_front_page_final_gate(
         updated = dict(final_gate)
         updated.update(
             {
+                "gate_status": "只观察",
+                "operation_state": "观察态",
+                "position_level": "0%不参与",
                 "can_new_entry": False,
                 "should_reduce": bool(updated.get("should_reduce")),
                 "allow_attack_50_ready": False,
                 "base_position_cap_pct": 0,
                 "final_action": final_action,
-                "final_participation": "无明日执行对象，只保留观察。",
-                "gate_reason": _first_runtime_text(decision.get("reason"), "最终结论未给出新增参与对象。"),
+                "final_participation": (
+                    "风险价格或盈亏比不完整，只保留观察。"
+                    if risk_comparison_blocks
+                    else "无明日执行对象，只保留观察。"
+                ),
+                "gate_reason": (
+                    "新目标风险价格或盈亏比未补齐，不能把候选强度直接变成参与动作。"
+                    if risk_comparison_blocks
+                    else _first_runtime_text(decision.get("reason"), "最终结论未给出新增参与对象。")
+                ),
             }
         )
         return updated
+    target_pct = _front_page_target_pct(position_decision)
+    if not selected_position_candidate or target_pct < 50:
+        return final_gate
     if (
         opportunity_comparison
         and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison)
@@ -7876,6 +8311,9 @@ def _build_effective_front_page_final_gate(
         updated = dict(final_gate)
         updated.update(
             {
+                "gate_status": "只观察",
+                "operation_state": "观察态",
+                "position_level": "0%不参与",
                 "can_new_entry": False,
                 "should_reduce": False,
                 "allow_attack_50_ready": False,
@@ -8472,9 +8910,25 @@ def _normalize_empty_final_action_plan_lines(lines, final_target_resolution=None
     def _normalize_zero_action_text(text):
         text = str(text or "")
         replacements = {
+            "跨线明天先盯哪只": "跨线过程候选回看样本",
+            "明天先盯哪只": "过程候选回看样本",
+            "现在重点盯什么": "过程候选复核什么",
+            "09:50-10:10观察价待盘中确认": "历史观察价只作过程回放，不新增参与",
             "先看竞价承接，回封或结构确认命中才参与": "只观察承接，不新增参与",
             "只在竞价表态和开盘承接同时成立后再参与": "只观察竞价表态和开盘承接，不新增参与",
             "优先盯竞价表态、开盘承接和回封质量，继续强就只做它": "只观察竞价表态、开盘承接和回封质量，不新增参与",
+            "本时段只观察重点盯盘股承接": "本时段只观察主攻线整体承接，不指定个股",
+            "重点盯盘股即使继续抗跌，也只进入复盘和下一份日报判断": "主攻线整体承接只进入复盘和下一份日报判断",
+            "继续只盯观察对象，不做多票分散": "只观察主攻线整体承接，不指定个股",
+            "现在还只有重点盯盘股，还没有缩到唯一合格对象": "当前仍未形成唯一合格对象",
+            "明日只观察它自己证明": "明日只观察主攻线整体承接是否继续证明",
+            "过程候选，重点观察确认资格": "过程候选，仅保留过程回看",
+            "重点观察名单，且承接未坏": "历史筛选时承接未坏",
+            "重点盯盘股": "过程候选",
+            "重点观察确认资格": "历史筛选记录",
+            "重点观察名单": "历史筛选记录",
+            "它如果始终不能证明强于市场 → 当天继续等待，不抢跑": "主攻线若不能证明强于市场 → 当天继续等待，不抢跑",
+            "若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格": "若主攻线整体承接转弱 → 继续0%不参与",
         }
         for old, new in replacements.items():
             text = text.replace(old, new)
@@ -8485,9 +8939,19 @@ def _normalize_empty_final_action_plan_lines(lines, final_target_resolution=None
     action_table_header = None
     in_entry_plan_table = False
     entry_plan_header = None
+    process_ranking_header = None
     for line in list(lines or []):
         text = _normalize_zero_action_text(line)
         stripped = text.strip()
+        if stripped.startswith(("- **过程价位记录**:", "- **09:50-10:10观察价**:")):
+            text = "- **过程价位记录**: 不保留未来观察价"
+            stripped = text
+        elif stripped.startswith("- **价格怎么盯**:"):
+            text = "- **价格怎么盯**: 不保留未来观察价"
+            stripped = text
+        elif stripped.startswith("- **观察纪律**:") and "09:50-10:10" in stripped:
+            text = "- **观察纪律**: 只作过程回放，不形成盘中个股观察指令"
+            stripped = text
         if "明日继续观察" in text and "等观察位出现" in text:
             text = text.replace("明日继续观察", "过程候选回看")
             text = text.replace("等观察位出现", "不作为明日对象")
@@ -8541,14 +9005,54 @@ def _normalize_empty_final_action_plan_lines(lines, final_target_resolution=None
                 continue
             if entry_plan_header:
                 row = {field: cells[index] if index < len(cells) else "" for index, field in enumerate(entry_plan_header)}
-                row_text = " ".join(cells)
-                if "过程候选" in row_text:
-                    row["明天具体怎么做"] = "只作过程回放，不新增参与"
-                    normalized.append("| " + " | ".join(row.get(field, "") for field in entry_plan_header) + " |")
-                    continue
+                for field in ("买入资格", "观察资格"):
+                    if field in row:
+                        row[field] = "过程样本，无当前观察资格"
+                if "怎么观察" in row:
+                    row["怎么观察"] = "仅回放"
+                if "日线预设区间" in row:
+                    row["日线预设区间"] = "-"
+                for field in ("09:50-10:10观察价", "过程价位记录"):
+                    if field in row:
+                        row[field] = "-"
+                if "价格怎么盯" in row:
+                    row["价格怎么盯"] = "不保留未来观察价"
+                row["明天具体怎么做"] = "只作过程回放，不新增参与"
+                normalized.append("| " + " | ".join(row.get(field, "") for field in entry_plan_header) + " |")
+                continue
         if in_entry_plan_table and not stripped.startswith("|"):
             in_entry_plan_table = False
             entry_plan_header = None
+
+        if stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if (
+                "股票" in cells
+                and "来源" in cells
+                and "候选顺位" in cells
+                and any(field in cells for field in ("09:50-10:10观察价", "过程价位记录"))
+            ):
+                process_ranking_header = list(cells)
+                normalized.append(text)
+                continue
+            if process_ranking_header and all(set(cell) <= {"-"} and cell for cell in cells):
+                normalized.append(text)
+                continue
+            if process_ranking_header:
+                row = {
+                    field: cells[index] if index < len(cells) else ""
+                    for index, field in enumerate(process_ranking_header)
+                }
+                row["来源"] = "历史筛选记录"
+                for field in ("09:50-10:10观察价", "过程价位记录"):
+                    if field in row:
+                        row[field] = "-"
+                normalized.append(
+                    "| " + " | ".join(row.get(field, "") for field in process_ranking_header) + " |"
+                )
+                continue
+        elif process_ranking_header:
+            process_ranking_header = None
 
         if stripped.startswith("|"):
             cells = [cell.strip() for cell in stripped.strip("|").split("|")]
@@ -10583,6 +11087,23 @@ def _append_report_note_once(report, lines, marker):
     return "\n".join([report_text, "", *lines]).strip()
 
 
+def _compact_execution_stage_context_for_persistence(
+    execution_stage_context,
+    *,
+    effective_final_gate=None,
+):
+    if not isinstance(execution_stage_context, dict):
+        return {}
+    compacted = {
+        key: value
+        for key, value in execution_stage_context.items()
+        if key != "data" and not callable(value)
+    }
+    if isinstance(effective_final_gate, dict):
+        compacted["final_gate"] = dict(effective_final_gate)
+    return compacted
+
+
 def render_markdown_report_runtime(
     data,
     target_date,
@@ -11200,7 +11721,9 @@ def _render_markdown_report_legacy_body(
         execution_stage_context["enable_selection_workflow_quote_backfill"] = True
         if isinstance(market_research_snapshot, dict):
             market_research_snapshot["enable_selection_workflow_quote_backfill"] = True
-        data["execution_stage_context"] = execution_stage_context
+        data["execution_stage_context"] = _compact_execution_stage_context_for_persistence(
+            execution_stage_context,
+        )
         if isinstance(market_research_snapshot, dict):
             data["market_research_snapshot"] = market_research_snapshot
     _sync_runtime_extreme_conviction_list(data, execution_stage_context, market_research_snapshot)
@@ -12189,7 +12712,10 @@ def _render_markdown_report_legacy_body(
     if position_context_unknown:
         report = [_normalize_unknown_position_visible_text(line) for line in report]
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
-        data["execution_stage_context"] = execution_stage_context
+        data["execution_stage_context"] = _compact_execution_stage_context_for_persistence(
+            execution_stage_context,
+            effective_final_gate=front_page_final_gate,
+        )
     final_action_print_text = sanitize_user_visible_text(front_page_final_gate.get("final_action", "未知"))
     final_action_print_text = _normalize_full_or_empty_account_visible_lines(
         [final_action_print_text],
@@ -12201,6 +12727,10 @@ def _render_markdown_report_legacy_body(
         final_action_print_text = _normalize_unknown_position_visible_text(final_action_print_text)
     print(f"   ✅ 最终执行条件: {final_action_print_text}")
     _finalize_helper_diagnostics(data)
+    report = _normalize_empty_final_action_plan_lines(
+        report,
+        final_target_resolution,
+    )
     report = _sanitize_report_lines(
         report,
         postgres_only=bool((data or {}).get("postgres_only") or globals().get("decision_ledger_postgres_only", False)),

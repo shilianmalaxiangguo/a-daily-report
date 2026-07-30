@@ -193,6 +193,11 @@ def _write_latest_run_summary(root, summary, *, failed=False):
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+    else:
+        try:
+            (root / "latest_failure.json").unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _build_latest_summary(

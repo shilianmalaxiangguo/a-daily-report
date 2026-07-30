@@ -61,9 +61,11 @@ For each boundary:
 
 ### Mistake 2: Scattered Validation
 
-**Bad**: Validating the same thing in multiple layers
+**Bad**: Reimplementing different versions of the same validation in multiple
+layers, or validating only before persistence and trusting old payloads forever
 
-**Good**: Validate once at the entry point
+**Good**: Define one validation contract and reuse it at the producer plus each
+trust boundary, such as persisted-data reads and final report preflight
 
 ### Mistake 3: Leaky Abstractions
 
@@ -87,6 +89,28 @@ After implementation:
 - [ ] Checked data survives round-trip
 - [ ] For generated reports, checked that source facts survive across generator
   output, Markdown rendering, companion HTML, and acceptance audit.
+
+### Checklist: Facts With Different Publication Dates
+
+Use this checklist whenever a report mixes facts that are not all published on
+the report date. The executable rules live in
+`../backend/quality-guidelines.md#daily-report-as-of-date-contract`.
+
+- [ ] Classify each fact by its own publication contract; do not assume every
+  field is exact-date or every field is one trading day late.
+- [ ] Separate `requested_trade_date`, `latest_data_date`, `source_date`, and
+  `query_date`. Row presence and sample coverage do not prove date ownership.
+- [ ] Trace the date rule through source production, input status, persistence,
+  report preflight, fast rendering, and final acceptance.
+- [ ] Test a stale-but-complete payload. A smooth 25-row series is the most
+  important counterexample because row-count checks alone will accept it.
+- [ ] Test the allowed-lag counterexample too. A correct prior-trading-day
+  margin fact must not be rejected by an exact-date rule intended for ETF
+  turnover.
+- [ ] Distinguish same-product field families: ETF turnover is a close fact,
+  while ETF share, size, and NAV can follow a next-morning publication schedule.
+- [ ] When the trading calendar is unavailable, never treat missing source rows
+  as proof of a market holiday.
 
 ---
 

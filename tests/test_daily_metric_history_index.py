@@ -119,6 +119,30 @@ def _memory_fact_store_factory(service=None):
 
 
 class DailyMetricHistoryIndexTest(unittest.TestCase):
+    def test_public_compact_metric_history_loader_forwards_to_compact_reader(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        expected = ({"total_turnover": 12345.67}, "")
+        with patch.object(index, "_load_compact_metric_history_snapshot", return_value=expected) as loader:
+            result = index.load_compact_metric_history_snapshot("2026-07-22")
+
+        self.assertEqual(result, expected)
+        loader.assert_called_once_with("2026-07-22")
+
+    def test_compact_metric_history_keys_cover_legacy_mainline_and_turnover_shapes(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        required_keys = {
+            "current_mainline_history_records",
+            "mainline_history_records",
+            "sector_turnover_snapshots",
+            "market_amount_yi",
+            "total_amount_yi",
+            "turnover_data",
+        }
+
+        self.assertTrue(required_keys.issubset(set(index._COMPACT_METRIC_HISTORY_KEYS)))
+
     def test_replay_snapshot_loader_blocks_postgres_only_json_read(self):
         from domains.market_state import daily_metric_history_index as index
 

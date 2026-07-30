@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as _dt
+
 import requests
 
 from market_data.kline_dates import normalize_kline_date_str
@@ -15,6 +17,7 @@ __all__ = [
     "fetch_stock_daily_turnover_records_range",
     "fetch_market_daily_amount_rows",
     "fetch_market_index_amount_rows",
+    "fetch_quicktiny_index_amount_rows",
     "fetch_market_margin_balance_rows",
     "fetch_margin_balance_rows",
     "fetch_stock_moneyflow_map",
@@ -29,6 +32,15 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _safe_int(value, default=0):
+    try:
+        if value in (None, ""):
+            return int(default)
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _compact_date(date_value):
@@ -305,37 +317,157 @@ def fetch_market_index_amount_rows(
     pro=None,
     ts_module=None,
     index_codes=("000001.SH", "399001.SZ"),
+    quicktiny_fetcher=None,
 ):
     start = _compact_date(start_date)
     end = _compact_date(end_date)
     if not start or not end:
         return []
-    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    if pro is None:
+        try:
+            pro = create_tushare_pro_api(ts_module=ts_module)
+        except Exception:
+            pro = None
     buckets = {}
-    for ts_code in index_codes or ():
-        frame = pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
-        for row in _frame_to_records(frame):
-            trade_date = normalize_kline_date_str((row or {}).get("trade_date"))
-            amount_raw = _safe_float((row or {}).get("amount"))
-            if not trade_date or amount_raw <= 0:
+    if pro is not None:
+        for ts_code in index_codes or ():
+            try:
+                frame = pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
+            except Exception:
                 continue
-            bucket = buckets.setdefault(
-                trade_date,
-                {
-                    "trade_date": trade_date,
-                    "market_turnover_yi": 0.0,
-                    "index_count": 0,
-                },
+            for row in _frame_to_records(frame):
+                trade_date = normalize_kline_date_str((row or {}).get("trade_date"))
+                amount_raw = _safe_float((row or {}).get("amount"))
+                if not trade_date or amount_raw <= 0:
+                    continue
+                bucket = buckets.setdefault(
+                    trade_date,
+                    {
+                        "trade_date": trade_date,
+                        "market_turnover_yi": 0.0,
+                        "index_count": 0,
+                    },
+                )
+                bucket["market_turnover_yi"] += amount_raw / 100000.0
+                bucket["index_count"] += 1
+    primary_rows = [
+        {
+            **item,
+            "market_turnover_yi": round(item.get("market_turnover_yi", 0.0), 6),
+            "stock_count": item.get("index_count", 0),
+            "source_policy": "tushare.index_daily.market_amount",
+            "source_date": item.get("trade_date", ""),
+            "query_date": normalize_kline_date_str(end_date),
+        }
+        for item in buckets.values()
+    ]
+    expected_index_count = len(tuple(index_codes or ()))
+    primary_by_date = {row.get("trade_date"): row for row in primary_rows}
+    target_row = primary_by_date.get(normalize_kline_date_str(end_date)) or {}
+    target_is_complete = (
+        _safe_int(target_row.get("index_count")) >= expected_index_count
+        and _safe_float(target_row.get("market_turnover_yi")) > 0
+    )
+    if target_is_complete:
+        return sorted(primary_rows, key=lambda item: item.get("trade_date", ""))
+
+    fallback_fetcher = quicktiny_fetcher or fetch_quicktiny_index_amount_rows
+    try:
+        fallback_rows = fallback_fetcher(start_date, end_date, index_codes=index_codes) or []
+    except Exception:
+        fallback_rows = []
+    for row in fallback_rows:
+        item = dict(row or {})
+        trade_date = normalize_kline_date_str(item.get("trade_date") or item.get("date"))
+        if not trade_date or not (_compact_date(start_date) <= trade_date.replace("-", "") <= _compact_date(end_date)):
+            continue
+        if _safe_float(item.get("market_turnover_yi")) <= 0:
+            continue
+        if _safe_int(item.get("index_count")) < expected_index_count:
+            continue
+        existing = primary_by_date.get(trade_date) or {}
+        if (
+            _safe_int(existing.get("index_count")) < expected_index_count
+            or _safe_float(existing.get("market_turnover_yi")) <= 0
+        ):
+            primary_by_date[trade_date] = {
+                **item,
+                "trade_date": trade_date,
+                "market_turnover_yi": round(_safe_float(item.get("market_turnover_yi")), 6),
+                "stock_count": _safe_int(item.get("stock_count", item.get("index_count"))),
+                "index_count": _safe_int(item.get("index_count")),
+                "source_policy": item.get("source_policy") or "quicktiny.merged_kline.index_daily.market_amount",
+                "source_date": normalize_kline_date_str(item.get("source_date") or trade_date),
+                "query_date": normalize_kline_date_str(item.get("query_date") or end_date),
+            }
+    return sorted(primary_by_date.values(), key=lambda item: item.get("trade_date", ""))
+
+
+def fetch_quicktiny_index_amount_rows(
+    start_date,
+    end_date,
+    *,
+    index_codes=("000001.SH", "399001.SZ"),
+    session=None,
+):
+    """Use QuickTiny's index_daily mirror only when Tushare lacks the target date."""
+    start = normalize_kline_date_str(start_date)
+    end = normalize_kline_date_str(end_date)
+    if not start or not end or start > end:
+        return []
+    try:
+        start_day = _dt.date.fromisoformat(start)
+        end_day = _dt.date.fromisoformat(end)
+    except ValueError:
+        return []
+    days = max((end_day - start_day).days + 10, 20)
+    client = session or requests.Session()
+    owns_session = session is None
+    if owns_session:
+        client.trust_env = False
+    buckets = {}
+    try:
+        for ts_code in index_codes or ():
+            code, market = _split_ts_code(ts_code)
+            if not code or market not in {"SH", "SZ"}:
+                continue
+            symbol = f"{market.lower()}{code}"
+            response = client.get(
+                f"https://stock.quicktiny.cn/api/tushare/merged-kline/{symbol}?days={days}",
+                timeout=(2, 6),
             )
-            bucket["market_turnover_yi"] += amount_raw / 100000.0
-            bucket["index_count"] += 1
+            response.raise_for_status()
+            payload = response.json()
+            rows = payload.get("data") if isinstance(payload, dict) else []
+            for row in rows or []:
+                source = str((row or {}).get("source") or "").strip()
+                trade_date = normalize_kline_date_str((row or {}).get("date"))
+                amount_raw = _safe_float((row or {}).get("amount"))
+                if (
+                    source not in {"", "index_daily"}
+                    or not trade_date
+                    or not (start <= trade_date <= end)
+                    or amount_raw <= 0
+                ):
+                    continue
+                bucket = buckets.setdefault(
+                    trade_date,
+                    {"trade_date": trade_date, "market_turnover_yi": 0.0, "index_count": 0},
+                )
+                bucket["market_turnover_yi"] += amount_raw / 1e8
+                bucket["index_count"] += 1
+    finally:
+        if owns_session:
+            client.close()
     return sorted(
         [
             {
                 **item,
                 "market_turnover_yi": round(item.get("market_turnover_yi", 0.0), 6),
                 "stock_count": item.get("index_count", 0),
-                "source_policy": "tushare.index_daily.market_amount",
+                "source_policy": "quicktiny.merged_kline.index_daily.market_amount",
+                "source_date": item.get("trade_date", ""),
+                "query_date": end,
             }
             for item in buckets.values()
         ],
