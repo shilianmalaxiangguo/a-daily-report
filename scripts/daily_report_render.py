@@ -1973,6 +1973,7 @@ def build_report_outputs(
         if isinstance(market_language_translation, dict)
         else ""
     )
+    summary_data = copy.deepcopy(data)
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -1998,7 +1999,7 @@ def build_report_outputs(
         raise RuntimeError("市场语言研究证据在完整版渲染期间被改写，停止生成")
     summary_report = _render_report_with_display_mode(
         True,
-        data,
+        summary_data,
         target_date,
         supplementary_perspective=supplementary_perspective,
         has_personal_positions=has_personal_positions,

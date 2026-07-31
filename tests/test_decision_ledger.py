@@ -2206,6 +2206,68 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(entry["decision_summary"]["final_target"]["stock_code"], "600584")
         self.assertEqual(entry["decision_summary"]["final_target"]["stock_name"], "长电科技")
 
+    def test_zero_final_action_downgrades_nonfinal_case_and_tracking_to_process_replay(self):
+        final_action = {
+            "label": "0%不参与",
+            "position_pct": 0,
+            "target": {},
+            "source": "selection_workflow.final",
+            "reason": "无明日执行对象，保持观察",
+        }
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-07-29",
+            extreme_conviction_list=[
+                {
+                    "code": "605068",
+                    "name": "明新旭腾",
+                    "sector": "汽车零部件",
+                    "conviction_reason": "旧名单过程样本",
+                    "attack_state": "50%",
+                    "participation_window": "竞价表态 + 回封参与",
+                }
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="过程证据",
+            final_action=final_action,
+        )
+
+        case = snapshot["cases"][0]
+        mention_plan = case["mentions"][0]["planned_participation"]
+        self.assertEqual(case["validation"]["status"], "过程回放")
+        self.assertEqual(case["market_participation_qualification"], "not_qualified")
+        self.assertEqual(case["position_plan_pct"], 0)
+        self.assertEqual(case["position_plan_label"], "0%不参与")
+        self.assertEqual(case["sample_tier"], "observation")
+        self.assertEqual(case["planned_participation"]["window"], "no_trade")
+        self.assertEqual(case["planned_participation"]["action"], "skip")
+        self.assertEqual(mention_plan["position_plan_pct"], 0)
+        self.assertEqual(mention_plan["action"], "skip")
+        for plan in (case["planned_participation"], mention_plan):
+            plan_text = json.dumps(plan, ensure_ascii=False)
+            self.assertNotIn("09:50-10:10", plan_text)
+            self.assertNotIn("50%条件执行", plan_text)
+            self.assertNotIn("ma_reversion_probe", plan)
+            self.assertIsNone(plan["invalid_price"])
+
+        revision = build_decision_revision_entry(
+            snapshot,
+            sequence=1,
+            created_at="2026-07-29T12:00:00Z",
+        )
+        self.assertEqual(revision["decision_summary"]["primary_stock"], {})
+        self.assertEqual(revision["decision_summary"]["final_target"], {})
+
+        index = build_decision_ledger_index(snapshot)
+        backtest_rows = build_extreme_conviction_backtest_rows(index, final_action=final_action)
+        self.assertEqual(backtest_rows[0]["position_plan_pct"], 0)
+        self.assertEqual(backtest_rows[0]["position_plan_label"], "0%不参与")
+        self.assertEqual(backtest_rows[0]["standard_action"], "只作过程回放，不新增参与")
+        tracking_text = "\n".join(
+            render_extreme_conviction_tracking_lines(index, final_action=final_action)
+        )
+        self.assertIn("只作过程回放，不新增参与", tracking_text)
+        self.assertNotIn("等待下一次固定交易窗口条件确认", tracking_text)
+
     def test_writer_can_skip_revision_for_intermediate_snapshot_then_record_final_action(self):
         early = build_decision_ledger_snapshot(
             trade_date="2026-06-12",

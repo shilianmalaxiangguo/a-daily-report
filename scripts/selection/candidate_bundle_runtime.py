@@ -315,7 +315,7 @@ def _enrich_candidate_with_stock_risk(item, code, stock_risk_map):
         item["risk_events"] = list(item.get("risk_events") or []) + risk_events
 
 
-def _enrich_candidate_with_recent_bars(item, code, target_date, fetch_recent_price_bars=None):
+def _enrich_candidate_with_recent_bars(item, code, target_date, fetch_recent_price_bars=None, fast_fail=False):
     if item.get("recent_bars") or item.get("stock_klines"):
         return
     if not code or not target_date:
@@ -323,8 +323,10 @@ def _enrich_candidate_with_recent_bars(item, code, target_date, fetch_recent_pri
     if not callable(fetch_recent_price_bars):
         return
     try:
-        bars = fetch_recent_price_bars(code, target_date, lookback_days=120, fast_fail=False)
+        bars = fetch_recent_price_bars(code, target_date, lookback_days=120, fast_fail=fast_fail)
     except TypeError:
+        if fast_fail:
+            return
         bars = fetch_recent_price_bars(code, target_date, lookback_days=120)
     except Exception:
         bars = []
@@ -996,6 +998,7 @@ def build_candidate_bundle_contract(
 ):
     zt_pool_by_sector = zt_pool_by_sector or {}
     gem_breathing_candidates = gem_breathing_candidates or []
+    replay_mode = bool(data.get("replay_mode"))
     logs = []
     stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
     volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
@@ -1066,7 +1069,13 @@ def build_candidate_bundle_contract(
         _enrich_candidate_with_xuangubao_reason(item, normalized_code, xuangubao_reason_map)
         _enrich_candidate_with_xueqiu_argument(item, normalized_code, xueqiu_argument_map)
         _enrich_candidate_with_stock_risk(item, normalized_code, stock_risk_map)
-        _enrich_candidate_with_recent_bars(item, normalized_code, target_date, fetch_recent_price_bars=fetch_recent_price_bars)
+        _enrich_candidate_with_recent_bars(
+            item,
+            normalized_code,
+            target_date,
+            fetch_recent_price_bars=fetch_recent_price_bars,
+            fast_fail=replay_mode,
+        )
         _normalize_candidate_sector(item)
         _apply_trade_narrative_sector(item)
         base_score = item.get("score", 0)

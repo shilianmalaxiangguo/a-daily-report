@@ -629,6 +629,25 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "selected_position_candidate": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
                     "unique_action_target": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
                     "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                    "candidate_snapshot": {
+                        "front_page": {
+                            "backup_text": "上海石化(600688)",
+                            "backup_watch": [
+                                {
+                                    "label": "上海石化(600688)",
+                                    "sector": "炼化及贸",
+                                    "role": "备用观察",
+                                }
+                            ],
+                        },
+                        "extreme_conviction_list": [
+                            {
+                                "name": "上海石化",
+                                "code": "600688",
+                                "sniper_role": "明日主买对象",
+                            }
+                        ],
+                    },
                     "final_target_resolution": {
                         "display_target": {},
                         "watch_target": {},
@@ -659,6 +678,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 重点对象 | 明日执行风格 |", final_section)
         self.assertNotIn("600688 上海石化", execution_section + final_section)
         self.assertNotIn("观察对象：600688 上海石化", final_section)
+        self.assertNotIn("上海石化(600688)", rendered)
 
     def test_selection_workflow_final_object_wins_over_old_front_page_targets(self):
         rendered = "\n".join(
@@ -669,6 +689,25 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "selected_position_candidate": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
                     "unique_action_target": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
                     "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+                    "candidate_snapshot": {
+                        "front_page": {
+                            "backup_text": "上海石化(600688)",
+                            "backup_watch": [
+                                {
+                                    "label": "上海石化(600688)",
+                                    "sector": "炼化及贸",
+                                    "role": "备用观察",
+                                }
+                            ],
+                        },
+                        "extreme_conviction_list": [
+                            {
+                                "name": "上海石化",
+                                "code": "600688",
+                                "sniper_role": "明日主买对象",
+                            }
+                        ],
+                    },
                     "selection_workflow": {
                         "schema_version": "selection_workflow.v1",
                         "final": {
@@ -1406,6 +1445,61 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 化学制药 | 柏诚股份(601133) | 太龙药业(600222) | 化学制药板块锚定龙 / 2连板 / 趋势审美 |", core_section)
         self.assertIn("| 国产芯片替代 | 深科技(000021) |", core_section)
         self.assertNotIn("| 化学制药 | 待补事实 | 待补事实 | 待验证 |", core_section)
+
+    def test_front_page_strict_workflow_does_not_reuse_unrelated_or_legacy_candidates(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-29",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "国产芯片替代",
+                        "cycle_stage": "退潮",
+                        "mainline_capacity_regime_summary": {
+                            "primary_line": "国产芯片替代",
+                            "other_lines": "化学制品、电网设备",
+                        },
+                    },
+                    "selection_workflow": {
+                        "schema_version": "selection_workflow.v1",
+                        "derivation_contract": "sector_first_strict.v1",
+                        "final": {"position_pct": 0, "execution_object": {}},
+                        "candidate_pool": [
+                            {
+                                "name": "兆易创新",
+                                "code": "603986",
+                                "sector": "国产芯片替代",
+                                "candidate_origin": "sector_first",
+                                "sector_role": "趋势容量核心",
+                                "entered_reason": "来自国产芯片替代板块资金扩散",
+                            },
+                            {
+                                "name": "明新旭腾",
+                                "code": "605068",
+                                "sector": "化学制品",
+                                "candidate_origin": "legacy_signal_only",
+                                "sector_role": "板块锚",
+                                "entered_reason": "旧涨停名单信号",
+                            },
+                            {
+                                "name": "华天酒店",
+                                "code": "000428",
+                                "sector": "酒店餐饮",
+                                "candidate_origin": "legacy_signal_only",
+                                "sector_role": "过程候选",
+                            },
+                        ],
+                    },
+                },
+            )
+        )
+
+        core_section = rendered[rendered.index("### 龙头 / 核心验证") : rendered.index("### 1. 周期日历主视图")]
+        self.assertIn("| 国产芯片替代 | 兆易创新(603986) | 暂无 | 来自国产芯片替代板块资金扩散 |", core_section)
+        self.assertIn("| 化学制品 | 暂无 | 暂无 | 该方向尚未从板块资金扩散中推出核心载体 |", core_section)
+        self.assertIn("| 电网设备 | 暂无 | 暂无 | 该方向尚未从板块资金扩散中推出核心载体 |", core_section)
+        self.assertNotIn("明新旭腾", core_section)
+        self.assertNotIn("华天酒店", core_section)
 
     def test_front_page_derivation_chain_waits_until_after_market_spine(self):
         rendered = "\n".join(

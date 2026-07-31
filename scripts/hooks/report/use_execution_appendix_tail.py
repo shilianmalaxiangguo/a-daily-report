@@ -63,6 +63,8 @@ def run(ctx):
         "etf_turnover_series": inputs.get("etf_turnover_series", {}) or {},
         "extreme_conviction_list": inputs.get("extreme_conviction_list", []) or [],
         "dragon_rebound_watch_pool": inputs.get("dragon_rebound_watch_pool", []) or [],
+        "selection_workflow": inputs.get("selection_workflow", {}) or {},
+        "final_target_resolution": inputs.get("final_target_resolution", {}) or {},
     }
     lines = render_execution_appendix(render_context) if callable(render_execution_appendix) else []
     _append_log(
@@ -89,6 +91,8 @@ def run(ctx):
         "etf_turnover_series": render_context["etf_turnover_series"],
         "extreme_conviction_list": render_context["extreme_conviction_list"],
         "dragon_rebound_watch_pool": render_context["dragon_rebound_watch_pool"],
+        "selection_workflow": render_context["selection_workflow"],
+        "final_target_resolution": render_context["final_target_resolution"],
     }
     return {
         "value": {

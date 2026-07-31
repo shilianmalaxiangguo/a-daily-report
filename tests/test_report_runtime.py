@@ -4377,6 +4377,14 @@ class ReportRuntimeTest(unittest.TestCase):
             inputs = payload["inputs"]
             appendix_b = inputs["appendix_b"]
             appendix_c = inputs["appendix_c"]
+            workflow_names = [
+                row.get("stock", {}).get("name")
+                for row in inputs["selection_workflow"].get("candidate_pool", [])
+            ]
+            appendix_names = [
+                row.get("stock_name")
+                for row in appendix_c["current_stock_monitoring_pool"]
+            ]
             self.assertEqual(appendix_b["historical_mainline_pool"][-1]["mainline"], "半导体")
             self.assertEqual(appendix_b["mainline_switch_log"][0]["from_mainline"], "电力")
             self.assertEqual(appendix_b["mainline_switch_log"][0]["to_mainline"], "半导体")
@@ -4385,12 +4393,19 @@ class ReportRuntimeTest(unittest.TestCase):
             self.assertEqual(appendix_b["structure_mainline_records"][0]["mainline"], "半导体")
             self.assertEqual(appendix_b["structure_mainline_records"][0]["pivot_level"], "小中枢")
             self.assertEqual(appendix_b["structure_mainline_records"][0]["mainline_degree"], "小周期主线")
-            self.assertEqual(appendix_c["current_stock_monitoring_pool"][0]["stock_name"], "富瀚微")
-            self.assertEqual(appendix_c["current_stock_monitoring_pool"][1]["source_pool"], "跨线观察")
+            self.assertEqual(appendix_names, workflow_names)
+            self.assertIn("富瀚微", appendix_names)
+            self.assertIn("恩捷股份", appendix_names)
+            self.assertTrue(
+                all(
+                    row["current_action"] == "只作过程回放，不新增参与"
+                    for row in appendix_c["current_stock_monitoring_pool"]
+                )
+            )
             lifecycle = appendix_c["stock_lifecycle_records"][0]
             self.assertEqual(lifecycle["source_report_date"], "2026-04-24")
             self.assertEqual(lifecycle["tracked_trading_days"], 1)
-            self.assertEqual(lifecycle["current_interpretation"], "主线内强度靠前")
+            self.assertEqual(lifecycle["current_action"], "只作过程回放，不新增参与")
             self.assertEqual(appendix_c["a_kill_elimination_records"][0]["stock_code"], "000003")
             entry_cycle = inputs["entry_cycle_calibration"]
             self.assertEqual(entry_cycle["cases"][0]["name"], "中嘉博创")
@@ -4530,6 +4545,64 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(pool[1]["source_pool"], "风险回避")
         self.assertEqual(pool[1]["current_action"], "跌停/接近跌停，取消明日参与")
         self.assertEqual(lifecycle[1]["current_interpretation"], "跌停/接近跌停，不是明日核心")
+
+    def test_appendix_c_projects_selection_workflow_instead_of_legacy_monitoring_pools(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-07-29",
+            selection_workflow={
+                "schema_version": "selection_workflow.v1",
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                        "status": "风险复核样本",
+                        "source_pools": ["extreme_conviction_list"],
+                        "new_entry_qualified": False,
+                        "current_reason": "板块来源不足，只保留过程证据",
+                        "process_rejection_reason": "板块来源不足，只保留过程证据",
+                        "eliminated_at": "N7",
+                    }
+                ],
+                "final": {
+                    "execution_object": {},
+                    "position_pct": 0,
+                    "action_text": "0%不参与",
+                },
+            },
+            execution_stage_context={
+                "core_stocks": [
+                    {
+                        "name": "旧池对象",
+                        "code": "000001",
+                        "current_action": "若竞价高开可能继续",
+                    }
+                ],
+                "active_a_kill_records": [
+                    {"name": "冷却股", "code": "000003", "a_kill_date": "2026-07-29", "reason": "A杀冷却期"}
+                ],
+            },
+        )
+
+        self.assertEqual(
+            payload["current_stock_monitoring_pool"],
+            [
+                {
+                    "stock_name": "明新旭腾",
+                    "stock_code": "605068",
+                    "source_pool": "过程候选",
+                    "current_action": "只作过程回放，不新增参与",
+                }
+            ],
+        )
+        self.assertEqual(
+            payload["stock_lifecycle_records"][0]["current_interpretation"],
+            "板块来源不足，只保留过程证据",
+        )
+        self.assertEqual(
+            payload["stock_lifecycle_records"][0]["current_action"],
+            "只作过程回放，不新增参与",
+        )
+        self.assertEqual(payload["a_kill_elimination_records"][0]["stock_code"], "000003")
+        self.assertNotIn("旧池对象", str(payload))
 
     def test_appendix_c_keeps_crossline_identity_when_same_code_also_in_core_pool(self):
         payload = report_runtime._build_appendix_c_continuity_payload(
@@ -4678,10 +4751,9 @@ class ReportRuntimeTest(unittest.TestCase):
         def _capture_execution_appendix(payload):
             appendix_c = payload["inputs"]["appendix_c"]
             pool = appendix_c["current_stock_monitoring_pool"]
-            self.assertEqual(pool[0]["source_pool"], "候选观察")
-            self.assertEqual(pool[0]["current_action"], "仅观察，等待重新转强")
-            self.assertEqual(pool[1]["source_pool"], "风险回避")
-            self.assertEqual(pool[1]["current_action"], "跌停/接近跌停，取消明日参与")
+            self.assertEqual([row["stock_name"] for row in pool], ["大唐发电", "巨力索具"])
+            self.assertTrue(all(row["source_pool"] == "过程候选" for row in pool))
+            self.assertTrue(all(row["current_action"] == "只作过程回放，不新增参与" for row in pool))
             raise _ExecutionAppendixCaptured("captured")
 
         helpers = _build_runtime_execution_test_helpers(
@@ -5663,14 +5735,13 @@ class ReportRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(captured["snapshot"]["extreme_conviction_list"][0]["code"], "601991")
-        self.assertEqual(
-            captured["snapshot"]["candidate_snapshot"]["extreme_conviction_list"][0]["sniper_role"],
-            "候选观察",
-        )
-        self.assertEqual(
-            captured["snapshot"]["candidate_snapshot"]["extreme_conviction_list"][0]["zero_position_role_original"],
-            "明日主买对象",
-        )
+        process_row = captured["snapshot"]["candidate_snapshot"]["extreme_conviction_list"][0]
+        self.assertEqual(process_row["candidate_role"], "过程候选")
+        self.assertEqual(process_row["execution_eligibility"], "observation_only")
+        self.assertNotIn("sniper_role", process_row)
+        self.assertNotIn("zero_position_role_original", process_row)
+        self.assertNotIn("participation_window", process_row)
+        self.assertNotIn("probe_entry_price", process_row)
 
     def test_render_markdown_report_runtime_does_not_clear_existing_mainline_atoms_when_context_is_empty(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
@@ -7637,7 +7708,8 @@ def _runtime_binding_probe(
         )
 
         self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "603005")
-        self.assertEqual(data["extreme_conviction_list"][0]["sniper_role"], "候选观察")
+        self.assertEqual(data["extreme_conviction_list"][0]["candidate_role"], "过程候选")
+        self.assertNotIn("sniper_role", data["extreme_conviction_list"][0])
         self.assertEqual(data["execution_stage_context"]["extreme_conviction_list"][0]["code"], "603005")
 
     def test_runtime_downgrades_structured_extreme_conviction_when_final_position_is_zero(self):
@@ -7743,36 +7815,34 @@ def _runtime_binding_probe(
             config={},
         )
 
-        self.assertEqual([item["sniper_role"] for item in data["extreme_conviction_list"]], ["候选观察", "候选观察补充"])
+        self.assertEqual(
+            [item["candidate_role"] for item in data["extreme_conviction_list"]],
+            ["过程候选", "过程候选"],
+        )
+        self.assertTrue(all("sniper_role" not in item for item in data["extreme_conviction_list"]))
         self.assertFalse(data["extreme_conviction_list"][0]["primary_buy_candidate"])
         self.assertFalse(data["extreme_conviction_list"][1]["backup_buy_candidate"])
+        self.assertNotIn("zero_position_role_original", captured["build"]["extreme_conviction_list"][0])
         self.assertEqual(
-            captured["build"]["extreme_conviction_list"][0]["zero_position_role_original"],
-            "明日主买对象",
-        )
-        self.assertEqual(
-            data["market_research_snapshot"]["candidate_snapshot"]["extreme_conviction_list"][1]["sniper_role"],
-            "候选观察补充",
+            data["market_research_snapshot"]["candidate_snapshot"]["extreme_conviction_list"][1]["candidate_role"],
+            "过程候选",
         )
         self.assertEqual(
             [
-                item["sniper_role"]
+                item["candidate_role"]
                 for item in data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"]
             ],
-            ["候选观察", "候选观察补充"],
+            ["过程候选", "过程候选"],
         )
         self.assertEqual(
             data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][0]["execution_eligibility"],
             "observation_only",
         )
-        self.assertEqual(
-            data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][0]["source_tier"],
-            "extreme_conviction",
+        self.assertNotIn(
+            "source_tier",
+            data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][0],
         )
-        self.assertEqual(
-            captured["build"]["extreme_conviction_list"][0]["source_tier"],
-            "extreme_conviction",
-        )
+        self.assertNotIn("source_tier", captured["build"]["extreme_conviction_list"][0])
         self.assertEqual(
             captured["build"]["extreme_conviction_list"][0]["execution_eligibility"],
             "observation_only",
@@ -7783,11 +7853,11 @@ def _runtime_binding_probe(
         )
         self.assertEqual(
             data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][0]["reason"],
-            "候选观察 / 极致加速龙头",
+            "未取得最终对象资格",
         )
-        self.assertEqual(
-            data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][1]["stock_setup"],
-            "候选观察补充 / 极致加速龙头",
+        self.assertNotIn(
+            "stock_setup",
+            data["execution_stage_context"]["step2_bundle"]["extreme_conviction_list"][1],
         )
 
     def test_runtime_replay_can_render_tracking_table_from_existing_ledger_index(self):
@@ -9258,6 +9328,9 @@ def _runtime_binding_probe(
         self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry")
         self.assertNotEqual(resolution["new_entry_target"]["code"], "600688")
         self.assertEqual(resolution["new_entry_target"]["candidate_role"], "观察样本")
+        self.assertEqual(resolution["watch_target"], {})
+        self.assertEqual(resolution["process_target"], {})
+        self.assertEqual(resolution["account_exposure_plan"]["planned_new_entry_pct"], 50)
 
         context_only_resolution = report_runtime._build_runtime_final_target_resolution(
             data={},
@@ -9366,8 +9439,15 @@ def _runtime_binding_probe(
                     "position_pct": 0,
                     "action_text": "0%不参与",
                 },
-                "candidate_pool": [],
-            }
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "明新旭腾", "code": "605068"},
+                        "front_observation_qualified": True,
+                        "observation_layer": "front_observation",
+                    }
+                ],
+            },
+            "extreme_conviction_list": [{"name": "明新旭腾", "code": "605068"}],
         }
 
         resolution = report_runtime._build_runtime_final_target_resolution(
@@ -9724,7 +9804,7 @@ def _runtime_binding_probe(
                 self.assertNotIn("确认后执行预案", rendered)
                 self.assertNotIn("和远气体", rendered)
 
-    def test_runtime_empty_final_resolution_clears_stale_watch_anchor_but_keeps_process_pool(self):
+    def test_runtime_zero_workflow_final_clears_stale_watch_anchor_but_keeps_process_pool(self):
         stale_anchor = {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"}
         process_row = {
             **stale_anchor,
@@ -9766,10 +9846,16 @@ def _runtime_binding_probe(
         data = {
             "watch_anchor": dict(stale_anchor),
             "candidate_snapshot": {"watch_anchor": dict(stale_anchor)},
+            "core_mvp_digest_lines": ["明新旭腾18.72"],
+            "mvp_focus_summary_lines": ["09:50-10:10站上18.72"],
+            "special_probe_text": "预估17.78",
         }
         execution_stage_context = {
             "watch_anchor": dict(stale_anchor),
             "watch_anchor_type": "跨线观察",
+            "core_mvp_digest_lines": ["明新旭腾18.72"],
+            "mvp_focus_summary_lines": ["09:50-10:10站上18.72"],
+            "special_probe_text": "预估17.78",
             "evaluated_stocks": [dict(process_row)],
             "waiting_stocks": [dict(process_row)],
             "focus_group": [dict(process_row)],
@@ -9794,12 +9880,23 @@ def _runtime_binding_probe(
         market_research_snapshot = {
             "watch_anchor": dict(stale_anchor),
             "candidate_snapshot": {"watch_anchor": dict(stale_anchor)},
+            "core_mvp_digest_lines": ["明新旭腾18.72"],
+            "mvp_focus_summary_lines": ["09:50-10:10站上18.72"],
+            "special_probe_text": "预估17.78",
         }
 
-        selected = report_runtime._runtime_sync_selected_candidate_from_final_resolution(
+        selected = report_runtime._runtime_sync_candidate_surfaces_from_selection_workflow(
             {
-                "capital_priority_decision": {"capital_priority": "wait"},
-                "watch_target": {},
+                "schema_version": "selection_workflow.v1",
+                "candidate_pool": [
+                    {
+                        "stock": dict(stale_anchor),
+                        "new_entry_qualified": False,
+                        "front_observation_qualified": False,
+                        "observation_layer": "process_observation",
+                    }
+                ],
+                "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
             },
             data=data,
             execution_stage_context=execution_stage_context,
@@ -9811,63 +9908,85 @@ def _runtime_binding_probe(
             self.assertNotIn("watch_anchor", target)
             self.assertNotIn("watch_anchor_type", target)
             self.assertNotIn("front_observation_target", target)
+            self.assertEqual(target["core_mvp_digest_lines"], [])
+            self.assertEqual(target["mvp_focus_summary_lines"], [])
+            self.assertEqual(target["special_probe_text"], "")
         self.assertNotIn("watch_anchor", data["candidate_snapshot"])
         self.assertNotIn("watch_anchor", market_research_snapshot["candidate_snapshot"])
-        retained_rows = [
-            execution_stage_context["evaluated_stocks"][0],
-            execution_stage_context["waiting_stocks"][0],
-            execution_stage_context["focus_group"][0],
-            execution_stage_context["core_stocks"][0],
-            execution_stage_context["crossline_observation_stocks"][0],
-            execution_stage_context["sector_derived_candidates"][0],
-            execution_stage_context["candidate_quality_samples"][0],
-            execution_stage_context["special_probe_verdict"]["probe_candidate"],
-            execution_stage_context["step2_bundle"]["evaluated_stocks"][0],
-            execution_stage_context["step2_bundle"]["crossline_evaluated_stocks"][0],
-            execution_stage_context["step2_bundle"]["crossline_ignored_stocks"][0],
-            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0],
-            execution_stage_context["step3_bundle"]["all_check_stocks"][0],
-            execution_stage_context["step3_bundle"]["focus_group"][0],
-            execution_stage_context["step3_bundle"]["stock_rows"][0],
-            execution_stage_context["step3_bundle"]["by_code"]["605068"],
-        ]
+        retained_rows = {
+            "evaluated_stocks": execution_stage_context["evaluated_stocks"][0],
+            "waiting_stocks": execution_stage_context["waiting_stocks"][0],
+            "focus_group": execution_stage_context["focus_group"][0],
+            "core_stocks": execution_stage_context["core_stocks"][0],
+            "crossline_observation_stocks": execution_stage_context["crossline_observation_stocks"][0],
+            "sector_derived_candidates": execution_stage_context["sector_derived_candidates"][0],
+            "candidate_quality_samples": execution_stage_context["candidate_quality_samples"][0],
+            "special_probe_verdict": execution_stage_context["special_probe_verdict"]["probe_candidate"],
+            "step2_evaluated_stocks": execution_stage_context["step2_bundle"]["evaluated_stocks"][0],
+            "step2_crossline_evaluated_stocks": execution_stage_context["step2_bundle"]["crossline_evaluated_stocks"][0],
+            "step2_crossline_ignored_stocks": execution_stage_context["step2_bundle"]["crossline_ignored_stocks"][0],
+            "step2_extreme_conviction_list": execution_stage_context["step2_bundle"]["extreme_conviction_list"][0],
+            "step3_all_check_stocks": execution_stage_context["step3_bundle"]["all_check_stocks"][0],
+            "step3_focus_group": execution_stage_context["step3_bundle"]["focus_group"][0],
+            "step3_stock_rows": execution_stage_context["step3_bundle"]["stock_rows"][0],
+            "step3_by_code": execution_stage_context["step3_bundle"]["by_code"]["605068"],
+        }
         self.assertEqual(len(retained_rows), 16)
         self.assertEqual(execution_stage_context["candidate_quality_samples"][1], stale_anchor)
-        self.assertEqual(
-            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0]["reason"],
-            "候选观察 / 极致加速龙头",
-        )
-        self.assertEqual(
-            execution_stage_context["step2_bundle"]["extreme_conviction_list"][0]["condition"],
-            "保留原始过程证据",
-        )
-        for row in retained_rows:
-            self.assertEqual(row["candidate_layer"], "process_observation")
-            self.assertEqual(row["execution_eligibility"], "observation_only")
-            self.assertEqual(row["attack_state"], "0%不参与")
-            self.assertEqual(row["sniper_role"], "候选观察")
-            self.assertFalse(row["primary_buy_candidate"])
-            self.assertEqual(row["dest"], "只作过程回放，不新增参与")
-            self.assertEqual(row["tmr_forecast"], "只作过程回放，不新增参与")
-            self.assertEqual(row["permission_label"], "过程样本，无当前观察资格")
-            self.assertNotIn("entry_price", row)
-            self.assertNotIn("stop_loss", row)
-            self.assertNotIn("display_anchor_price", row)
-            self.assertNotIn("execution_stop", row)
-            self.assertNotIn("entry_timing", row)
-            self.assertNotIn("entry_timing_reason", row)
-            self.assertNotIn("ma_reversion_window", row)
-            self.assertEqual(row["watch_anchor_type"], "过程候选回看样本")
-            self.assertEqual(row["minute_plan"], {})
-            for plan_key in ("planned_participation", "participation_script"):
-                plan = row[plan_key]
-                self.assertEqual(plan["action"], "skip")
-                self.assertEqual(plan["attack_state"], "0%不参与")
-                self.assertEqual(plan["target_position_pct"], 0)
-                self.assertEqual(plan["minute_plan"], {})
-                self.assertNotIn("trigger_text", plan)
-                self.assertNotIn("support_price", plan)
-                self.assertNotIn("confirm_price", plan)
+        allowed_process_keys = {
+            "name",
+            "code",
+            "sector",
+            "stock",
+            "source_pools",
+            "candidate_role",
+            "candidate_layer",
+            "observation_layer",
+            "execution_eligibility",
+            "new_entry_qualified",
+            "front_observation_qualified",
+            "primary_buy_candidate",
+            "backup_buy_candidate",
+            "attack_state",
+            "target_position_pct",
+            "position_pct",
+            "planned_position_pct",
+            "position_plan_pct",
+            "status",
+            "process_rejection_reason",
+            "eliminated_reason",
+            "current_reason",
+            "condition",
+            "reason",
+            "process_handling",
+            "dest",
+            "current_action",
+            "tomorrow_action",
+            "tmr_forecast",
+            "minute_plan",
+            "first_seen_node",
+            "eliminated_at",
+            "workflow_path",
+            "trade_date",
+            "source_date",
+            "target_date",
+            "query_date",
+            "report_date",
+        }
+        for location, row in retained_rows.items():
+            with self.subTest(location=location):
+                self.assertLessEqual(set(row), allowed_process_keys)
+                self.assertEqual(row["candidate_layer"], "process_observation")
+                self.assertEqual(row["execution_eligibility"], "observation_only")
+                self.assertEqual(row["attack_state"], "0%不参与")
+                self.assertFalse(row["primary_buy_candidate"])
+                self.assertEqual(row["process_rejection_reason"], "未取得最终对象资格")
+                self.assertEqual(row["reason"], "未取得最终对象资格")
+                self.assertEqual(row["dest"], "只作过程回放，不新增参与")
+                self.assertEqual(row["tmr_forecast"], "只作过程回放，不新增参与")
+                self.assertEqual(row["minute_plan"], {})
+                for plan_key in ("planned_participation", "participation_script"):
+                    self.assertNotIn(plan_key, row)
 
         appendix_c = report_runtime._build_appendix_c_continuity_payload(
             target_date="2026-07-29",
@@ -9886,6 +10005,113 @@ def _runtime_binding_probe(
                 for item in appendix_c["stock_lifecycle_records"]
             )
         )
+
+    def test_runtime_positive_workflow_final_keeps_only_final_candidate_action_identity(self):
+        final_candidate = {"name": "豫能控股", "code": "001896", "sector": "电力"}
+        stale_candidate = {
+            "name": "上海石化",
+            "code": "600688",
+            "sector": "炼化及贸",
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "auction_reseal",
+            "sniper_role": "明日主买对象",
+            "primary_buy_candidate": True,
+            "attack_state": "50%",
+            "buy_window": "09:30-09:35",
+            "minute_plan": {"confirm_price_60m": 7.88},
+        }
+        final_row = {
+            **final_candidate,
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "confirmed",
+            "sniper_role": "明日主买对象",
+            "primary_buy_candidate": True,
+            "attack_state": "50%",
+        }
+        data = {
+            "selected_position_candidate": dict(stale_candidate),
+            "candidate_quality_panel_fields": {
+                "primary_buy_candidate": dict(stale_candidate),
+                "backup_candidate": dict(stale_candidate),
+            },
+        }
+        execution_stage_context = {
+            "best_stock": dict(stale_candidate),
+            "focus_group": [dict(final_row), dict(stale_candidate)],
+            "candidate_quality_samples": [dict(final_row), dict(stale_candidate)],
+            "tracking_memory_status": {
+                "tentative_items": [
+                    {**final_candidate, "status": "tentative"},
+                    {
+                        **stale_candidate,
+                        "status": "tentative",
+                        "current_action": "继续观察竞价",
+                        "entry_price": 7.88,
+                        "minute_plan": {"window": "09:50-10:10"},
+                    },
+                ],
+                "today_tentative_items": [
+                    {**final_candidate, "status": "tentative"},
+                    {**stale_candidate, "status": "tentative"},
+                ],
+                "new_items": [{**stale_candidate, "status": "tentative"}],
+                "inactive_items": [],
+                "total_items": [
+                    {**final_candidate, "status": "tentative"},
+                    {
+                        **stale_candidate,
+                        "status": "tentative",
+                        "current_action": "继续观察竞价",
+                        "entry_price": 7.88,
+                        "minute_plan": {"window": "09:50-10:10"},
+                    },
+                ],
+            },
+        }
+        market_research_snapshot = {"selected_position_candidate": dict(stale_candidate)}
+
+        selected = report_runtime._runtime_sync_candidate_surfaces_from_selection_workflow(
+            {
+                "schema_version": "selection_workflow.v1",
+                "candidate_pool": [
+                    {"stock": dict(final_candidate), "new_entry_qualified": True, "status": "最终执行对象"},
+                    {"stock": {"name": "上海石化", "code": "600688"}, "new_entry_qualified": False},
+                ],
+                "final": {
+                    "execution_object": dict(final_candidate),
+                    "position_pct": 50,
+                    "action_text": "50%条件执行",
+                },
+            },
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
+
+        self.assertEqual(selected["code"], "001896")
+        self.assertEqual(data["selected_position_candidate"]["code"], "001896")
+        self.assertEqual(market_research_snapshot["current_core_candidate"]["code"], "001896")
+        self.assertEqual(execution_stage_context["best_stock"]["code"], "001896")
+        self.assertEqual(execution_stage_context["focus_group"][0]["candidate_layer"], "executable_candidate")
+        stale_row = execution_stage_context["focus_group"][1]
+        self.assertEqual(stale_row["candidate_layer"], "process_observation")
+        self.assertEqual(stale_row["execution_eligibility"], "observation_only")
+        self.assertEqual(stale_row["attack_state"], "0%不参与")
+        self.assertEqual(stale_row["minute_plan"], {})
+        self.assertFalse(stale_row["primary_buy_candidate"])
+        self.assertEqual(data["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"], "001896")
+        self.assertIsNone(data["candidate_quality_panel_fields"]["backup_candidate"])
+        tracking = execution_stage_context["tracking_memory_status"]
+        self.assertEqual([item["code"] for item in tracking["tentative_items"]], ["001896"])
+        self.assertEqual([item["code"] for item in tracking["today_tentative_items"]], ["001896"])
+        self.assertEqual(tracking["new_items"], [])
+        stale_memory = next(item for item in tracking["total_items"] if item["code"] == "600688")
+        self.assertEqual(stale_memory["status"], "inactive_recall")
+        self.assertIn("只保留历史记忆", stale_memory["inactive_reason"])
+        self.assertNotIn("current_action", stale_memory)
+        self.assertNotIn("entry_price", stale_memory)
+        self.assertNotIn("minute_plan", stale_memory)
+        self.assertEqual(tracking["inactive_items"], [stale_memory])
 
     def test_zero_front_page_triggers_process_candidate_soft_word_cleanup(self):
         lines = [
@@ -10021,6 +10247,187 @@ def _runtime_binding_probe(
         self.assertNotIn("重点观察确认资格", rendered)
         self.assertNotIn("重点观察名单", rendered)
 
+    def test_zero_workflow_replaces_step_one_to_five_with_process_table(self):
+        lines = [
+            "##### 附录：Step 1 - 旧候选入口",
+            "明新旭腾(605068) 09:50-10:10观察价18.72",
+            "##### 附录：Step 2 - 旧候选排序",
+            "板块锚反推：可作为主对象",
+            "##### 附录：Step 3 - 旧参与脚本",
+            "预估17.78 / 最晚17.78",
+            "##### 附录：Step 4 - 旧价位",
+            "等待后续行情重新确认",
+            "##### 附录：Step 5 - 旧结论",
+            "明日主买对象",
+            "**过程观察25日跟踪表**",
+            "tracking",
+        ]
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+            "candidate_pool": [
+                {
+                    "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                    "sector": "汽车配件",
+                    "source_pools": ["extreme_conviction_list"],
+                    "workflow_path": ["N5", "N6", "N7"],
+                    "process_rejection_reason": "价格行为未通过确认；未证明来自板块资金方向",
+                    "entry_basis": "09:50-10:10站上18.72后可作为主对象",
+                    "eliminated_reason": "预估17.78 / 最晚17.78",
+                }
+            ],
+        }
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            final_target_resolution={
+                "watch_target": {},
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+            selection_workflow=workflow,
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("##### 附录：候选过程回放", rendered)
+        self.assertIn("| 候选 | 板块 | 历史来源 | 筛选路径 | 淘汰原因 | 过程处理 |", rendered)
+        self.assertIn(
+            "| 明新旭腾(605068) | 汽车配件 | extreme_conviction_list | N5 -> N6 -> N7 | 价格行为未通过确认；未证明来自板块资金方向 | 只作过程回放，不新增参与 |",
+            rendered,
+        )
+        self.assertIn("**过程观察25日跟踪表**", rendered)
+        self.assertNotIn("附录：Step 1", rendered)
+        self.assertNotIn("附录：Step 5", rendered)
+        self.assertNotIn("可作为主对象", rendered)
+        self.assertNotIn("明日主买对象", rendered)
+        self.assertNotIn("09:50-10:10", rendered)
+        self.assertNotIn("18.72", rendered)
+        self.assertNotIn("17.78", rendered)
+        self.assertNotIn("等待后续行情重新确认", rendered)
+
+    def test_zero_workflow_replaces_step_appendix_before_heading_is_demoted(self):
+        lines = [
+            "## Step 1 - 旧候选入口",
+            "明新旭腾(605068) 09:50-10:10观察价18.72",
+            "## Step 5 - 旧结论",
+            "板块锚反推：可作为主对象；预估17.78 / 最晚17.78",
+            "## 明日操作计划",
+            "action plan stays",
+        ]
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+            "candidate_pool": [
+                {
+                    "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                    "sector": "汽车配件",
+                    "source_pools": ["extreme_conviction_list"],
+                    "workflow_path": ["N5", "N6", "N7"],
+                    "process_rejection_reason": "未证明来自板块资金方向",
+                }
+            ],
+        }
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            final_target_resolution={
+                "watch_target": {},
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+            selection_workflow=workflow,
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("##### 附录：候选过程回放", rendered)
+        self.assertIn("未证明来自板块资金方向", rendered)
+        self.assertIn("## 明日操作计划", rendered)
+        self.assertIn("action plan stays", rendered)
+        self.assertNotIn("Step 1", rendered)
+        self.assertNotIn("可作为主对象", rendered)
+        self.assertNotIn("18.72", rendered)
+        self.assertNotIn("17.78", rendered)
+
+    def test_zero_workflow_collapses_stale_candidate_quality_details_after_final_resolution(self):
+        lines = [
+            "##### 附录：Step 1 - 旧候选入口",
+            "明新旭腾(605068) 09:50-10:10观察价18.72",
+            "##### 附录：Step 5 - 旧结论",
+            "明日主买对象",
+            "**过程观察25日跟踪表**",
+            "tracking",
+            "##### 附录：明日操作计划",
+            "##### 附录：候选质量与动作分层（过程证据）",
+            "##### 附录：今日总决策面板（过程证据）",
+            "| 字段 | 内容 |",
+            "|------|------|",
+            "| 当前执行对象 | 暂无 |",
+            "##### 附录：狙击手最终标的路径图（过程证据）",
+            "+-- 板块锚: 明新旭腾(605068)",
+            "+-- 处理: 可作为主对象",
+            "##### 附录：候选选股轨迹明细（过程证据）",
+            "| 层级 | 候选 | 板块锚反推 | 失效条件 | 明日动作 |",
+            "|------|------|------|------|------|",
+            "| 过程样本 | 明新旭腾(605068) | 结论：可作为主对象 | 预估17.78 / 最晚17.78 | 只作过程回放，不新增参与 |",
+            "##### 附录：单票展开（过程证据）",
+            "**明新旭腾(605068)**",
+            "- 观察上限：观察",
+            "**先看顺序**（过程证据）:",
+            "- 只观察主攻线整体承接，不指定个股",
+        ]
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+            "candidate_pool": [
+                {
+                    "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                    "sector": "汽车配件",
+                    "source_pools": ["extreme_conviction_list"],
+                    "workflow_path": ["N5", "N6", "N7"],
+                    "process_rejection_reason": "未证明来自板块资金方向",
+                }
+            ],
+        }
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            final_target_resolution={
+                "watch_target": {},
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+            selection_workflow=workflow,
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertEqual(rendered.count("| 候选 | 板块 | 历史来源 | 筛选路径 | 淘汰原因 | 过程处理 |"), 1)
+        self.assertIn("候选进入与淘汰过程只看上方统一回放表", rendered)
+        self.assertIn("**先看顺序**（过程证据）:", rendered)
+        self.assertNotIn("狙击手最终标的路径图", rendered)
+        self.assertNotIn("候选选股轨迹明细", rendered)
+        self.assertNotIn("单票展开", rendered)
+        self.assertNotIn("可作为主对象", rendered)
+        self.assertNotIn("17.78", rendered)
+        self.assertNotIn("18.72", rendered)
+
+    def test_process_observation_rhythm_reset_has_no_next_day_stock_window(self):
+        row = report_runtime._rhythm_reset_row_from_candidate(
+            {
+                "stock": {"name": "明新旭腾", "code": "605068"},
+                "observation_layer": "process_observation",
+                "process_rejection_reason": "价格行为未通过确认",
+                "entry_basis": "板块锚反推：可作为主对象",
+                "recover_condition": "09:50-10:10站上18.72",
+                "next_basis": "失效价17.78",
+            },
+            target_date="2026-07-29",
+        )
+
+        rendered = " ".join(str(value) for value in row.values())
+        self.assertEqual(row["why_t0_not"], "价格行为未通过确认")
+        self.assertIn("只作过程回放，不新增参与", row["tplus1_confirmation"])
+        self.assertNotIn("板块锚", rendered)
+        self.assertNotIn("09:50-10:10", rendered)
+        self.assertNotIn("18.72", rendered)
+        self.assertNotIn("17.78", rendered)
+
     def test_workflow_empty_final_dict_suppresses_selected_candidate(self):
         selected = {
             "name": "和远气体",
@@ -10087,7 +10494,7 @@ def _runtime_binding_probe(
         self.assertEqual(resolution["display_target"], {})
         self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "wait")
 
-    def test_runtime_final_resolution_keeps_explicit_front_observation_when_workflow_final_is_zero(self):
+    def test_runtime_final_resolution_clears_explicit_front_observation_when_workflow_final_is_zero(self):
         data = {
             "selection_workflow": {
                 "schema_version": "selection_workflow.v1",
@@ -10118,13 +10525,12 @@ def _runtime_binding_probe(
         )
 
         self.assertEqual(resolution["new_entry_target"], {})
-        self.assertEqual(resolution["watch_target"]["code"], "001896")
-        self.assertTrue(resolution["watch_target"]["front_observation_qualified"])
-        self.assertIn("明确保留前台观察", resolution["watch_target"]["front_observation_reason"])
+        self.assertEqual(resolution["watch_target"], {})
+        self.assertEqual(resolution["process_target"], {})
         self.assertEqual(resolution["display_target"], {})
         self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "wait")
 
-    def test_final_target_resolution_skips_process_observation_and_keeps_front_observation(self):
+    def test_final_target_resolution_keeps_all_zero_position_candidates_as_process_evidence(self):
         data = {
             "selection_workflow": {
                 "schema_version": "selection_workflow.v1",
@@ -10164,9 +10570,8 @@ def _runtime_binding_probe(
         )
 
         self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "wait")
-        self.assertEqual(resolution["watch_target"]["code"], "002409")
-        self.assertTrue(resolution["watch_target"]["front_observation_qualified"])
-        self.assertIn("主线内观察对象", resolution["watch_target"]["front_observation_reason"])
+        self.assertEqual(resolution["watch_target"], {})
+        self.assertEqual(resolution["process_target"], {})
         self.assertEqual(resolution["new_entry_target"], {})
         self.assertEqual(resolution["display_target"], {})
 
@@ -11593,6 +11998,28 @@ def _runtime_binding_probe(
         self.assertEqual(gate["position_level"], "0%不参与")
         self.assertIn("无明日执行对象", gate["final_action"])
         self.assertNotIn("50%条件执行", gate["final_action"])
+
+    def test_front_page_final_gate_old_position_priority_clears_stale_attack_fields(self):
+        gate = report_runtime._build_effective_front_page_final_gate(
+            {
+                "old_position_priority": True,
+                "gate_status": "可做",
+                "operation_state": "进攻态",
+                "position_level": "50%条件执行",
+                "can_new_entry": True,
+                "allow_attack_50_ready": True,
+                "base_position_cap_pct": 50,
+            }
+        )
+
+        self.assertEqual(gate["gate_status"], "只观察")
+        self.assertEqual(gate["operation_state"], "观察态")
+        self.assertEqual(gate["position_level"], "0%不参与")
+        self.assertFalse(gate["can_new_entry"])
+        self.assertFalse(gate["allow_attack_50_ready"])
+        self.assertEqual(gate["base_position_cap_pct"], 0)
+        self.assertIn("先处理旧仓", gate["final_action"])
+        self.assertIn("不新增参与", gate["final_participation"])
 
     def test_front_page_final_gate_keeps_risk_reason_after_final_wait_clears_candidate(self):
         opportunity_comparison = {
@@ -13709,7 +14136,7 @@ def _runtime_binding_probe(
 
         self.assertEqual([], non_empty_report_appends)
 
-    def test_runtime_front_page_keeps_explicit_position_decision_with_selected_target(self):
+    def test_runtime_front_page_uses_qualified_sector_candidate_despite_stale_position_text(self):
         from report.report_document_builder import (
             build_report_shell_contract as _build_report_shell_contract_actual,
             replace_placeholder_lines as _replace_placeholder_lines_actual,
@@ -13872,14 +14299,7 @@ def _runtime_binding_probe(
         self.assertIn("| 明日最大仓位 | 50% |", rendered)
         self.assertIn("| 只看明日执行对象 | 汇源通信(000586) | 09:30-09:35或09:50-10:10 |", rendered)
         self.assertIn(f"| {PREMARKET_50_EXECUTION_TEXT} |", rendered)
-        self.assertIn("- **进攻仓位三态**: 50%条件执行", rendered)
-        self.assertIn(f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}", rendered)
-        self.assertNotIn("没有唯一对象，完整候选仅保留在附录和快照", rendered)
-        self.assertNotIn("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", rendered)
-        self.assertNotIn("- **进攻仓位三态**: 0%不参与", rendered)
-        self.assertNotIn("盘前0%；参与窗口命中后才评估50%条件执行", rendered)
         self.assertNotIn("| 明日执行对象 | 无 |", rendered)
-        self.assertNotIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertNotIn("满仓条件执行", rendered)
         self.assertIn("最终执行条件: 明日目标标的已决定50%条件执行", stdout.getvalue())
         self.assertNotIn("最终执行条件: 空仓等待", stdout.getvalue())
@@ -15536,6 +15956,15 @@ def _runtime_binding_probe(
             execution_stage_context={
                 "selection_workflow": {
                     "schema_version": "selection_workflow.v1",
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "长裕集团", "code": "603407"},
+                            "source_pools": ["waiting_stocks"],
+                            "status": "过程候选",
+                            "new_entry_qualified": False,
+                            "current_reason": "只保留过程证据",
+                        }
+                    ],
                     "final": {
                         "position_pct": 0,
                         "execution_object": {},

@@ -309,6 +309,45 @@ class AppendixRendererTest(unittest.TestCase):
             rendered,
         )
 
+    def test_visible_candidate_list_projects_selection_workflow_instead_of_legacy_list(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["visible_candidate_lists"],
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车零部件"},
+                            "source_pools": ["市场资金结构45只输入"],
+                            "status": "被淘汰",
+                            "new_entry_qualified": False,
+                            "current_reason": "板块来源不足，只保留过程证据",
+                        }
+                    ],
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                },
+                "final_execution_target": {
+                    "name": "明新旭腾",
+                    "code": "605068",
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "旧名单对象",
+                        "code": "000001",
+                        "sniper_role": "明日主买对象",
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 1 | 明新旭腾 | 605068 | 汽车零部件 | 被淘汰 | 板块来源不足，只保留过程证据 | 只作过程回放，不新增参与 |", rendered)
+        self.assertNotIn("旧名单对象", rendered)
+
     def test_render_execution_appendix_outputs_empty_continuity_tables_as_recording_contract(self):
         lines = render_execution_appendix(
             {

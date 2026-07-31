@@ -427,6 +427,23 @@ def _enrich_planned_participation_contract(planned):
     return planned
 
 
+def _process_observation_participation_script():
+    return {
+        "participation_window": "no_trade",
+        "buy_window": "no_trade",
+        "entry_timing": "no_trade",
+        "attack_state": "0%",
+        "position_plan_pct": 0,
+        "target_position_pct": 0,
+        "auction": "不启用",
+        "first_minutes": "不启用",
+        "board": "不启用",
+        "reseal": "不启用",
+        "missed_action": "只作过程回放，不新增参与",
+        "cancellation": "最终对象未选择该样本，只作过程回放",
+    }
+
+
 def _normalize_source_dates(*payloads, default_snapshot_date=None, default_price_source_date=None):
     source_dates = {key: None for key in _SOURCE_DATE_FIELDS}
     for payload in payloads:
@@ -899,6 +916,13 @@ def _default_participation_script(item):
 
 
 def _build_planned_participation(item):
+    if (
+        item.get("candidate_layer") == "process_observation"
+        and item.get("execution_eligibility") == "observation_only"
+    ):
+        return _enrich_planned_participation_contract(
+            _process_observation_participation_script()
+        )
     script = _normalize_participation_script(item)
     required_keys = (
         "participation_window",
@@ -2424,15 +2448,26 @@ def _decision_revision_summary(snapshot):
     if canonical_final_action:
         final_action_label = canonical_final_action.get("label") or "0%不参与"
         final_target = canonical_final_action.get("target") or {}
+        primary_stock = dict(final_target)
     elif actionable_cases:
         final_action_label = actionable_cases[0].get("position_plan_label") or "50%条件执行"
         final_target = {
             "stock_code": actionable_cases[0].get("stock_code"),
             "stock_name": actionable_cases[0].get("stock_name"),
         }
+        primary_stock = {
+            "stock_code": first_case.get("stock_code"),
+            "stock_name": first_case.get("stock_name"),
+            "sector": first_case.get("sector"),
+        } if first_case else {}
     else:
         final_action_label = "0%不参与"
         final_target = {}
+        primary_stock = {
+            "stock_code": first_case.get("stock_code"),
+            "stock_name": first_case.get("stock_name"),
+            "sector": first_case.get("sector"),
+        } if first_case else {}
     return {
         "trade_date": _clean_text(snapshot.get("trade_date")),
         "selection_rule_version": _clean_text(snapshot.get("selection_rule_version"), SELECTION_RULE_VERSION),
@@ -2440,11 +2475,7 @@ def _decision_revision_summary(snapshot):
         "market_branch": _clean_text(hypothesis.get("market_branch")),
         "sector_relationship_state": _clean_text(hypothesis.get("sector_relationship_state")),
         "case_count": len(cases),
-        "primary_stock": {
-            "stock_code": first_case.get("stock_code"),
-            "stock_name": first_case.get("stock_name"),
-            "sector": first_case.get("sector"),
-        } if first_case else {},
+        "primary_stock": primary_stock,
         "final_action_label": final_action_label,
         "final_target": final_target,
         "cases": cases,
@@ -3002,7 +3033,13 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8, final_action=
                     "planned_window": planned.get("participation_window"),
                     "buy_window": planned.get("buy_window"),
                     "review_status": review.get("status") or record.get("participation_review_status") or record.get("status"),
-                    "next_action": review.get("next_action") or review.get("same_day_action") or "等待下一次固定交易窗口条件确认",
+                    "next_action": (
+                        "只作过程回放，不新增参与"
+                        if _position_plan_pct(planned, record) == 0
+                        else review.get("next_action")
+                        or review.get("same_day_action")
+                        or "等待下一次固定交易窗口条件确认"
+                    ),
                     "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
                     "is_final_execution_target": _same_stock_code(record.get("stock_code"), final_target),
                     "_record": record,
@@ -3277,7 +3314,13 @@ def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25,
                         "planned_window": planned.get("participation_window"),
                         "review_status": review_status,
                         "fact_status": review.get("fact_status") or _review_status_for_facts(review_status),
-                        "next_action": review.get("next_action") or review.get("same_day_action") or "等待计划窗口事实回写",
+                        "next_action": (
+                            "只作过程回放，不新增参与"
+                            if _position_plan_pct(planned, record) == 0
+                            else review.get("next_action")
+                            or review.get("same_day_action")
+                            or "等待计划窗口事实回写"
+                        ),
                         "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
                         "is_final_execution_target": _same_stock_code(record.get("stock_code"), final_target),
                         "reason": mention.get("reason") or "",
@@ -3405,7 +3448,13 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12, final_action=N
                         "buy_point_quality": _buy_point_quality_label(review),
                         "review_status": review_status,
                         "fact_status": review.get("fact_status") or _review_status_for_facts(review_status),
-                        "standard_action": review.get("same_day_action") or review.get("next_action") or "等待计划窗口事实回写",
+                        "standard_action": (
+                            "只作过程回放，不新增参与"
+                            if _position_plan_pct(planned, record) == 0
+                            else review.get("same_day_action")
+                            or review.get("next_action")
+                            or "等待计划窗口事实回写"
+                        ),
                         "market_outcome": review.get("market_outcome") or "",
                         "selection_result_status": selection_result.get("status") or "待验证",
                         "selection_result_evidence": selection_result.get("evidence") or "",
@@ -4528,12 +4577,30 @@ def build_decision_ledger_snapshot(
     generated_at=None,
     final_action=None,
 ):
+    normalized_final_action = _normalize_final_action_snapshot(final_action)
+    final_action_is_authoritative = isinstance(final_action, dict) and bool(final_action)
+    final_execution_target = _final_execution_target_from_action(final_action)
     cases = []
     for idx, item in enumerate(list(extreme_conviction_list or []), 1):
         stock_code = _normalize_stock_code(item.get("code") or item.get("stock_code"))
         stock_name = _clean_text(item.get("name") or item.get("stock_name"), stock_code or "判断样本")
         sector = _resolve_sector_candidate(item, "未归类")
         normalized_item = {**item, "sector": sector}
+        is_final_execution_case = _same_stock_code(stock_code, final_execution_target)
+        if final_action_is_authoritative and not is_final_execution_case:
+            process_script = _process_observation_participation_script()
+            normalized_item.update(
+                {
+                    **process_script,
+                    "participation_script": dict(process_script),
+                    "planned_participation": dict(process_script),
+                    "candidate_layer": "process_observation",
+                    "execution_eligibility": "observation_only",
+                    "new_entry_qualified": False,
+                    "primary_buy_candidate": False,
+                    "backup_buy_candidate": False,
+                }
+            )
         case = {
             "case_id": _build_case_id(trade_date, stock_code, 1),
             "stock_code": stock_code,
@@ -4550,7 +4617,7 @@ def build_decision_ledger_snapshot(
                 "sector_relationship_state": _clean_text(sector_relationship_state, "暂未分出"),
             },
             "validation": {
-                "status": "等待市场选择",
+                "status": "等待市场选择" if is_final_execution_case or not final_action_is_authoritative else "过程回放",
                 "selection_confirmed_date": None,
                 "selection_confirmed_evidence": None,
                 "sector_selection_evidence": None,
@@ -4608,7 +4675,11 @@ def build_decision_ledger_snapshot(
             )
             evidence_labels = normalized_item.get("mainline_attack_evidence_labels") or normalized_item.get("evidence_labels") or []
             case["mainline_attack_evidence_labels"] = list(evidence_labels) if isinstance(evidence_labels, list) else []
-            case["sample_tier"] = _clean_text(normalized_item.get("sample_tier") or planned_participation.get("source_tier"), "high")
+            case["sample_tier"] = (
+                "observation"
+                if final_action_is_authoritative and not is_final_execution_case
+                else _clean_text(normalized_item.get("sample_tier") or planned_participation.get("source_tier"), "high")
+            )
             case["trend_chain_position"] = _clean_text(normalized_item.get("trend_chain_position"), "unknown")
             case["cancellation_conditions"] = _cancellation_conditions_from_plan(planned_participation, normalized_item)
             case["source_dates"] = source_dates
@@ -4639,7 +4710,6 @@ def build_decision_ledger_snapshot(
         "source_report": source_report or {},
         "cases": cases,
     }
-    normalized_final_action = _normalize_final_action_snapshot(final_action)
     if normalized_final_action:
         snapshot["final_action"] = normalized_final_action
     return snapshot

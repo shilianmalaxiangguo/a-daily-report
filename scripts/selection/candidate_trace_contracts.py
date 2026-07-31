@@ -251,7 +251,13 @@ def build_candidate_trace(candidate):
         "missing_data": missing_data,
         "visible_summary": _visible_summary(name, tier, checks, final_action),
     }
-    for key in ("first_seen_node", "entered_reason", "eliminated_at", "eliminated_reason"):
+    for key in (
+        "first_seen_node",
+        "entered_reason",
+        "eliminated_at",
+        "eliminated_reason",
+        "process_rejection_reason",
+    ):
         value = _clean_text(candidate.get(key))
         if value:
             trace[key] = value

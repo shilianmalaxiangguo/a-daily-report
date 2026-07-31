@@ -17,6 +17,7 @@ from report.execution_wording import (
     TWO_B_CONFIRMATION_CLAUSE,
 )
 from domains.execution_chain.pk_decision_nodes.action_plan_context import build_action_plan_context_payload
+from domains.execution_chain.pk_decision_nodes.pk_context import build_pk_decision_pk_context_node
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
     evaluate_candidate_quality_sample_contract,
@@ -24,6 +25,83 @@ from selection.candidate_quality_contracts import (
 
 
 class ActionPlanRendererTest(unittest.TestCase):
+    def test_selection_workflow_final_object_replaces_conflicting_legacy_action_targets(self):
+        context = {
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                        "status": "最终执行对象",
+                        "new_entry_qualified": True,
+                        "source_pools": ["sector_derived_candidates"],
+                        "current_reason": "板块资金方向与价格行为均已确认",
+                    },
+                    {
+                        "stock": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                        "status": "过程候选",
+                        "new_entry_qualified": False,
+                        "source_pools": ["extreme_conviction_list"],
+                        "current_reason": "旧名单信号只作过程证据",
+                        "minute_plan": {"confirm_price_60m": 7.88},
+                    },
+                ],
+                "final": {
+                    "execution_object": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                    "position_pct": 50,
+                    "action_text": "50%条件执行",
+                },
+            },
+            "best_stock": {
+                "name": "上海石化",
+                "code": "600688",
+                "sector": "炼化及贸",
+                "minute_plan": {"confirm_price_60m": 7.88},
+            },
+            "watch_anchor": {
+                "name": "上海石化",
+                "code": "600688",
+                "sector": "炼化及贸",
+                "minute_plan": {"confirm_price_60m": 7.88},
+            },
+            "display_pending_candidates": [
+                {"name": "上海石化", "code": "600688", "minute_plan": {"confirm_price_60m": 7.88}}
+            ],
+            "display_observation_candidates": [
+                {"name": "上海石化", "code": "600688", "minute_plan": {"confirm_price_60m": 7.88}}
+            ],
+            "position_decision": {"target_position_pct": 0, "signal_grade": "0"},
+            "trade_gate_open": False,
+            "final_gate": {"can_new_entry": False},
+            "position_level": "0%不参与",
+            "step0_prediction_cn": "收缩防守",
+        }
+
+        payload = build_action_plan_context_payload(context)
+        action_text = "\n".join(str(row) for row in payload["action_rows"])
+        sample_codes = [sample.get("code") for sample in payload["candidate_quality_samples"]]
+
+        self.assertIn("豫能控股", action_text)
+        self.assertNotIn("上海石化", action_text)
+        self.assertEqual(
+            payload["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"],
+            "001896",
+        )
+        self.assertEqual(sample_codes, ["001896", "600688"])
+        process_sample = payload["candidate_quality_samples"][1]
+        self.assertEqual(process_sample["quality_role"], "过程候选")
+        self.assertEqual(process_sample["final_action"], "只作过程回放，不新增参与")
+        self.assertNotIn("minute_plan", process_sample)
+
+        pk_result = build_pk_decision_pk_context_node(context)
+        pk_text = "\n".join(
+            pk_result["exports"]["pending_lines"]
+            + pk_result["exports"]["observation_lines"]
+            + pk_result["exports"]["conclusion_lines"]
+        )
+        self.assertIn("豫能控股(001896)", pk_text)
+        self.assertNotIn("上海石化", pk_text)
+
     def test_action_plan_does_not_infer_position_from_visible_text(self):
         for position_pct in (None, 40, 60, 75):
             with self.subTest(position_pct=position_pct):

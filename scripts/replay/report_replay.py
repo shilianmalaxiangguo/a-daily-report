@@ -1465,20 +1465,21 @@ def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float
     step_status = snapshot_data.setdefault("step_status", {})
     changed = False
 
-    total_row = {}
-    get_total_row = helpers.get("get_market_daily_total_from_fact_db")
-    if callable(get_total_row):
-        total_row = get_total_row(target_date) or {}
-
-    total_turnover = safe_float((total_row or {}).get("total_amount_yi"))
-    if total_turnover <= 0 and callable(helpers.get("get_market_total_turnover_from_fact_db")):
-        total_turnover = safe_float(helpers["get_market_total_turnover_from_fact_db"](target_date))
-
-    if total_turnover > 0 and (
+    total_turnover_missing = (
         data_status.get("两市成交额") is False
         or safe_float(snapshot_data.get("total_turnover")) <= 0
-        or str(_provider_from_snapshot_log(snapshot_data, "request.total_turnover")).startswith(("akshare.", "eastmoney."))
-    ):
+    )
+    total_row = {}
+    total_turnover = 0.0
+    if total_turnover_missing:
+        get_total_row = helpers.get("get_market_daily_total_from_fact_db")
+        if callable(get_total_row):
+            total_row = get_total_row(target_date) or {}
+        total_turnover = safe_float((total_row or {}).get("total_amount_yi"))
+        if total_turnover <= 0 and callable(helpers.get("get_market_total_turnover_from_fact_db")):
+            total_turnover = safe_float(helpers["get_market_total_turnover_from_fact_db"](target_date))
+
+    if total_turnover > 0 and total_turnover_missing:
         total_turnover = round(total_turnover, 2)
         snapshot_data["total_turnover"] = total_turnover
         turnover_data = dict(snapshot_data.get("turnover_data") or {})
@@ -1502,13 +1503,12 @@ def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float
         )
         changed = True
 
-    get_rank_rows = helpers.get("get_turnover_rank_from_fact_db")
-    rank_rows = get_rank_rows(target_date, limit=50) if callable(get_rank_rows) else []
-    if rank_rows and (
-        data_status.get("成交额排名") is False
-        or not snapshot_data.get("turnover_rank")
-        or not str(((snapshot_data.get("turnover_rank") or [{}])[0] or {}).get("data_source") or "").startswith("tushare.")
-    ):
+    turnover_rank_missing = data_status.get("成交额排名") is False or not snapshot_data.get("turnover_rank")
+    rank_rows = []
+    if turnover_rank_missing:
+        get_rank_rows = helpers.get("get_turnover_rank_from_fact_db")
+        rank_rows = get_rank_rows(target_date, limit=50) if callable(get_rank_rows) else []
+    if rank_rows and turnover_rank_missing:
         snapshot_data["turnover_rank"] = list(rank_rows)
         snapshot_data["turnover_over_100b"] = [
             item for item in rank_rows if safe_float((item or {}).get("turnover")) > 100
@@ -1530,15 +1530,21 @@ def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float
         )
         changed = True
 
+    wind_a_missing = (
+        data_status.get("中证全指") is False
+        or safe_float(
+            (snapshot_data.get("wind_a_alternative") or {}).get(
+                "price",
+                (snapshot_data.get("wind_a_alternative") or {}).get("点位", 0),
+            )
+        )
+        <= 0
+    )
     get_wind_a = helpers.get("get_wind_a_from_tushare")
-    wind_a = get_wind_a(target_date) if callable(get_wind_a) else {}
+    wind_a = get_wind_a(target_date) if wind_a_missing and callable(get_wind_a) else {}
     wind_a_provider = str((wind_a or {}).get("data_source") or "").strip()
     wind_a_price = safe_float((wind_a or {}).get("price", (wind_a or {}).get("点位", 0)))
-    if wind_a_price > 0 and wind_a_provider.startswith("tushare.") and (
-        data_status.get("中证全指") is False
-        or safe_float((snapshot_data.get("wind_a_alternative") or {}).get("price", (snapshot_data.get("wind_a_alternative") or {}).get("点位", 0))) <= 0
-        or not str(_provider_from_snapshot_log(snapshot_data, "request.wind_a")).startswith("tushare.")
-    ):
+    if wind_a_price > 0 and wind_a_provider.startswith("tushare.") and wind_a_missing:
         snapshot_data["wind_a_alternative"] = dict(wind_a or {})
         data_status["中证全指"] = True
         step_status["中证全指获取"] = True
@@ -2840,7 +2846,7 @@ def _fetch_calendar_events_compat(tencent, target_date):
     except TypeError as error:
         if "target_date" not in str(error):
             raise
-        return tencent.get_calendar_events()
+        raise RuntimeError("预期日历来源不支持按目标日期查询，保留冻结快照") from error
 
 
 def _attach_replay_llm_wiki_context(snapshot_data, target_date):
@@ -2870,7 +2876,7 @@ def build_replay_snapshot_contract(
     print_fn=print,
     helpers=None,
 ):
-    refresh_sources = list(refresh_sources or ["calendar_events"])
+    refresh_sources = list(refresh_sources) if refresh_sources is not None else []
     logs = []
 
     print_fn(f"\n{'=' * 60}")
@@ -2908,6 +2914,7 @@ def build_replay_snapshot_contract(
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
     snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
+    snapshot_data["replay_mode"] = True
     replay_llm_wiki = _attach_replay_llm_wiki_context(snapshot_data, target_date)
     if replay_llm_wiki.get("artifact_origin") == "frozen_trace":
         _append_log(

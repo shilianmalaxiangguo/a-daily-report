@@ -14,6 +14,7 @@ from report.position_context import (
 from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import blocked_current_observation_keys
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import workflow_final_candidate
 from report.trading_time_window_contract import normalize_trading_time_text
 from report.position_tier_contract import normalize_planned_position_tier_pct
 
@@ -340,18 +341,24 @@ def _sanitize_action_plan_context_payload(payload, context=None):
 
 def build_action_plan_context_payload(context):
     context = context or {}
+    workflow = _selection_workflow_from_context(context)
+    workflow_final_target, workflow_position_pct = workflow_final_candidate(workflow)
     existing_position_summary = existing_position_summary_from_context(context)
     pending_external_trade = (
         position_fact_status(existing_position_summary, context_provided=True)
         == "pending_confirmation"
     )
     existing_payload = context.get("action_plan_context_payload")
-    if existing_payload is not None and not pending_external_trade:
+    if (
+        existing_payload is not None
+        and not pending_external_trade
+        and (not workflow or not workflow_final_target)
+    ):
         return _sanitize_action_plan_context_payload(existing_payload, context=context)
 
-    trade_gate_open = context.get("trade_gate_open", False)
-    best_stock = context.get("best_stock")
-    watch_anchor = context.get("watch_anchor")
+    trade_gate_open = bool(workflow_final_target) if workflow else context.get("trade_gate_open", False)
+    best_stock = workflow_final_target or None if workflow else context.get("best_stock")
+    watch_anchor = None if workflow else context.get("watch_anchor")
     watch_anchor_type = context.get("watch_anchor_type", "")
     position_level = str(context.get("position_level", "") or "").strip()
     step0_prediction = str(context.get("step0_prediction", "") or "").strip()
@@ -371,7 +378,11 @@ def build_action_plan_context_payload(context):
     if final_empty_without_current_observation:
         best_stock = None
         watch_anchor = None
-    display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    display_observation_candidates = (
+        []
+        if workflow
+        else context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    )
     display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
     blocked_observation_keys = blocked_current_observation_keys(display_observation_candidates)
     display_observation_candidates = _surface_observation_candidates(display_observation_candidates)
@@ -384,7 +395,7 @@ def build_action_plan_context_payload(context):
         display_observation_candidates,
         incomplete_trace_codes,
     )
-    waiting_stocks = context.get("waiting_stocks", []) or []
+    waiting_stocks = [] if workflow else context.get("waiting_stocks", []) or []
     if final_empty_without_current_observation:
         waiting_stocks = []
     today_predictions = context.get("today_predictions", []) or []
@@ -410,7 +421,7 @@ def build_action_plan_context_payload(context):
         None,
     )
     old_position_first = bool(final_gate.get("should_reduce") and has_personal_positions)
-    target_position_pct = resolve_target_position_pct(context)
+    target_position_pct = workflow_position_pct if workflow else resolve_target_position_pct(context)
     if target_position_pct is None:
         target_position_pct = 0
     position_execution_text = (
@@ -911,7 +922,10 @@ def build_action_plan_context_payload(context):
             best_stock=best_stock,
             watch_anchor=watch_anchor,
         ),
-        "position_decision": dict(context.get("position_decision") or {}),
+        "position_decision": {
+            **dict(context.get("position_decision") or {}),
+            **({"target_position_pct": workflow_position_pct} if workflow else {}),
+        },
         **scorecard_payload,
     }
     return payload

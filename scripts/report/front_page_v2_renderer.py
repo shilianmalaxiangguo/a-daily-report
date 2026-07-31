@@ -591,10 +591,17 @@ def _workflow_candidates_for_direction(snapshot, direction, primary_line=""):
     rows = workflow.get("candidate_pool") if isinstance(workflow, dict) else []
     if not isinstance(rows, list):
         return []
+    strict_sector_first = workflow.get("derivation_contract") == "sector_first_strict.v1"
     matched = [
         item for item in rows
-        if isinstance(item, dict) and _candidate_matches_direction(item, direction, primary_line)
+        if (
+            isinstance(item, dict)
+            and (not strict_sector_first or item.get("candidate_origin") == "sector_first")
+            and _candidate_matches_direction(item, direction, primary_line)
+        )
     ]
+    if strict_sector_first:
+        return matched
     return matched or [item for item in rows if isinstance(item, dict)][:3]
 
 
@@ -646,6 +653,13 @@ def _fallback_elastic_vehicle(snapshot, direction, primary_line, core_anchor="")
 
 def _fallback_core_verification(snapshot, direction, primary_line):
     candidates = _workflow_candidates_for_direction(snapshot, direction, primary_line)
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if (
+        isinstance(workflow, dict)
+        and workflow.get("derivation_contract") == "sector_first_strict.v1"
+        and not candidates
+    ):
+        return "该方向尚未从板块资金扩散中推出核心载体"
     first_reason = ""
     selected_text = _candidate_stock_text(_selected_position_candidate(snapshot))
     for candidate in candidates:
@@ -679,6 +693,13 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
     dragon_result = _dragon_pullback_result_text(snapshot)
     dragon_leader = (_dragon_pullback_review(snapshot) or {}).get("leader")
     dragon_laggards = _dragon_pullback_laggard_text(snapshot)
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    missing_carrier = (
+        "暂无"
+        if isinstance(workflow, dict)
+        and workflow.get("derivation_contract") == "sector_first_strict.v1"
+        else "待补事实"
+    )
     rows = []
     for direction in directions:
         sector_analysis = _sector_analysis_for_direction(snapshot, direction)
@@ -691,6 +712,7 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
             _stock_text_from_value(sector_analysis.get("leader")),
             dragon_leader if is_primary else "",
             _fallback_core_anchor(snapshot, direction, primary_line),
+            missing=missing_carrier,
         )
         elastic_vehicle = _spine_meaningful_text(
             _stock_text_from_value(sector_analysis.get("elastic_vehicle")),
@@ -699,6 +721,7 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
             _stock_text_from_value(sector_analysis.get("rear_acceptance")),
             dragon_laggards if is_primary else "",
             _fallback_elastic_vehicle(snapshot, direction, primary_line, core_anchor=core_anchor),
+            missing=missing_carrier,
         )
         core_verification = _spine_meaningful_text(
             dragon_result if is_primary else "",
@@ -2205,6 +2228,13 @@ def _conditional_zero_action_text(target, position_decision=None):
 
 def _resolve_sniper_candidates(snapshot, candidate_snapshot):
     snapshot = snapshot or {}
+    workflow_target = _selection_workflow_final_target(snapshot)
+    if workflow_target is not None:
+        if not workflow_target:
+            return []
+        candidate = dict(workflow_target)
+        candidate["sniper_role"] = "明日主买对象"
+        return [candidate]
     sources = []
     if isinstance(candidate_snapshot, dict):
         sources.append(candidate_snapshot.get("extreme_conviction_list"))
@@ -3219,7 +3249,15 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         no_buy_reason = "有观察对象，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有核心对象，只等固定交易窗口内条件成立；条件不满足回到0%"
     else:
         no_buy_reason = front_no_buy_reason or ("没有观察对象，完整候选仅保留在附录和快照" if is_zero_participation else "没有核心对象，完整候选仅保留在附录和快照")
-    backup_watch = front_page.get("backup_watch") if isinstance(front_page.get("backup_watch"), list) else []
+    workflow_controls_candidates = _selection_workflow_final_target(snapshot) is not None
+    backup_watch = (
+        []
+        if workflow_controls_candidates
+        else front_page.get("backup_watch")
+        if isinstance(front_page.get("backup_watch"), list)
+        else []
+    )
+    backup_text = "暂无" if workflow_controls_candidates else (front_page.get("backup_text") or "暂无")
     sniper_candidates = _resolve_sniper_candidates(snapshot, candidate_snapshot)
     if position_state.get("grade") == "0" or not has_unique_object:
         sniper_candidates = []
@@ -3253,7 +3291,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         ),
         f"| {'明日执行对象' if two_layer_execution else ('观察对象' if is_zero_participation else '唯一对象')} | {_two_layer_execution_target_label(snapshot) if two_layer_execution else _candidate_section_unique_object_label(snapshot, observation_target=observation_target, has_observation_target=has_observation_target, front_page=front_page, is_zero_participation=is_zero_participation)} |",
         f"| 当前状态 | {stock_state} |",
-        f"| 备用观察 | {front_page.get('backup_text') or '暂无'} |",
+        f"| 备用观察 | {backup_text} |",
         f"| 今日不买原因 | {normalize_trading_time_text(no_buy_reason)} |",
         f"| 明日触发 | {normalize_trading_time_text(front_page.get('trigger_condition') or f'{SECOND_CONFIRM_LABEL} + 主线承接 + 个股突破或回踩确认')} |",
         f"| 明日失效 | {normalize_trading_time_text(front_page.get('failure_condition') or '主线回落 / 放量不承接')} |",

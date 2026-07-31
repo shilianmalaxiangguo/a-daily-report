@@ -171,3 +171,41 @@ def candidate_can_be_current_observation_target(candidate):
         and bool(candidate_key(candidate))
         and not candidate_blocks_current_observation_target(candidate)
     )
+
+
+def workflow_candidate_payload(candidate):
+    if not isinstance(candidate, dict):
+        return {}
+    stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else candidate
+    payload = dict(stock or {})
+    for key, value in candidate.items():
+        if key == "stock" or value in (None, ""):
+            continue
+        if payload.get(key) in (None, "", [], {}):
+            payload[key] = value
+    return payload
+
+
+def workflow_final_candidate(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    try:
+        position_pct = int(float(final.get("position_pct", 0) or 0))
+    except (TypeError, ValueError):
+        position_pct = 0
+    execution_key = candidate_key(execution_object)
+    if position_pct <= 0 or not execution_key:
+        return {}, 0
+
+    candidate = {}
+    for row in workflow.get("candidate_pool", []) or []:
+        payload = workflow_candidate_payload(row)
+        if candidate_key(payload) == execution_key:
+            candidate = payload
+            break
+    candidate.update(execution_object)
+    candidate["position_pct"] = position_pct
+    candidate["target_position_pct"] = position_pct
+    candidate["new_entry_qualified"] = True
+    return candidate, position_pct

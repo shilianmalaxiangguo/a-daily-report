@@ -107,6 +107,30 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
             ],
         }
 
+    def test_empty_workflow_final_dict_blocks_legacy_resolution_target(self):
+        payload = build_elimination_tournament_payload(
+            trade_date="2026-07-29",
+            selection_workflow={
+                "schema_version": "selection_workflow.v1",
+                "final": {},
+                "candidate_pool": [],
+            },
+            final_target_resolution={
+                "new_entry_target": {"name": "旧对象", "code": "000001"},
+                "display_target": {"name": "旧对象", "code": "000001"},
+                "capital_priority_decision": {
+                    "capital_priority": "new_entry",
+                    "reason": "旧解析结果",
+                },
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(payload["final_action"]["target"], {})
+        self.assertEqual(payload["final_action"]["position_pct"], 0)
+        self.assertEqual(payload["final_action"]["label"], "0%不参与")
+        self.assertEqual(payload["final_action"]["source"], "selection_workflow.final")
+
     def test_preflight_payload_rejects_non_tier_final_action_everywhere(self):
         target = {"name": "长电科技", "code": "600584", "sector": "半导体"}
         for position_pct in (33, 40, 60, 75, None):
@@ -327,7 +351,7 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
         self.assertEqual(payload["final_action"]["target"], {})
         self.assertEqual(payload["layers"][-1]["survivor_count"], 0)
 
-    def test_tournament_prefers_v2_current_increment_over_planned_total_tier(self):
+    def test_tournament_keeps_workflow_planned_tier_when_account_increment_is_smaller(self):
         target = {"name": "和远气体", "code": "002971", "sector": "化工原料"}
         workflow = self._workflow()
         workflow["final"] = {
@@ -360,8 +384,8 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
             position_decision={"target_position_pct": 100},
         )
 
-        self.assertEqual(payload["final_action"]["label"], "50%条件执行")
-        self.assertEqual(payload["final_action"]["position_pct"], 50)
+        self.assertEqual(payload["final_action"]["label"], "100%核心进攻")
+        self.assertEqual(payload["final_action"]["position_pct"], 100)
         self.assertEqual(payload["final_action"]["target"]["code"], "002971")
         self.assertEqual(payload["layers"][-1]["survivor_count"], 1)
 

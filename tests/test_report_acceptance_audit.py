@@ -530,6 +530,27 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("selection_workflow_mismatch", {finding["code"] for finding in result["findings"]})
 
+    def test_audit_flags_selection_workflow_position_mismatch_when_front_keeps_fifty_percent(self):
+        markdown = (
+            "# 2026-07-29 a股市场分析\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日新仓 | 50%条件执行 |\n"
+            "| 明日执行对象 | 无 |\n\n"
+            "## 推导审计层\n"
+            "```json\n"
+            '{"selection_workflow":{"schema_version":"selection_workflow.v1","final":{"execution_object":{},"position_pct":0,"action_text":"0%不参与"}}}\n'
+            "```\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn(
+            "selection_workflow_position_mismatch",
+            {finding["code"] for finding in result["findings"]},
+        )
+
     def test_audit_flags_candidate_claiming_final_conclusion_when_final_object_is_empty(self):
         markdown = (
             self.zero_position_report_with_decision_attribution()
@@ -4085,6 +4106,44 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertTrue(any("明日资格=可做" in finding["message"] for finding in matching))
         self.assertTrue(any("未来观察价" in finding["message"] for finding in matching))
         self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_final_process_rows_with_future_price_or_old_core_identity(self):
+        bad = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：候选过程回放（过程证据）\n"
+            "| 层级 | 候选 | 旧字段 | 明日动作 |\n"
+            "|------|------|--------|----------|\n"
+            "| 过程样本 | 明新旭腾(605068) | 预估17.78 / 最晚17.78 | 只作过程回放，不新增参与 |\n"
+            "| 过程样本 | 明新旭腾(605068) | 身份：板块锚 | 只作过程回放，不新增参与 |\n"
+            "| 过程样本 | 明新旭腾(605068) | 结论：可作为主对象 | 只作过程回放，不新增参与 |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        matching = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "empty_final_object_appendix_current_object_conflict"
+        ]
+        self.assertEqual(len(matching), 3, result["findings"])
+        self.assertTrue(any("未来价位" in finding["message"] for finding in matching))
+        self.assertTrue(any("板块锚身份" in finding["message"] for finding in matching))
+        self.assertTrue(any("可作为主对象" in finding["message"] for finding in matching))
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_zero_final_process_row_that_rejects_anchor_identity(self):
+        report = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：候选过程回放（过程证据）\n"
+            "| 层级 | 候选 | 淘汰原因 | 明日动作 |\n"
+            "|------|------|----------|----------|\n"
+            "| 过程样本 | 明新旭腾(605068) | 未证明为板块锚 | 只作过程回放，不新增参与 |\n"
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn(
+            "empty_final_object_appendix_current_object_conflict",
+            {finding["code"] for finding in result["findings"]},
+        )
 
     def test_audit_allows_zero_position_plan_without_new_position_stop(self):
         report = self.zero_position_report_with_decision_attribution()

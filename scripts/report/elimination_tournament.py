@@ -736,17 +736,12 @@ def _final_action_from_resolution(final_target_resolution, position_decision):
 
 def _final_action(selection_workflow, final_target_resolution, position_decision):
     workflow = _as_dict(selection_workflow)
-    workflow_final = _as_dict(workflow.get("final"))
-    resolution = _as_dict(final_target_resolution)
-    exposure_plan = _as_dict(resolution.get("account_exposure_plan"))
-    if exposure_plan.get("schema_version") == "position_tier_exposure.v2":
-        return _final_action_from_resolution(resolution, position_decision)
-    resolution_priority = _as_dict(resolution.get("capital_priority_decision"))
-    priority_value = clean_text(resolution_priority.get("capital_priority"))
-    if workflow_final:
+    workflow_owns_final = (
+        workflow.get("schema_version") == "selection_workflow.v1"
+        and "final" in workflow
+    )
+    if workflow_owns_final:
         final = _workflow_final(workflow)
-        if final["position_pct"] <= 0 and priority_value == "same_stock_t":
-            return _final_action_from_resolution(final_target_resolution, position_decision)
         if final["position_pct"] <= 0:
             final["target"] = {}
             final["label"] = "0%不参与"

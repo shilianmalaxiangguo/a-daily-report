@@ -1213,7 +1213,67 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                 captured.append(("import", target_date, data))
                 return {"source": "postgresql://import"}
 
+        def stale_execution_candidate():
+            return {
+                "name": "明新旭腾",
+                "code": "605068",
+                "candidate_layer": "executable_candidate",
+                "execution_eligibility": "auction_reseal",
+                "attack_state": "50%",
+                "sniper_role": "明日主买对象",
+                "primary_buy_candidate": True,
+                "target_position_pct": 50,
+                "buy_window": "09:30-09:35",
+                "entry_price": 18.72,
+                "stop_loss": 17.78,
+                "minute_plan": {"window": "09:50-10:10"},
+                "current_action": "3进4，若竞价高开可能继续",
+            }
+
+        def stale_front_page_gate():
+            return {
+                "gate_status": "可做",
+                "operation_state": "进攻态",
+                "position_level": "50%条件执行",
+                "can_new_entry": False,
+                "allow_attack_50_ready": False,
+                "base_position_cap_pct": 0,
+                "final_action": "无明日执行对象，保持观察",
+            }
+
+        def stale_tracking_memory_status():
+            process_item = {
+                "name": "明新旭腾",
+                "code": "605068",
+                "sector": "汽车配件",
+                "status": "tentative",
+                "last_reason": "观察竞价，等待09:50-10:10窗口",
+                "follow_state": "新异动待观察",
+                "current_action": "3进4，若竞价高开可能继续",
+                "entry_price": 18.72,
+                "stop_loss": 17.78,
+                "minute_plan": {"window": "09:50-10:10"},
+            }
+            retained_item = {
+                "name": "历史样本",
+                "code": "000001",
+                "status": "validated",
+                "last_reason": "历史记忆",
+            }
+            return {
+                "tentative_items": [dict(process_item)],
+                "today_tentative_items": [dict(process_item)],
+                "validated_items": [dict(process_item)],
+                "today_validated_items": [dict(process_item)],
+                "new_items": [dict(process_item)],
+                "promoted_items": [dict(process_item)],
+                "reactivated_items": [dict(process_item)],
+                "inactive_items": [],
+                "total_items": [dict(process_item), dict(retained_item)],
+            }
+
         def stale_data():
+            candidate = stale_execution_candidate()
             return {
                 "selection_workflow": {
                     "schema_version": "selection_workflow.v1",
@@ -1222,7 +1282,19 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                         "position_pct": 0,
                         "action_text": "弱收盘价格否定，0%不参与",
                     },
-                    "candidate_pool": [],
+                    "candidate_pool": [
+                        {
+                            "stock": {
+                                "name": "明新旭腾",
+                                "code": "605068",
+                                "sector": "汽车配件",
+                            },
+                            "status": "过程候选",
+                            "new_entry_qualified": False,
+                            "front_observation_qualified": False,
+                            "process_rejection_reason": "未证明来自板块资金方向",
+                        }
+                    ],
                 },
                 "position_decision": {
                     "target_position_pct": 0,
@@ -1240,6 +1312,32 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                         "max_exposure_x": 1,
                     },
                 },
+                "front_page_final_gate": stale_front_page_gate(),
+                "execution_stage_context": {
+                    "focus_group": [dict(candidate)],
+                    "waiting_stocks": [dict(candidate)],
+                    "tracking_memory_status": stale_tracking_memory_status(),
+                    "step3_bundle": {
+                        "focus_group": [dict(candidate)],
+                        "stock_rows": [dict(candidate)],
+                        "by_code": {"605068": dict(candidate)},
+                    },
+                    "front_page_final_gate": stale_front_page_gate(),
+                    "market_research_bundle": {
+                        "tracking_memory_status": stale_tracking_memory_status(),
+                        "observation_snapshot": {
+                            "tracking_memory_status": stale_tracking_memory_status(),
+                        },
+                        "market_research_snapshot": {
+                            "front_page_final_gate": stale_front_page_gate(),
+                            "final_gate": stale_front_page_gate(),
+                            "tracking_memory_status": stale_tracking_memory_status(),
+                            "observation": {
+                                "tracking_memory_status": stale_tracking_memory_status(),
+                            },
+                        },
+                    },
+                },
                 "personal_position_context": {
                     "existing_position_summary": {
                         "name": "长电科技",
@@ -1249,7 +1347,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                         "position_pct": 100.0,
                         "position_source": "previous_report_target_default_1x",
                     }
-                }
+                },
+                "market_research_snapshot": {
+                    "front_page_final_gate": stale_front_page_gate(),
+                    "final_gate": stale_front_page_gate(),
+                    "tracking_memory_status": stale_tracking_memory_status(),
+                    "observation": {
+                        "tracking_memory_status": stale_tracking_memory_status(),
+                    },
+                },
             }
 
         with patch.object(daily_report_entry_demo, "_postgres_daily_report_service", return_value=FakeService()):
@@ -1285,6 +1391,74 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                 self.assertEqual(inherited["position"], 50.0)
                 self.assertEqual(inherited["position_pct"], 50.0)
                 self.assertEqual(inherited["default_position_pct"], 50.0)
+            stage_context = data["execution_stage_context"]
+            stage_candidates = [
+                stage_context["focus_group"][0],
+                stage_context["waiting_stocks"][0],
+                stage_context["step3_bundle"]["focus_group"][0],
+                stage_context["step3_bundle"]["stock_rows"][0],
+                stage_context["step3_bundle"]["by_code"]["605068"],
+            ]
+            for candidate in stage_candidates:
+                self.assertEqual(candidate["candidate_layer"], "process_observation")
+                self.assertEqual(candidate["execution_eligibility"], "observation_only")
+                self.assertEqual(candidate["attack_state"], "0%不参与")
+                self.assertFalse(candidate["primary_buy_candidate"])
+                self.assertEqual(candidate["target_position_pct"], 0)
+                self.assertEqual(candidate["minute_plan"], {})
+                self.assertNotIn("entry_price", candidate)
+                self.assertNotIn("stop_loss", candidate)
+            for gate in (
+                data["front_page_final_gate"],
+                stage_context["front_page_final_gate"],
+                data["market_research_snapshot"]["front_page_final_gate"],
+                stage_context["market_research_bundle"]["market_research_snapshot"]["front_page_final_gate"],
+            ):
+                self.assertEqual(gate["gate_status"], "只观察")
+                self.assertEqual(gate["operation_state"], "观察态")
+                self.assertEqual(gate["position_level"], "0%不参与")
+                self.assertFalse(gate["can_new_entry"])
+                self.assertFalse(gate["allow_attack_50_ready"])
+                self.assertEqual(gate["base_position_cap_pct"], 0)
+            for market_gate in (
+                data["market_research_snapshot"]["final_gate"],
+                stage_context["market_research_bundle"]["market_research_snapshot"]["final_gate"],
+            ):
+                self.assertEqual(market_gate["gate_status"], "只观察")
+                self.assertEqual(market_gate["operation_state"], "观察态")
+                self.assertEqual(market_gate["position_level"], "0%不参与")
+                self.assertEqual(market_gate["base_position_cap_pct"], 0)
+
+            tracking_copies = (
+                stage_context["tracking_memory_status"],
+                stage_context["market_research_bundle"]["tracking_memory_status"],
+                stage_context["market_research_bundle"]["observation_snapshot"]["tracking_memory_status"],
+                stage_context["market_research_bundle"]["market_research_snapshot"]["tracking_memory_status"],
+                stage_context["market_research_bundle"]["market_research_snapshot"]["observation"]["tracking_memory_status"],
+                data["market_research_snapshot"]["tracking_memory_status"],
+                data["market_research_snapshot"]["observation"]["tracking_memory_status"],
+            )
+            current_list_keys = (
+                "tentative_items",
+                "today_tentative_items",
+                "validated_items",
+                "today_validated_items",
+                "new_items",
+                "promoted_items",
+                "reactivated_items",
+            )
+            for tracking in tracking_copies:
+                for list_key in current_list_keys:
+                    self.assertNotIn("605068", {item.get("code") for item in tracking[list_key]})
+                memory = next(item for item in tracking["total_items"] if item.get("code") == "605068")
+                self.assertEqual(memory["status"], "inactive_recall")
+                self.assertIn("只保留历史记忆", memory["inactive_reason"])
+                self.assertNotIn("current_action", memory)
+                self.assertNotIn("entry_price", memory)
+                self.assertNotIn("stop_loss", memory)
+                self.assertNotIn("minute_plan", memory)
+                self.assertIn("605068", {item.get("code") for item in tracking["inactive_items"]})
+                self.assertIn("000001", {item.get("code") for item in tracking["total_items"]})
 
     def test_stale_cleanup_preserves_historical_tomorrow_empty_directive(self):
         directive = {

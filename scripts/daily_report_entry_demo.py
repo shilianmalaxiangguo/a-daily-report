@@ -4222,6 +4222,14 @@ def _restore_postgres_sector_first_runtime_facts(data, target_date):
         execution_stage_context=execution_context,
         market_research_snapshot=market_snapshot,
     )
+    workflow_selected_candidate = report_runtime._runtime_sync_candidate_surfaces_from_selection_workflow(
+        workflow,
+        data=data,
+        execution_stage_context=execution_context,
+        market_research_snapshot=market_snapshot,
+    )
+    if workflow_selected_candidate is not None:
+        selected_candidate = workflow_selected_candidate
     position_decision = report_runtime._sync_position_decision_with_selection_workflow(
         position_decision,
         workflow,
@@ -4246,6 +4254,25 @@ def _restore_postgres_sector_first_runtime_facts(data, target_date):
         market_research_snapshot=market_snapshot,
         phase="postgres_preflight",
     )
+    if report_runtime._runtime_selection_workflow_final_controls_zero(workflow):
+        prior_front_gate = _first_dict_from_sources(
+            "front_page_final_gate",
+            market_snapshot,
+            execution_context,
+            data,
+        ) or _first_dict_from_sources("final_gate", market_snapshot, execution_context, data)
+        front_page_final_gate = report_runtime._build_effective_front_page_final_gate(
+            prior_front_gate,
+            selected_position_candidate={},
+            position_decision=position_decision,
+            final_target_resolution=resolution,
+        )
+        report_runtime._store_runtime_front_page_final_gate(
+            front_page_final_gate,
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+        )
     return data
 
 
@@ -5582,7 +5609,7 @@ def main():
     parser.add_argument('--tomorrow-empty', action='store_true',
                        help='显式指定明日空仓：不买新股、集合竞价卖清全部可卖旧仓、不做T')
     parser.add_argument('--replay', action='store_true',
-                       help='复盘模式：从快照读数据，只重新拉财联社日历，用最新skill生成报告')
+                       help='复盘模式：优先复用目标日冻结快照；仅在目标日事实缺失时回补后生成报告')
     parser.add_argument('--postgres-only', action='store_true',
                        help='PostgreSQL-only 模式：从 PostgreSQL 读取日报事实，不读取 JSON 快照主来源')
     parser.add_argument('--import-json-to-postgres', action='store_true',

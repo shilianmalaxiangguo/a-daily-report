@@ -423,6 +423,39 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertTrue(any(log["step"] == "refresh.calendar_events" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "refresh.major_indices" for log in result["module_logs"]))
 
+    def test_build_replay_snapshot_contract_defaults_to_frozen_snapshot_without_calendar_refresh(self):
+        snapshot = {
+            "calendar_events": [{"title": "目标日冻结事件"}],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        factory_calls = []
+
+        def unexpected_calendar_factory():
+            factory_calls.append(True)
+            raise AssertionError("默认 replay 不应刷新日历")
+
+        result = build_replay_snapshot_contract(
+            "2026-07-29",
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=unexpected_calendar_factory,
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertTrue(result["found"])
+        self.assertTrue(result["data"]["replay_mode"])
+        self.assertEqual(result["data"]["calendar_events"], [{"title": "目标日冻结事件"}])
+        self.assertEqual(factory_calls, [])
+        self.assertTrue(
+            any(
+                log["step"] == "load.snapshot" and log["details"]["refresh_sources"] == []
+                for log in result["module_logs"]
+            )
+        )
+
     def test_build_replay_snapshot_contract_reuses_target_date_frozen_wiki_trace(self):
         frozen_wiki = _frozen_llm_wiki_context("2026-07-16")
         snapshot = {
@@ -624,7 +657,7 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(replay_wiki["knowledge_hits"], [])
         self.assertIn("当时知识引用缺失", replay_wiki["warnings"][0])
 
-    def test_build_replay_snapshot_contract_refreshes_calendar_when_provider_has_no_target_date_arg(self):
+    def test_build_replay_snapshot_contract_preserves_calendar_when_provider_has_no_target_date_arg(self):
         snapshot = {
             "calendar_events": [{"title": "old"}],
             "indices": [{"code": "sh000001"}],
@@ -642,16 +675,16 @@ def _replay_probe(target_date, refresh_sources=None):
             print_fn=lambda *args, **kwargs: None,
         )
 
-        self.assertEqual(result["data"]["calendar_events"], [{"title": "new"}])
+        self.assertEqual(result["data"]["calendar_events"], [{"title": "old"}])
         self.assertTrue(
             any(
-                log["step"] == "refresh.calendar_events" and log["status"] == "success"
+                log["step"] == "refresh.calendar_events" and log["status"] == "warning"
                 for log in result["module_logs"]
             )
         )
         self.assertFalse(
             any(
-                log["step"] == "refresh.calendar_events" and log["status"] == "warning"
+                log["step"] == "refresh.calendar_events" and log["status"] == "success"
                 for log in result["module_logs"]
             )
         )
@@ -2756,6 +2789,51 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(stock_quote_log["details"]["provider"], "snapshot.stock_full_info")
         preflight = build_report_preflight(data, "2026-05-13")
         self.assertEqual(preflight["failures"], ["中证全指"])
+
+    def test_build_replay_snapshot_contract_does_not_query_critical_fact_sources_when_snapshot_is_complete(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 23117.27,
+            "turnover_data": {"total_turnover_yi": 23117.27, "date": "2026-07-29"},
+            "turnover_rank": [{"code": "605068", "data_source": "snapshot", "trade_date": "2026-07-29"}],
+            "wind_a_alternative": {"price": 6686.86, "data_source": "snapshot", "trade_date": "2026-07-29"},
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+            },
+        }
+        helper_calls = []
+
+        def unexpected_fact_lookup(*args, **kwargs):
+            helper_calls.append((args, kwargs))
+            raise AssertionError("完整冻结快照不应查询外部事实")
+
+        result = build_replay_snapshot_contract(
+            "2026-07-29",
+            refresh_sources=[],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": unexpected_fact_lookup,
+                "get_market_total_turnover_from_fact_db": unexpected_fact_lookup,
+                "get_turnover_rank_from_fact_db": unexpected_fact_lookup,
+                "get_wind_a_from_tushare": unexpected_fact_lookup,
+            },
+        )
+
+        self.assertTrue(result["found"])
+        self.assertEqual(helper_calls, [])
 
     def test_build_replay_snapshot_contract_restores_market_breadth_from_fact_db(self):
         snapshot = {

@@ -109,6 +109,34 @@ def _is_index_recovery_inside_zhongshu(market_zhongshu, zs_signal_type, zt_count
     return index_is_rising_in_pivot and price_still_inside_pivot and market_still_active and not_crash_level_dt
 
 
+def _replay_market_zhongshu(data, target_date):
+    data = data if isinstance(data, dict) else {}
+    candidates = [
+        data.get("market_zhongshu"),
+        (data.get("market_phase_context") or {}).get("market_zhongshu")
+        if isinstance(data.get("market_phase_context"), dict)
+        else None,
+    ]
+    target_date = str(target_date or "")
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source_date = str(
+            candidate.get("trade_date")
+            or candidate.get("source_date")
+            or candidate.get("target_date")
+            or ""
+        )
+        if source_date and source_date == target_date:
+            return dict(candidate)
+    return {
+        "success": False,
+        "reason": "历史回放未冻结大盘中枢结构",
+        "source": "replay_snapshot",
+        "target_date": target_date,
+    }
+
+
 def build_market_phase_context_contract(
     data,
     target_date,
@@ -127,13 +155,24 @@ def build_market_phase_context_contract(
     logs = []
     _append_log(logs, "start", "success", "开始构建市场环境上下文", target_date=target_date)
 
-    market_zhongshu = analyze_market_zhongshu(
-        index_code="sh.000001",
-        recent_days=market_zhongshu_lookback_days,
-        min_zhongshu_klines=market_zhongshu_min_klines,
-        target_date=target_date,
-    )
-    _append_log(logs, "zhongshu", "success", "已完成大盘中枢结构分析", success=bool((market_zhongshu or {}).get("success")))
+    if bool((data or {}).get("replay_mode")):
+        market_zhongshu = _replay_market_zhongshu(data, target_date)
+        _append_log(
+            logs,
+            "zhongshu",
+            "degraded",
+            "历史回放仅使用冻结的大盘中枢结构",
+            success=bool(market_zhongshu.get("success")),
+            source=market_zhongshu.get("source", "replay_snapshot"),
+        )
+    else:
+        market_zhongshu = analyze_market_zhongshu(
+            index_code="sh.000001",
+            recent_days=market_zhongshu_lookback_days,
+            min_zhongshu_klines=market_zhongshu_min_klines,
+            target_date=target_date,
+        )
+        _append_log(logs, "zhongshu", "success", "已完成大盘中枢结构分析", success=bool((market_zhongshu or {}).get("success")))
 
     market_analysis = analyze_market_and_sectors(data)
     market_trend = market_analysis.get("market_status", "震荡整理")

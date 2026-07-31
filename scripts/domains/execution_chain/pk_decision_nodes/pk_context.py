@@ -3,6 +3,7 @@ from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATI
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     blocked_current_observation_keys,
     candidate_can_be_current_observation_target,
+    workflow_final_candidate,
 )
 
 
@@ -167,14 +168,24 @@ def _is_ten_confirm_upgrade_candidate(candidate):
 
 
 def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None):
-    trade_gate_open = context.get("trade_gate_open", False)
-    display_pending_candidates = context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
-    display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    workflow = _selection_workflow_from_context(context)
+    workflow_final_target, workflow_position_pct = workflow_final_candidate(workflow)
+    trade_gate_open = bool(workflow_final_target) if workflow else context.get("trade_gate_open", False)
+    display_pending_candidates = (
+        []
+        if workflow
+        else context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
+    )
+    display_observation_candidates = (
+        []
+        if workflow
+        else context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    )
     display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
     blocked_observation_keys = blocked_current_observation_keys(display_observation_candidates)
     display_observation_candidates = _surface_observation_candidates(display_observation_candidates)
-    best_stock = context.get("best_stock")
-    watch_anchor = context.get("watch_anchor")
+    best_stock = workflow_final_target or None if workflow else context.get("best_stock")
+    watch_anchor = None if workflow else context.get("watch_anchor")
     if not candidate_can_be_current_observation_target(watch_anchor) or _candidate_key(watch_anchor) in blocked_observation_keys:
         watch_anchor = None
     if _final_target_empty_without_current_observation(context):

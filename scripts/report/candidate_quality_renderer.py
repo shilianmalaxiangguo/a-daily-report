@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from report.selection_workflow import (
+    PROCESS_OBSERVATION_TABLE_FIELDS,
+    process_observation_row,
+)
+
 
 PANEL_FIELDS = [
     "市场情绪状态",
@@ -107,8 +112,11 @@ def _join_values(values, separator="、"):
     return separator.join(_cell(value) for value in _as_list(values) if _cell(value))
 
 
-def _render_panel(panel, heading_level=3):
-    visible_fields = (panel or {}).get("visible_fields", {}) or {}
+def _render_panel(panel, heading_level=3, *, final_target_empty=False):
+    visible_fields = dict((panel or {}).get("visible_fields", {}) or {})
+    if final_target_empty:
+        visible_fields["主买对象"] = "无"
+        visible_fields["补位对象"] = "无"
     lines = [_heading(heading_level, "今日总决策面板"), "", "| 字段 | 内容 |", "|------|------|"]
     for field in PANEL_FIELDS:
         lines.append(f"| {field} | {_cell(visible_fields.get(field, ''))} |")
@@ -137,6 +145,41 @@ def _render_candidate_table_scope_note(final_target_empty=False):
         "> 当前最终对象为空；下表只回放筛选过程，表内股票不是明日执行对象，也不是当前观察对象。",
         "",
     ]
+
+
+def _process_observation_contract_row(contract):
+    trace = _contract_trace(contract)
+    stock = {
+        "name": trace.get("stock_name", ""),
+        "code": trace.get("stock_code", ""),
+        "sector": trace.get("sector", ""),
+    }
+    return process_observation_row(
+        {
+            "stock": stock,
+            "sector": trace.get("sector", ""),
+            "source_pools": trace.get("source_pools", []),
+            "workflow_path": trace.get("workflow_path", []),
+            "first_seen_node": trace.get("first_seen_node", ""),
+            "eliminated_at": trace.get("eliminated_at", ""),
+            "process_rejection_reason": trace.get("process_rejection_reason", ""),
+        }
+    )
+
+
+def _render_process_observation_table(contracts, heading_level=3):
+    rows = [
+        row
+        for row in (_process_observation_contract_row(contract) for contract in contracts or [])
+        if row
+    ]
+    lines = [_heading(heading_level, "候选过程回放"), ""]
+    if not rows:
+        lines.append("暂无候选过程记录。")
+        return lines
+    fields = list(PROCESS_OBSERVATION_TABLE_FIELDS)
+    lines.extend(_render_table_rows(fields, rows))
+    return lines
 
 
 def _with_process_scope_rows(contracts, final_target_empty=False):
@@ -555,9 +598,12 @@ def render_candidate_quality_section(
 ):
     contracts = _with_process_scope_rows(candidate_contracts, final_target_empty=final_target_empty)
     lines = [_heading(heading_level, "候选质量与动作分层"), ""]
-    lines.extend(_render_panel(panel, heading_level + 1))
+    lines.extend(_render_panel(panel, heading_level + 1, final_target_empty=final_target_empty))
     lines.append("")
     lines.extend(_render_candidate_table_scope_note(final_target_empty=final_target_empty))
+    if final_target_empty:
+        lines.extend(_render_process_observation_table(contracts, heading_level + 1))
+        return "\n".join(lines)
     lines.extend(
         _render_candidate_table(
             contracts,

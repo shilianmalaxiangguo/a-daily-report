@@ -21,7 +21,11 @@ from report.position_tier_contract import (
     POSITION_TIER_B1_B2_PCT,
     normalize_planned_position_tier_pct,
 )
-from report.selection_workflow import render_selection_workflow_mermaid
+from report.selection_workflow import (
+    process_observation_table_lines,
+    render_selection_workflow_mermaid,
+    selection_workflow_final_is_zero,
+)
 from report.sniper_target_derivation import clean_text, normalize_stock_code
 
 
@@ -417,6 +421,11 @@ def _workflow_final_controls_target(workflow):
     return _workflow_position_pct(workflow) > 0 and bool(_workflow_final_target(workflow))
 
 
+def _workflow_owns_final_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    return workflow.get("schema_version") == "selection_workflow.v1" and "final" in workflow
+
+
 def _explicit_front_observation_target(final_target_resolution):
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     target = resolution.get("watch_target")
@@ -548,6 +557,15 @@ def _candidate_pool_entries(final_target_resolution, execution_stage_context):
     context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
     entries = []
     seen = {}
+    workflow = _selection_workflow_from_context(context)
+    workflow_candidates = workflow.get("candidate_pool") if isinstance(workflow.get("candidate_pool"), list) else []
+    if workflow:
+        for item in workflow_candidates:
+            if not isinstance(item, dict):
+                continue
+            source_pools = [clean_text(source) for source in item.get("source_pools", []) if clean_text(source)]
+            _append_candidate(entries, seen, item, "、".join(source_pools) or "选股流程候选池")
+        return entries
     for key, source in (
         ("display_target", "最终对象"),
         ("tradable_proxy_target", "可执行替代对象"),
@@ -556,13 +574,6 @@ def _candidate_pool_entries(final_target_resolution, execution_stage_context):
         ("process_target", "过程候选"),
     ):
         _append_candidate(entries, seen, resolution.get(key), source)
-    workflow = _selection_workflow_from_context(context)
-    workflow_candidates = workflow.get("candidate_pool") if isinstance(workflow.get("candidate_pool"), list) else []
-    for item in workflow_candidates:
-        if not isinstance(item, dict):
-            continue
-        source_pools = [clean_text(source) for source in item.get("source_pools", []) if clean_text(source)]
-        _append_candidate(entries, seen, item, "、".join(source_pools) or "选股流程候选池")
     bundle = context.get("step2_bundle") if isinstance(context.get("step2_bundle"), dict) else {}
     for key, source in (
         ("core_stocks", "核心候选池"),
@@ -1100,18 +1111,26 @@ def build_two_layer_decision_payload(
     workflow_target = _workflow_final_target(workflow)
     workflow_pct = _workflow_position_pct(workflow)
     workflow_controls_target = _workflow_final_controls_target(workflow)
-    workflow_zero_position = bool(_workflow_final(workflow)) and (workflow_pct <= 0 or not workflow_target)
+    workflow_zero_position = _workflow_owns_final_target(workflow) and (
+        workflow_pct <= 0 or not workflow_target
+    )
     priority = "tomorrow_empty" if tomorrow_empty else _capital_priority(resolution)
     exposure_plan = _position_tier_exposure_plan(resolution)
     uses_position_tier_exposure = _position_tier_exposure_v2(exposure_plan)
     position_pct = _position_pct(position_decision)
     planned_position_pct = (
-        _normalized_position_pct(exposure_plan.get("planned_new_entry_pct", 0))
+        _normalized_position_pct(workflow_pct)
+        if workflow_controls_target
+        else _normalized_position_pct(exposure_plan.get("planned_new_entry_pct", 0))
         if uses_position_tier_exposure
-        else _normalized_position_pct(workflow_pct if workflow_controls_target else position_pct)
+        else _normalized_position_pct(position_pct)
     )
     wait_without_current_object = _wait_priority_has_no_current_object(priority)
-    final_empty_without_current_object = tomorrow_empty or workflow_zero_position or wait_without_current_object
+    final_empty_without_current_object = (
+        tomorrow_empty
+        or workflow_zero_position
+        or (wait_without_current_object and not workflow_controls_target)
+    )
     pool_resolution = (
         {}
         if tomorrow_empty or (workflow_present and workflow_zero_position) or wait_without_current_object
@@ -1144,10 +1163,10 @@ def build_two_layer_decision_payload(
     resolved_position_pct = (
         0
         if tomorrow_empty
-        else _normalized_position_pct(exposure_plan.get("new_entry_pct", 0))
-        if uses_position_tier_exposure
         else _normalized_position_pct(workflow_pct)
         if workflow_controls_target
+        else _normalized_position_pct(exposure_plan.get("new_entry_pct", 0))
+        if uses_position_tier_exposure
         else _normalized_position_pct(position_pct)
         if target
         else 0
@@ -1616,26 +1635,30 @@ def render_selection_workflow_derivation_layer(workflow):
     mermaid = render_selection_workflow_mermaid(workflow)
     if mermaid:
         lines.extend(["", "### 流程图", "```mermaid", mermaid, "```"])
-    lines.extend(["", "### 候选生命周期证据"])
-    lines.append("| 股票 | 首次来源 | 入口处理 | 板块角色 | 反推结论 | 对照结果 | 最终动作 |")
-    lines.append("|---|---|---|---|---|---|---|")
-    for item in workflow.get("candidate_pool", []) or []:
-        if not isinstance(item, dict):
-            continue
-        stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _stock_label(stock),
-                    "、".join(clean_text(source) for source in item.get("source_pools", []) or [] if clean_text(source)) or "-",
-                    clean_text(item.get("entry_basis"), clean_text(item.get("entered_reason"), "-")),
-                    clean_text(item.get("sector_role"), "-"),
-                    clean_text(item.get("reversal_decision"), "-"),
-                    clean_text(item.get("eliminated_reason"), clean_text(item.get("status"), "-")),
-                    clean_text(item.get("status"), "-"),
-                ]
+    if selection_workflow_final_is_zero(workflow):
+        lines.extend(["", "### 候选过程回放"])
+        lines.extend(process_observation_table_lines(workflow.get("candidate_pool")))
+    else:
+        lines.extend(["", "### 候选生命周期证据"])
+        lines.append("| 股票 | 首次来源 | 入口处理 | 板块角色 | 反推结论 | 对照结果 | 最终动作 |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for item in workflow.get("candidate_pool", []) or []:
+            if not isinstance(item, dict):
+                continue
+            stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _stock_label(stock),
+                        "、".join(clean_text(source) for source in item.get("source_pools", []) or [] if clean_text(source)) or "-",
+                        clean_text(item.get("entry_basis"), clean_text(item.get("entered_reason"), "-")),
+                        clean_text(item.get("sector_role"), "-"),
+                        clean_text(item.get("reversal_decision"), "-"),
+                        clean_text(item.get("eliminated_reason"), clean_text(item.get("status"), "-")),
+                        clean_text(item.get("status"), "-"),
+                    ]
+                )
+                + " |"
             )
-            + " |"
-        )
     return lines

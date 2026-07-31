@@ -135,6 +135,17 @@ def _normalize_stock_code(value):
 
 
 def _final_execution_stock_code(context):
+    workflow = _context_value(context, "selection_workflow", {}) or {}
+    if (
+        isinstance(workflow, dict)
+        and workflow.get("schema_version") == "selection_workflow.v1"
+        and "final" in workflow
+    ):
+        final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+        target = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+        if _safe_int(final.get("position_pct")) <= 0:
+            return ""
+        return _normalize_stock_code(target.get("stock_code") or target.get("code")) if target else ""
     target = (context or {}).get("final_execution_target")
     if not isinstance(target, dict):
         target = {}
@@ -169,6 +180,37 @@ def _candidate_visible_row(idx, item, final_execution_code):
         item.get("conviction_reason") or item.get("reason"),
         principle,
     ]
+
+
+def _selection_workflow_candidate_rows(context):
+    workflow = _context_value(context, "selection_workflow", {}) or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return None
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    final_target = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    final_code = _normalize_stock_code(final_target.get("stock_code") or final_target.get("code"))
+    rows = []
+    for item in workflow.get("candidate_pool", []) or []:
+        if not isinstance(item, dict):
+            continue
+        stock = item.get("stock") if isinstance(item.get("stock"), dict) else item
+        candidate = dict(stock or {})
+        code = _normalize_stock_code(candidate.get("stock_code") or candidate.get("code"))
+        is_final = bool(final_code and code == final_code and _safe_int(final.get("position_pct")) > 0)
+        candidate["sniper_role"] = "明日执行对象" if is_final else (item.get("status") or "过程候选")
+        candidate["conviction_reason"] = (
+            item.get("current_reason")
+            or item.get("eliminated_reason")
+            or item.get("entered_reason")
+            or "候选台账过程证据"
+        )
+        candidate["conviction_rule"] = (
+            final.get("action_text")
+            if is_final
+            else "只作过程回放，不新增参与"
+        )
+        rows.append(candidate)
+    return rows
 
 
 def _review_reasons(item):
@@ -507,7 +549,12 @@ def _build_mainline_continuity_node(context, node_meta=None, node_lookup=None):
 
 
 def _build_visible_candidate_lists_node(context, node_meta=None, node_lookup=None):
-    extreme_conviction_list = _context_value(context, "extreme_conviction_list", []) or []
+    workflow_candidates = _selection_workflow_candidate_rows(context)
+    extreme_conviction_list = (
+        workflow_candidates
+        if workflow_candidates is not None
+        else (_context_value(context, "extreme_conviction_list", []) or [])
+    )
     dragon_rebound_watch_pool = _context_value(context, "dragon_rebound_watch_pool", []) or []
     final_execution_code = _final_execution_stock_code(context)
     lines = []

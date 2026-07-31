@@ -229,22 +229,32 @@ class CandidateQualityRendererTest(unittest.TestCase):
         panel = build_daily_quality_decision_panel(
             market_emotion_label="0%不参与",
             daily_new_entry_limit=0,
+            primary_buy_candidate={"name": "明新旭腾", "code": "605068"},
+            backup_candidate={"name": "华天酒店", "code": "000428"},
         )
         contracts = [
             evaluate_candidate_quality_sample_contract(
                 {
-                    "name": "大有能源",
-                    "code": "600403",
+                    "name": "明新旭腾",
+                    "code": "605068",
                     "tier": "T1",
                     "source_pools": ["watch_anchor"],
-                    "mainline": "半导体",
-                    "sector": "煤炭开采",
+                    "mainline": "国产芯片替代",
+                    "sector": "汽车配件",
                     "market_fit": "未满足",
                     "mainline_fit": "未满足",
                     "stock_structure_fit": "数据缺失",
-                    "candidate_role": "观察样本",
-                    "anchor_reversal_decision": "降级观察",
-                    "final_action": "只观察，不新增参与",
+                    "candidate_role": "板块锚",
+                    "sector_anchor": "明新旭腾(605068)",
+                    "relationship_to_anchor": "候选本身就是板块锚",
+                    "anchor_reversal_decision": "可作为主对象",
+                    "anchor_reversal_reason": "分歧后资金优先回看",
+                    "workflow_path": ["N5", "N6", "N7"],
+                    "process_rejection_reason": "价格行为未通过确认；未证明来自板块资金方向",
+                    "latest_price": 18.72,
+                    "participation_window": "09:50-10:10",
+                    "failure_condition": "预估17.78 / 最晚17.78",
+                    "final_action": "09:50-10:10确认后可作为主对象",
                 }
             )
         ]
@@ -258,10 +268,21 @@ class CandidateQualityRendererTest(unittest.TestCase):
         )
 
         self.assertIn("当前最终对象为空；下表只回放筛选过程", markdown)
-        self.assertIn("| 候选 | 对象口径 | 账户状态 | 动作上限 | 新开仓动作 |", markdown)
-        self.assertIn("| 大有能源(600403) | 过程样本，非当前对象 |", markdown)
-        self.assertIn("| 过程样本 | 大有能源(600403) |", markdown)
-        self.assertIn("只作过程回放，不新增参与", markdown)
+        self.assertIn("| 主买对象 | 无 |", markdown)
+        self.assertIn("| 补位对象 | 无 |", markdown)
+        self.assertIn("| 候选 | 板块 | 历史来源 | 筛选路径 | 淘汰原因 | 过程处理 |", markdown)
+        self.assertIn(
+            "| 明新旭腾(605068) | 汽车配件 | watch_anchor | N5 -> N6 -> N7 | 价格行为未通过确认；未证明来自板块资金方向 | 只作过程回放，不新增参与 |",
+            markdown,
+        )
+        self.assertNotIn("狙击手最终标的路径图", markdown)
+        self.assertNotIn("候选选股轨迹", markdown)
+        self.assertNotIn("单票展开", markdown)
+        self.assertNotIn("板块锚", markdown)
+        self.assertNotIn("可作为主对象", markdown)
+        self.assertNotIn("09:50-10:10", markdown)
+        self.assertNotIn("18.72", markdown)
+        self.assertNotIn("17.78", markdown)
 
     def test_renderer_outputs_sniper_ascii_selection_graph(self):
         panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")

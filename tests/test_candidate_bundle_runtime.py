@@ -405,6 +405,67 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(evaluated["recent_bars"], bars)
         self.assertEqual(result["extreme_conviction_list"][0]["recent_bars"], bars)
 
+    def test_candidate_bundle_replay_fast_fails_missing_price_bars(self):
+        calls = []
+
+        result = build_candidate_bundle_contract(
+            data={"replay_mode": True},
+            exit_analysis={"sector_name": "光通信"},
+            candidates=[],
+            watchlist=[{"name": "光迅科技", "code": "002281", "sector": "光通信", "score": 88}],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-07-29",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+            fetch_recent_price_bars=lambda code, target_date, lookback_days=120, fast_fail=False: calls.append(
+                (code, target_date, lookback_days, fast_fail)
+            ) or [],
+        )
+
+        self.assertEqual(calls, [("002281", "2026-07-29", 120, True)])
+        self.assertNotIn("recent_bars", result["evaluated_stocks"][0])
+
+    def test_candidate_bundle_replay_keeps_frozen_price_bars_without_fetching(self):
+        frozen_bars = [{"date": "2026-07-29", "close": 12.0}]
+        calls = []
+
+        result = build_candidate_bundle_contract(
+            data={"replay_mode": True},
+            exit_analysis={"sector_name": "光通信"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "光迅科技",
+                    "code": "002281",
+                    "sector": "光通信",
+                    "score": 88,
+                    "recent_bars": frozen_bars,
+                }
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-07-29",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+            fetch_recent_price_bars=lambda *args, **kwargs: calls.append((args, kwargs)) or [],
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(result["evaluated_stocks"][0]["recent_bars"], frozen_bars)
+
     def test_candidate_bundle_blocks_cyberfininvest_risk_from_extreme_conviction(self):
         result = build_candidate_bundle_contract(
             data={

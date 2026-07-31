@@ -75,6 +75,50 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertEqual(captured_kwargs["recent_days"], 250)
         self.assertEqual(captured_kwargs["min_zhongshu_klines"], 20)
 
+    def test_replay_uses_only_frozen_zhongshu_and_never_calls_live_analyzer(self):
+        def unexpected_live_analyzer(**kwargs):
+            raise AssertionError(f"replay must not request live zhongshu: {kwargs}")
+
+        result = build_market_phase_context_contract(
+            data={
+                "replay_mode": True,
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 1000, "down_count": 2000},
+            },
+            target_date="2026-07-29",
+            analyze_market_zhongshu=unexpected_live_analyzer,
+            analyze_market_and_sectors=lambda data: {"market_status": "震荡整理"},
+            resolve_market_mainline_context=lambda data, market_analysis: {
+                "main_sectors": [],
+                "secondary_sectors": [],
+                "main_sectors_info": [],
+                "secondary_sectors_info": [],
+                "dragon_stocks": [],
+            },
+            build_mainline_exit_analysis=lambda data, market_analysis, dragon_stocks, main_sectors: {"overall_level": "黄灯"},
+            merge_position_gate=lambda position_level, exit_analysis: {
+                "position_level": position_level,
+                "operation_state": "防守态",
+                "can_new_entry": False,
+                "can_hold": False,
+                "should_reduce": True,
+                "gate_reason": "",
+            },
+            build_market_state_machine_snapshot=lambda **kwargs: {},
+            resolve_environment_display_contract=lambda **kwargs: {
+                "position_level": kwargs["position_level"],
+                "operation_state": kwargs["final_gate"]["operation_state"],
+            },
+            calculate_price_range=lambda item: {},
+        )
+
+        self.assertFalse(result["market_zhongshu"]["success"])
+        self.assertEqual(result["market_zhongshu"]["source"], "replay_snapshot")
+        self.assertTrue(
+            any(log["step"] == "zhongshu" and log["status"] == "degraded" for log in result["module_logs"])
+        )
+
     def test_rising_index_inside_zhongshu_does_not_force_empty_position_from_breadth_divergence(self):
         result = build_market_phase_context_contract(
             {

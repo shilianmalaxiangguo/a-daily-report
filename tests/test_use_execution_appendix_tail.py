@@ -204,12 +204,23 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
 
         extreme_list = [{"name": "风华高科", "code": "000636"}]
         dragon_pool = [{"name": "汇源通信", "code": "000586"}]
+        selection_workflow = {
+            "schema_version": "selection_workflow.v1",
+            "candidate_pool": [],
+            "final": {"execution_object": {}, "position_pct": 0},
+        }
+        final_target_resolution = {
+            "canonical_source": "selection_workflow.final",
+            "new_entry_target": {},
+        }
 
         result = run(
             {
                 "inputs": {
                     "extreme_conviction_list": extreme_list,
                     "dragon_rebound_watch_pool": dragon_pool,
+                    "selection_workflow": selection_workflow,
+                    "final_target_resolution": final_target_resolution,
                 },
                 "helpers": {"render_execution_appendix": fake_render},
             }
@@ -218,8 +229,12 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         render_context = captured["render_context"]
         self.assertEqual(render_context["extreme_conviction_list"], extreme_list)
         self.assertEqual(render_context["dragon_rebound_watch_pool"], dragon_pool)
+        self.assertEqual(render_context["selection_workflow"], selection_workflow)
+        self.assertEqual(render_context["final_target_resolution"], final_target_resolution)
         self.assertEqual(result["value"]["exports"]["extreme_conviction_list"], extreme_list)
         self.assertEqual(result["value"]["exports"]["dragon_rebound_watch_pool"], dragon_pool)
+        self.assertEqual(result["value"]["exports"]["selection_workflow"], selection_workflow)
+        self.assertEqual(result["value"]["exports"]["final_target_resolution"], final_target_resolution)
 
     def test_execution_appendix_tail_hook_passes_request_diagnostics_to_renderer(self):
         captured = {}

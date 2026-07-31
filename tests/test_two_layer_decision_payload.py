@@ -214,6 +214,44 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertEqual(payload["front_decision"]["execution_object"]["code"], "001896")
         self.assertEqual(payload["front_decision"]["position_plan"], "50%条件执行")
 
+    def test_workflow_candidate_pool_excludes_conflicting_legacy_containers(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {
+                "execution_object": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                "position_pct": 50,
+                "action_text": "50%条件执行",
+            },
+            "candidate_pool": [
+                {
+                    "stock": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                    "source_pools": ["sector_derived_candidates"],
+                    "status": "最终执行对象",
+                    "candidate_origin": "sector_first",
+                    "new_entry_qualified": True,
+                }
+            ],
+        }
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-29",
+            final_target_resolution={
+                "display_target": {"name": "明新旭腾", "code": "605068"},
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+            },
+            position_decision={"target_position_pct": 50},
+            execution_stage_context={
+                "selection_workflow": workflow,
+                "step2_bundle": {
+                    "core_stocks": [{"name": "明新旭腾", "code": "605068"}],
+                },
+                "waiting_stocks": [{"name": "上海石化", "code": "600688"}],
+            },
+        )
+
+        pool_codes = [row["stock"]["code"] for row in payload["candidate_pool_verdict"]["pool_source"]]
+        self.assertEqual(pool_codes, ["001896"])
+        self.assertEqual(payload["front_decision"]["execution_object"]["code"], "001896")
+
     def test_workflow_zero_position_does_not_create_front_execution_object(self):
         workflow = {
             "schema_version": "selection_workflow.v1",
@@ -239,6 +277,80 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertEqual(payload["front_decision"]["execution_object"], {})
         self.assertEqual(payload["front_decision"]["position_plan"], "0%不参与")
         self.assertEqual(payload["b_level_conditions"], {})
+
+    def test_workflow_empty_final_dict_still_owns_zero_result(self):
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-29",
+            final_target_resolution={
+                "new_entry_target": {"name": "旧对象", "code": "000001"},
+                "display_target": {"name": "旧对象", "code": "000001"},
+                "capital_priority_decision": {
+                    "capital_priority": "new_entry",
+                    "reason": "旧解析结果",
+                },
+            },
+            position_decision={"target_position_pct": 50},
+            execution_stage_context={
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {},
+                    "candidate_pool": [],
+                }
+            },
+        )
+
+        self.assertEqual(payload["front_decision"]["execution_object"], {})
+        self.assertEqual(payload["front_decision"]["position_pct"], 0)
+        self.assertEqual(payload["front_decision"]["position_plan"], "0%不参与")
+        self.assertEqual(payload["b_level_conditions"], {})
+
+    def test_zero_position_derivation_uses_process_only_candidate_projection(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+            "nodes": [],
+            "candidate_pool": [
+                {
+                    "stock": {"name": "明新旭腾", "code": "605068", "sector": "汽车配件"},
+                    "sector": "汽车配件",
+                    "source_pools": ["extreme_conviction_list"],
+                    "workflow_path": ["N5", "N6", "N7"],
+                    "process_rejection_reason": "价格行为未通过确认；未证明来自板块资金方向",
+                    "entry_basis": "09:50-10:10站上18.72后可作为主对象",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "eliminated_reason": "失效价17.78",
+                    "status": "过程候选",
+                }
+            ],
+        }
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-29",
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+            position_decision={"target_position_pct": 0},
+            execution_stage_context={"selection_workflow": workflow},
+        )
+
+        front_text = "\n".join(render_front_decision_layer(payload))
+        audit_text = "\n".join(render_derivation_audit_layer(payload))
+
+        self.assertIn("| 明日执行对象 | 无 |", front_text)
+        self.assertIn("### 候选过程回放", audit_text)
+        self.assertIn(
+            "| 明新旭腾(605068) | 汽车配件 | extreme_conviction_list | N5 -> N6 -> N7 | 价格行为未通过确认；未证明来自板块资金方向 | 只作过程回放，不新增参与 |",
+            audit_text,
+        )
+        self.assertNotIn("板块锚", audit_text)
+        self.assertNotIn("可作为主对象", audit_text)
+        self.assertNotIn("09:50-10:10", audit_text)
+        self.assertNotIn("18.72", audit_text)
+        self.assertNotIn("17.78", audit_text)
 
     def test_workflow_non_tier_position_does_not_create_execution_or_plan_object(self):
         target = {"name": "豫能控股", "code": "001896", "sector": "电力"}

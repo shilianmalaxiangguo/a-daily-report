@@ -325,8 +325,11 @@ new-entry result is 0%.
   index, rebound highs stepping down, or a break of the prior low / planned
   support, the old-position plan must move from tail-session default to rebound
   exit or invalidation exit.
-- When a report carries `selection_workflow.derivation_contract = "sector_first_strict.v1"`, the front page and report payload must treat `selection_workflow.final` as the only source of the final execution object. If that final object is empty or `position_pct <= 0`, older `selected_position_candidate` / `unique_action_target` values may remain as observation evidence, but they must not reappear as a new execution object.
+- When a report carries `selection_workflow.derivation_contract = "sector_first_strict.v1"`, the front page and report payload must treat `selection_workflow.final` as the only source of the final execution object. The presence of the `final` key owns this decision even when its value is `{}` or its object is empty. Older `selected_position_candidate` / `unique_action_target` values may remain only as source or historical evidence; they must not reappear as a current execution object, current observation target, or current tracking item.
 - When `selection_workflow.final` is empty or final position is 0%, process-candidate action text must be observation-only at every layer: candidate generation, Step 2 tables, action-plan context, appendix tables, final Markdown sanitation, and HTML source text. Phrases such as `命中才参与`, `后再参与`, or `继续强就只做它` are invalid in process-candidate rows under a 0% final result; render `只观察承接，不新增参与` or `只作过程回放，不新增参与` instead.
+- Every candidate other than the positive `selection_workflow.final.execution_object` must leave `tentative_items`, `today_tentative_items`, `validated_items`, `today_validated_items`, `new_items`, `promoted_items`, and `reactivated_items`. It may remain in `total_items` and `inactive_items` only as `status=inactive_recall`, with no current action, future window, price plan, stop plan, minute plan, or planned-participation payload.
+- A decision-ledger row for a non-final candidate must use a pure `planned_participation.v1` no-trade record: `window=no_trade`, `action=skip`, and `position_plan_pct=0`. It must not merge the default MA participation template, fixed trading windows, positive position wording, or candidate-specific future prices back into that record.
+- Runtime and PostgreSQL/replay restore paths must synchronize the front-page conclusion across root data, execution context, and every present market-research snapshot copy. Zero-final copies use `gate_status=只观察`, `operation_state=观察态`, `position_level=0%不参与`, `can_new_entry=false`, and `base_position_cap_pct=0`. A positive final object is excluded from process demotion, and independently confirmed old-position actions remain separate.
 - Next-day attribution must keep execution, final observation, process candidate, and historical evidence in separate settlement buckets. A process candidate that rises or reaches limit-up the next day can count only as `process_candidate_hit`; it must not count as `execution_hit` unless it was `final_target_resolution.new_entry_target` and the report position was above 0%.
 - Sector-first critical inputs must be part of the report preflight failure set. Missing market, sector, leader, price-action, or account-execution inputs must stop generation and list the missing items before any report artifacts are saved.
 - 50% and 100% results require a planned participation record. If no record exists, render the item as observation and record the missing field.
@@ -479,6 +482,10 @@ new-entry result is 0%.
 | Core-candidate row already has a stale resolved result | Recompute and replace the same `report_date` plus `judgment_type` row from latest auditable facts |
 | Sector-first chain is missing market, sector, leader, price-action, or account-execution inputs | Stop generation and list the missing items before saving report artifacts |
 | Final result is 0% or empty but process table contains participation-style wording | Rewrite the row to observation/process-review wording and keep the candidate out of current/final object fields |
+| A valid workflow has `final={}` while an old resolution or appendix target is non-empty | Treat the workflow final as authoritative 0%; do not fall back to the old object |
+| A non-final candidate remains in a current tracking-memory list | Remove it from every current list; retain only an `inactive_recall` history row without future plans |
+| A non-final decision-ledger row says `skip` but still contains an MA entry template or `50%` window text | Replace the whole plan with the pure no-trade contract instead of overlaying zero fields on the old template |
+| A positive final object is present beside other process candidates | Preserve the final object and its planned tier; demote only the other candidates |
 | Report says a 0% observation target can become 50% on T+1 when conditions become true | Treat as invalid wording; T+1 evidence is review/next-report input only |
 | Report says a 50% target will be decided intraday instead of already decided at T0 | Render as an already decided conditional execution plan; conditions only execute or cancel |
 | Process candidate is +10% next day but was not the new-entry target | Count it as `process_candidate_hit`; keep `execution_hit_count` at 0 |
@@ -508,6 +515,9 @@ new-entry result is 0%.
 | Good five-judgment table | explicit `judgment_reviews` plus participation review rows | Render five rows with independent accuracy and mistake text |
 | Base five-judgment table | no market-state settlement evidence | Market-state row renders `待补事实` and does not affect accuracy |
 | Good empty-final appendix | final object empty, process candidate keeps price/sector evidence | All action cells say observation/process review; no current object or participation-style action appears |
+| Good empty-final memory cleanup | final object empty, legacy current lists contain 明新旭腾, historical total memory also contains it | Current lists omit the stock; total/inactive memory keeps an `inactive_recall` row with no future plan |
+| Good positive-final cleanup | final object is A while old lists also contain B | A keeps its final identity and planned tier; B becomes process evidence only |
+| Bad zero-overlay plan | decision-ledger row says 0%/skip but still carries a 09:50-10:10 MA template | Rebuild the plan as pure `no_trade`; do not preserve the old template |
 | Good process-candidate follow-up | process candidate limit-up next day while report position was 0% | Process bucket records a hit; execution bucket stays 0 |
 | Good holding plus 0% result | User holds 太极实业, final new-entry result is 0%, minute comparison shows sustained relative weakness | Report says no new entry and separately gives old-position risk-reward, rebound exit, invalidation exit, and tail-session permission |
 | Good simulated inheritance | Previous report named 长电科技 as tomorrow target | Next trading day has confirmed old-position 1x / 50%, old-position actions, and no pending wording |
@@ -562,6 +572,9 @@ When implementation changes this contract, add or update tests that assert:
 - database-backed tracking rows still render coverage from the full ledger index,
 - `tests.test_candidate_selection_stage` covers zero-position process-candidate action text such as `命中才参与` being rewritten to observation-only wording,
 - `tests.test_daily_report_render` covers final Markdown sanitation for old frozen text where a 0% report still contains stale process-candidate participation wording,
+- `tests.test_report_runtime` covers positive-final preservation, non-final current-list removal, `inactive_recall` history retention, and synchronized zero-final front-page copies,
+- `tests.test_decision_ledger` asserts non-final plans are pure `no_trade` and contain no fixed window, `50%` wording, MA participation template, or future price,
+- `tests.test_daily_report_entry_html_output` covers PostgreSQL load/save/import restoration across root, execution, market-research, tracking-memory, and front-page copies,
 - `tests.test_next_day_attribution` covers process-candidate hits staying out of execution hit counts,
 - 60/120-day wording is not rendered until coverage supports it.
 - inherited previous-report targets stay in Td/Te as confirmed old positions but
@@ -609,6 +622,23 @@ The report stores a 50% planned participation record with a 09:50-10:10 window, 
 ```
 
 Why correct: the decision can be replayed, reviewed, and measured without changing the original trading context.
+
+#### Wrong: zero only the headline fields
+
+```text
+planned_participation.action=skip, position_plan_pct=0,
+but ma_reversion_probe still says 09:50-10:10 can become 50%.
+```
+
+#### Correct: replace the non-final plan
+
+```text
+window=no_trade, action=skip, position_plan_pct=0;
+no MA participation template, future window, or candidate price remains.
+```
+
+Why correct: a consumer cannot resurrect a second stock-specific plan from
+nested fields after the unified workflow has rejected that candidate.
 
 #### Wrong: infer the account from the new-entry result
 
@@ -2256,6 +2286,93 @@ ranking does not prove sector dominance or a confirmed transmission path.
 
 Why correct: it preserves the early-warning value while separating confirmed
 facts, structural interpretation, and the later replay result.
+
+## Scenario: Full And Summary Render Input Isolation
+
+### 1. Scope / Trigger
+
+Apply this contract when `build_report_outputs()` renders the full and summary
+variants from one target-date fact payload. Both variants may run the same
+runtime builders, and those builders may append candidates or other derived
+facts to their input mapping.
+
+### 2. Signatures
+
+```python
+build_report_outputs(data: dict, target_date: str, ...) -> dict[str, str]
+
+# After normalization, preflight, and quote-sensitive cleanup, but before either
+# renderer runs:
+summary_data = copy.deepcopy(data)
+full_report = _render_report_with_display_mode(False, data, target_date, ...)
+summary_report = _render_report_with_display_mode(True, summary_data, target_date, ...)
+```
+
+### 3. Contracts
+
+- Run input normalization, preflight, and quote-sensitive cleanup before the
+  variant split so both variants start from the same accepted target-date facts.
+- Create the summary copy before the full renderer runs. Copying after the full
+  render preserves full-render mutations and recreates cumulative candidates.
+- The full renderer owns the original `data` object because downstream replay
+  snapshot and runtime-artifact persistence consume that object.
+- The summary renderer receives a deep copy. Its mutations must not write back
+  to the full-render payload or the persisted replay snapshot.
+- Full Markdown, Bear HTML, and the persisted replay snapshot must report the
+  same unified-candidate input count and candidate identities.
+- The summary variant may shorten presentation, but it must begin with the same
+  candidate facts and formal final decision as the full variant.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Full and summary receive the same root mapping | Split them with a deep copy before either render |
+| Summary copy is created after full rendering | Move the copy before the full renderer so full-only candidates do not leak into summary |
+| Summary mutation changes the original candidate list | Treat as a render-isolation regression and fail the unit test |
+| Replay Markdown and snapshot show different candidate counts | Treat the replay as inconsistent; inspect variant input ownership before publication |
+| Full render adds one valid derived candidate | Keep it in the original full/snapshot payload; do not let the later summary render add more rows to that payload |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good isolated variants | Both start from 45 frozen rows; full derives one row and summary independently derives one row | Full Markdown and snapshot each contain the same 46 unique rows |
+| Base no mutation | Neither renderer changes candidate facts | Both variants remain identical at the candidate boundary |
+| Bad shared mutation | Full turns 45 into 46, then summary reuses the same object and turns it into 48 | Markdown shows 46 while the replay snapshot incorrectly stores 48 |
+
+### 6. Tests Required
+
+- `tests.test_daily_report_render.DailyReportRenderTest.test_build_report_outputs_isolates_full_and_summary_payload_mutations`
+  must assert different root objects, identical initial candidate facts, and no
+  summary write-back into the original full payload.
+- A target-date replay must compare the market-capital-structure input count in
+  full Markdown, summary Markdown, Bear HTML, and the persisted replay snapshot.
+- The replay snapshot must also assert unique candidate identities and preserve
+  the formal `selection_workflow.final` result.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+full_report = render(False, data)
+summary_report = render(True, data)
+```
+
+The second render continues mutating the first render's candidate state, while
+the already-rendered full Markdown cannot reflect those later mutations.
+
+#### Correct
+
+```python
+summary_data = copy.deepcopy(data)
+full_report = render(False, data)
+summary_report = render(True, summary_data)
+```
+
+Both variants start from one accepted fact boundary, the full payload remains
+the replay snapshot source, and summary-only changes stay isolated.
 
 ## Full Attack Roadmap
 

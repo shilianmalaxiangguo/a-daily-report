@@ -4726,6 +4726,45 @@ def _extract_selection_workflow_final_identity(lines):
     return ""
 
 
+def _extract_selection_workflow_final_position_pct(lines):
+    text = "\n".join(str(line or "") for line in lines or [])
+    if "selection_workflow.v1" in text:
+        match = re.search(
+            r'"selection_workflow"\s*:\s*\{.*?"schema_version"\s*:\s*"selection_workflow\.v1".*?'
+            r'"final"\s*:\s*\{.*?"position_pct"\s*:\s*(?P<pct>0|50|100)(?:\.0)?',
+            text,
+            re.DOTALL,
+        )
+        if match:
+            return int(match.group("pct"))
+    final_match = re.search(
+        r"FINAL\[.*?仓位[：:]\s*(?P<pct>0|50|100)%",
+        text,
+        re.DOTALL,
+    )
+    if final_match:
+        return int(final_match.group("pct"))
+    for line in lines or []:
+        cells = _split_md_row(line)
+        if len(cells) < 3 or cells[0] != "最终结果":
+            continue
+        pct_match = re.search(r"(?<!\d)(0|50|100)%", " ".join(cells[2:]))
+        if pct_match:
+            return int(pct_match.group(1))
+    return None
+
+
+def _extract_front_position_pct(lines):
+    front = _front_page_lines(lines)
+    labels = ("明日新仓", "明日仓位", "仓位姿态", "进攻仓位三态", "明日最大仓位")
+    for label in labels:
+        value, offset = _extract_front_kv_value(front, label)
+        pct_match = re.search(r"(?<!\d)(0|50|100)%", str(value or ""))
+        if pct_match:
+            return int(pct_match.group(1)), offset
+    return None, None
+
+
 def _selection_workflow_declares_empty_final(lines):
     text = "\n".join(str(line or "") for line in lines or [])
     empty_markers = (
@@ -4743,6 +4782,8 @@ def _selection_workflow_declares_empty_final(lines):
 
 def _audit_selection_workflow_consistency(lines):
     workflow_identity = _extract_selection_workflow_final_identity(lines)
+    workflow_position_pct = _extract_selection_workflow_final_position_pct(lines)
+    front_position_pct, front_position_offset = _extract_front_position_pct(lines)
     front = _front_page_lines(lines)
     front_execution_object = _extract_front_execution_object(lines)
     front_values = (
@@ -4753,36 +4794,51 @@ def _audit_selection_workflow_consistency(lines):
         _extract_closing_action_target(front),
     )
     front_identities = []
+    findings = []
     for value in front_values:
         identity = _target_identity(value)
         if identity and identity not in front_identities:
             front_identities.append(identity)
+    if (
+        workflow_position_pct is not None
+        and front_position_pct is not None
+        and workflow_position_pct != front_position_pct
+    ):
+        findings.append(
+            _finding(
+                "selection_workflow_position_mismatch",
+                f"选股流程最终仓位为 {workflow_position_pct}%，但首页当前仓位为 {front_position_pct}%",
+                line=front_position_offset,
+            )
+        )
     if not workflow_identity:
         if _selection_workflow_declares_empty_final(lines) and front_identities:
-            return [
+            findings.append(
                 _finding(
                     "selection_workflow_mismatch",
                     f"选股流程最终对象为空，但首页仍写了 {front_identities[0]}",
                 )
-            ]
-        return []
+            )
+        return findings
     if front_execution_object and _is_empty_target(front_execution_object):
-        return [
+        findings.append(
             _finding(
                 "selection_workflow_mismatch",
                 f"首页执行对象为空，但选股流程最终对象为 {workflow_identity}",
             )
-        ]
+        )
+        return findings
     if not front_identities:
-        return []
+        return findings
     if workflow_identity in front_identities:
-        return []
-    return [
+        return findings
+    findings.append(
         _finding(
             "selection_workflow_mismatch",
             f"首页对象 {front_identities[0]} 与选股流程最终对象 {workflow_identity} 不一致",
         )
-    ]
+    )
+    return findings
 
 
 def _audit_empty_final_object_candidate_status(lines):
@@ -4882,6 +4938,20 @@ def _front_declares_no_current_object(lines):
 def _line_names_current_object_when_front_empty(text):
     stripped = str(text or "").strip()
     process_markers = ("过程候选", "过程样本", "回看样本", "过程证据", "非当前对象", "只回放")
+    identity = _target_identity(stripped)
+    is_process_line = bool(identity) and any(marker in stripped for marker in process_markers)
+    if is_process_line:
+        if re.search(
+            r"(?:观察价|预估|最晚|失效价|确认价|买入价|支撑/失效)[^|\n]{0,24}\d+(?:\.\d+)?",
+            stripped,
+        ):
+            return "过程候选仍带未来观察价（未来价位）"
+        if "可作为主对象" in stripped:
+            return "过程候选仍带可作为主对象结论"
+        if re.search(r"(?:身份|角色|对象口径)\s*[:：]\s*板块锚", stripped) and not any(
+            marker in stripped for marker in ("未证明", "不是", "不能", "缺少", "未识别", "不属于", "不具备")
+        ):
+            return "过程候选仍带板块锚身份"
     if "明天重点候选组" in stripped:
         return "明天重点候选组"
     tomorrow_watch_match = re.search(

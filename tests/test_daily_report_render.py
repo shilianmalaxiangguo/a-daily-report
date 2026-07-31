@@ -209,6 +209,45 @@ class _DecisionLedgerMemoryFactStore:
 
 
 class DailyReportRenderTest(unittest.TestCase):
+    def test_build_report_outputs_isolates_full_and_summary_payload_mutations(self):
+        data = _complete_report_facts(
+            {
+                "extreme_conviction_list": [
+                    {"code": "605068", "name": "明新旭腾"},
+                ]
+            }
+        )
+        received_payloads = []
+        initial_candidates = []
+
+        def render(display_mode, payload, target_date, **kwargs):
+            received_payloads.append(payload)
+            rows = payload["extreme_conviction_list"]
+            initial_candidates.append(copy.deepcopy(rows))
+            rows.append(
+                {
+                    "code": "summary-only" if display_mode else "full-only",
+                    "name": "摘要版修改" if display_mode else "完整版修改",
+                }
+            )
+            return "# summary" if display_mode else "# full"
+
+        with patch("daily_report_render._raise_if_critical_data_missing"), patch(
+            "daily_report_render._render_report_with_display_mode",
+            side_effect=render,
+        ):
+            build_report_outputs(data, "2026-07-29", emit_preflight=False)
+
+        expected_initial = [{"code": "605068", "name": "明新旭腾"}]
+        self.assertIs(received_payloads[0], data)
+        self.assertIsNot(received_payloads[0], received_payloads[1])
+        self.assertEqual(initial_candidates, [expected_initial, expected_initial])
+        self.assertEqual(
+            data["extreme_conviction_list"],
+            expected_initial
+            + [{"code": "full-only", "name": "完整版修改"}],
+        )
+
     def test_build_report_outputs_passes_isolated_market_language_copies_without_shared_data(self):
         data = _complete_report_facts({"foo": "bar"})
         artifact = _market_language_test_artifact()

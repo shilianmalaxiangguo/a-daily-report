@@ -10,6 +10,8 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     candidate_can_be_current_observation_target as _candidate_can_be_panel_watch_target,
     candidate_matches_any_key as _candidate_matches_blocked_panel_key,
     candidate_key as _candidate_key,
+    workflow_candidate_payload,
+    workflow_final_candidate,
 )
 
 
@@ -586,8 +588,100 @@ def _build_diagnostics(samples):
     }
 
 
+def _selection_workflow_scorecard_payload(context, workflow):
+    final_candidate, final_position_pct = workflow_final_candidate(workflow)
+    final_key = _candidate_key(final_candidate)
+    samples = []
+    for row in workflow.get("candidate_pool", []) or []:
+        candidate = workflow_candidate_payload(row)
+        if not _candidate_key(candidate):
+            continue
+        if final_key and _candidate_key(candidate) == final_key:
+            candidate.update(final_candidate)
+            candidate.update(
+                {
+                    "quality_role": "明日执行对象",
+                    "selection_quality": "已通过",
+                    "entry_cost_state": "按最终计划",
+                    "is_core": True,
+                    "final_action": (workflow.get("final") or {}).get("action_text") or "按最终计划执行",
+                    "target_position_pct": final_position_pct,
+                }
+            )
+        else:
+            candidate.update(
+                {
+                    "quality_role": "过程候选",
+                    "selection_quality": "过程证据",
+                    "entry_cost_state": "不作为最终对象",
+                    "is_core": False,
+                    "new_entry_qualified": False,
+                    "front_observation_qualified": False,
+                    "candidate_layer": "process_observation",
+                    "observation_layer": "process_observation",
+                    "final_action": "只作过程回放，不新增参与",
+                    "action_ceiling": "仅过程证据",
+                    "target_position_pct": 0,
+                }
+            )
+            for key in (
+                "minute_plan",
+                "entry_range",
+                "entry_price",
+                "observation_price",
+                "confirm_price",
+                "support_price",
+                "stop_loss",
+                "stop_plan",
+                "planned_participation",
+                "participation_script",
+                "trigger",
+            ):
+                candidate.pop(key, None)
+        samples.append(_enrich_candidate_trace_inputs(candidate, context, source_pool="selection_workflow"))
+    if final_candidate and final_key not in {_candidate_key(sample) for sample in samples}:
+        samples.insert(
+            0,
+            _enrich_candidate_trace_inputs(
+                {
+                    **final_candidate,
+                    "quality_role": "明日执行对象",
+                    "selection_quality": "已通过",
+                    "entry_cost_state": "按最终计划",
+                    "is_core": True,
+                    "final_action": (workflow.get("final") or {}).get("action_text") or "按最终计划执行",
+                },
+                context,
+                source_pool="selection_workflow.final",
+            ),
+        )
+
+    existing_position_summary = existing_position_summary_from_context(context)
+    panel_fields = _build_panel_fields(
+        step0_prediction_cn=str(context.get("step0_prediction_cn", "") or "").strip(),
+        has_personal_positions=bool(context.get("has_personal_positions", False)),
+        position_context_provided=bool(context.get("position_context_provided", False)),
+        existing_position_summary=existing_position_summary,
+        daily_new_entry_limit=1 if final_candidate else 0,
+        best_stock=final_candidate or None,
+        watch_anchor=None,
+    )
+    panel_fields = _normalize_pending_position_panel_fields(panel_fields, existing_position_summary)
+    if not final_candidate:
+        panel_fields = _clear_panel_target_fields(panel_fields)
+    return {
+        "candidate_quality_panel_fields": sanitize_user_visible_text(panel_fields),
+        "candidate_quality_samples": sanitize_user_visible_text(samples),
+        "candidate_quality_scorecard_diagnostics": _build_diagnostics(samples),
+        "sniper_target_derivation": _sniper_target_derivation(context),
+    }
+
+
 def build_candidate_quality_scorecard_payload(context):
     context = context or {}
+    workflow = _selection_workflow_from_context(context)
+    if workflow:
+        return _selection_workflow_scorecard_payload(context, workflow)
     current_watch_target = _current_watch_target(context)
     final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
     derivation_packet = _sniper_target_derivation(context)

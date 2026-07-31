@@ -116,6 +116,7 @@ from report.position_tier_contract import (
 )
 from report.selection_workflow import (
     build_selection_workflow as _default_build_selection_workflow,
+    process_observation_table_lines,
     store_selection_workflow as _default_store_selection_workflow,
 )
 from report.two_layer_decision_payload import (
@@ -1468,30 +1469,11 @@ def _sync_runtime_extreme_conviction_list(data, execution_stage_context, market_
 
 def _downgrade_extreme_conviction_list_to_observation(extreme_conviction_list):
     downgraded = []
-    for idx, item in enumerate(list(extreme_conviction_list or [])):
+    for item in list(extreme_conviction_list or []):
         if not isinstance(item, dict):
             continue
-        updated = dict(item)
-        original_role = str(updated.get("sniper_role") or "").strip()
-        if original_role:
-            updated.setdefault("zero_position_role_original", original_role)
-        _normalize_extreme_observation_text_fields(updated)
-        updated["sniper_role"] = "候选观察" if idx == 0 else "候选观察补充"
-        updated["primary_buy_candidate"] = False
-        updated["backup_buy_candidate"] = False
-        updated["candidate_layer"] = "watch_sample"
-        updated["execution_eligibility"] = "observation_only"
-        updated["source_tier"] = "extreme_conviction"
-        updated["attack_state"] = "0%不参与"
-        updated["participation_window"] = str(updated.get("participation_window") or "09:50-10:10").replace("参与", "观察")
-        updated["conviction_rule"] = "最终0%时只作观察样本，不构成明日新增参与"
-        for plan_key in ("planned_participation", "participation_script"):
-            plan = updated.get(plan_key)
-            if isinstance(plan, dict):
-                plan = dict(plan)
-                plan["source_tier"] = "extreme_conviction"
-                plan["attack_state"] = "0%不参与"
-                updated[plan_key] = plan
+        updated = deepcopy(item)
+        _downgrade_runtime_candidate_to_process_observation(updated)
         downgraded.append(updated)
     return downgraded
 
@@ -3413,154 +3395,290 @@ _EMPTY_FINAL_PROCESS_COLLECTION_KEYS = (
     "extreme_conviction_list",
 )
 
+_RUNTIME_CONTEXT_COPY_KEYS = (
+    "execution_stage_context",
+    "market_research_bundle",
+    "market_research_snapshot",
+    "observation",
+    "observation_snapshot",
+    "sector_capital_preflight",
+    "source_payloads",
+    "daily_context",
+)
+
+_TRACKING_MEMORY_CURRENT_LIST_KEYS = (
+    "tentative_items",
+    "today_tentative_items",
+    "validated_items",
+    "today_validated_items",
+    "new_items",
+    "promoted_items",
+    "reactivated_items",
+)
+
+_TRACKING_MEMORY_FORWARD_PLAN_KEYS = (
+    "action",
+    "action_rule",
+    "current_action",
+    "tomorrow_action",
+    "tomorrow_expectation",
+    "tmr_forecast",
+    "participation_window",
+    "participation_window_type",
+    "buy_window",
+    "entry_timing",
+    "entry_timing_reason",
+    "ma_reversion_window",
+    "entry_price",
+    "observation_price",
+    "confirm_price",
+    "support_price",
+    "risk_price",
+    "invalid_price",
+    "stop_loss",
+    "stop_price",
+    "stop_plan",
+    "price_plan",
+    "minute_plan",
+    "planned_participation",
+    "participation_script",
+    "watch_anchor_type",
+    "permission_label",
+    "permission_reason",
+)
+
+
+def _iter_runtime_context_copies(*roots):
+    queue = [root for root in roots if isinstance(root, dict)]
+    seen = set()
+    while queue:
+        current = queue.pop(0)
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        yield current
+        for key in _RUNTIME_CONTEXT_COPY_KEYS:
+            nested = current.get(key)
+            if isinstance(nested, dict):
+                queue.append(nested)
+
+
+def _selection_workflow_process_candidate_keys(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    final_stock = _runtime_stock_payload(final.get("execution_object"))
+    final_key = _runtime_candidate_key(final_stock)
+    process_keys = set()
+    for item in list(workflow.get("candidate_pool") or []):
+        if not isinstance(item, dict):
+            continue
+        stock = _runtime_stock_payload(item.get("stock")) or _runtime_stock_payload(item)
+        key = _runtime_candidate_key(stock)
+        if key and key != final_key:
+            process_keys.add(key)
+    return process_keys
+
+
+def _inactive_tracking_memory_process_item(item, *, target_date=""):
+    updated = dict(item or {})
+    for key in _TRACKING_MEMORY_FORWARD_PLAN_KEYS:
+        updated.pop(key, None)
+    updated.update(
+        {
+            "status": "inactive_recall",
+            "last_reason": "最终工作流未选为当前对象，只保留历史记忆。",
+            "follow_state": "",
+            "inactive_reason": "未取得当前观察或新增参与资格，只保留历史记忆。",
+        }
+    )
+    if target_date:
+        updated["inactive_since_date"] = target_date
+    return updated
+
+
+def _sync_tracking_memory_with_selection_workflow(
+    selection_workflow=None,
+    *,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    workflow = selection_workflow if isinstance(selection_workflow, dict) else {}
+    process_keys = _selection_workflow_process_candidate_keys(workflow)
+    if not process_keys:
+        return 0
+    source_dates = workflow.get("source_dates") if isinstance(workflow.get("source_dates"), dict) else {}
+    target_date = _first_runtime_text(
+        workflow.get("target_date"),
+        workflow.get("report_date"),
+        source_dates.get("report_date"),
+    )
+    updated_status_count = 0
+    for context in _iter_runtime_context_copies(data, execution_stage_context, market_research_snapshot):
+        status = context.get("tracking_memory_status")
+        if not isinstance(status, dict):
+            continue
+        demoted = {}
+        total_items = []
+        for item in list(status.get("total_items") or []):
+            if not isinstance(item, dict):
+                total_items.append(item)
+                continue
+            key = _runtime_candidate_key(item)
+            if key not in process_keys:
+                total_items.append(item)
+                continue
+            inactive_item = _inactive_tracking_memory_process_item(item, target_date=target_date)
+            demoted[key] = inactive_item
+            total_items.append(inactive_item)
+
+        for list_key in _TRACKING_MEMORY_CURRENT_LIST_KEYS:
+            rows = status.get(list_key)
+            if not isinstance(rows, list):
+                continue
+            retained = []
+            for item in rows:
+                if not isinstance(item, dict):
+                    retained.append(item)
+                    continue
+                key = _runtime_candidate_key(item)
+                if key not in process_keys:
+                    retained.append(item)
+                    continue
+                demoted.setdefault(
+                    key,
+                    _inactive_tracking_memory_process_item(item, target_date=target_date),
+                )
+            status[list_key] = retained
+
+        total_keys = {
+            _runtime_candidate_key(item)
+            for item in total_items
+            if isinstance(item, dict) and _runtime_candidate_key(item)
+        }
+        for key, item in demoted.items():
+            if key not in total_keys:
+                total_items.append(item)
+        if isinstance(status.get("total_items"), list) or demoted:
+            status["total_items"] = total_items
+
+        inactive_items = list(status.get("inactive_items") or [])
+        inactive_index = {
+            _runtime_candidate_key(item): index
+            for index, item in enumerate(inactive_items)
+            if isinstance(item, dict) and _runtime_candidate_key(item)
+        }
+        for key, item in demoted.items():
+            if key in inactive_index:
+                inactive_items[inactive_index[key]] = item
+            else:
+                inactive_index[key] = len(inactive_items)
+                inactive_items.append(item)
+        if isinstance(status.get("inactive_items"), list) or demoted:
+            status["inactive_items"] = inactive_items
+        updated_status_count += 1
+    return updated_status_count
+
 
 def _downgrade_runtime_candidate_to_process_observation(candidate):
     if not isinstance(candidate, dict):
         return candidate
-    original_role = _first_runtime_text(candidate.get("sniper_role"), candidate.get("candidate_role"))
-    if original_role:
-        candidate.setdefault("zero_position_role_original", original_role)
-    original_reason = _first_runtime_text(candidate.get("reason"), candidate.get("condition"))
-    if original_reason:
-        candidate.setdefault("process_evidence_reason", original_reason)
-    _normalize_extreme_observation_text_fields(candidate)
-    candidate.update(
-        {
-            "candidate_role": "过程候选",
-            "candidate_layer": "process_observation",
-            "observation_layer": "process_observation",
-            "execution_eligibility": "observation_only",
-            "new_entry_qualified": False,
-            "front_observation_qualified": False,
-            "primary_buy_candidate": False,
-            "backup_buy_candidate": False,
-            "sniper_role": "候选观察",
-            "attack_state": "0%不参与",
-            "target_position_pct": 0,
-            "position_pct": 0,
-            "planned_position_pct": 0,
-            "position_plan_pct": 0,
-            "anchor_reversal_decision": "降级观察",
-            "dest": "只作过程回放，不新增参与",
-            "condition": "统一淘汰赛已淘汰，只保留过程证据",
-            "reason": "统一淘汰赛已淘汰，只保留过程证据",
-            "current_action": "只作过程回放，不新增参与",
-            "tomorrow_action": "只作过程回放，不新增参与",
-            "tmr_forecast": "只作过程回放，不新增参与",
-            "tomorrow_expectation": "仅作过程回放",
-            "tomorrow_risk": "条件未满足，只观察",
-            "permission_label": "过程样本，无当前观察资格",
-            "permission_reason": "统一淘汰赛已淘汰，只保留过程证据",
-            "conviction_rule": "只作过程回放，不新增参与",
-            "participation_window": "只作过程回放",
-            "participation_window_type": "observation_only",
-            "buy_window": "",
-            "auction_required": False,
-            "board_or_reseal_required": False,
-            "first_minutes_required": False,
-            "ordinary_structure_confirm_allowed": False,
-            "ma_reversion_probe_allowed": False,
-            "participation_basis": {},
-            "required_steps": [],
-            "minute_plan": {},
-            "watch_anchor_type": "过程候选回看样本",
-        }
+    parsed_stock = _runtime_stock_payload(candidate.get("stock")) or _runtime_stock_payload(candidate)
+    stock = {
+        key: parsed_stock[key]
+        for key in ("name", "code", "sector")
+        if parsed_stock.get(key) not in (None, "")
+    }
+    source_pools = candidate.get("source_pools")
+    if not isinstance(source_pools, list):
+        source_pools = [
+            source
+            for source in (
+                candidate.get("source_pool"),
+                candidate.get("source_tier"),
+                candidate.get("source"),
+            )
+            if _first_runtime_text(source)
+        ]
+    source_pools = list(
+        dict.fromkeys(_first_runtime_text(source) for source in source_pools if _first_runtime_text(source))
     )
-    for key in (
-        "entry_price",
-        "observation_price",
-        "risk_price",
-        "invalid_price",
-        "stop_loss",
-        "stop_plan",
-        "support_price",
-        "confirm_price",
-        "trigger_text",
-        "display_anchor_price",
-        "execution_stop",
-        "effective_stop",
-        "second_shot_breakout_price",
-        "entry_timing",
-        "entry_timing_reason",
-        "ma_reversion_window",
-        "daily_ma_entry_probe",
-        "ma_execution_anchor",
-    ):
-        candidate.pop(key, None)
-    for key in (
-        "auction_script",
-        "board_script",
-        "first_minutes_script",
-        "reseal_script",
-        "intraday_average_line_cross_probe",
-        "intraday_yellow_line_probe",
-        "zero_axis_reclaim_probe",
-        "ma_reversion_probe",
-        "missed_action",
-        "missed_entry_policy",
-    ):
-        if key in candidate:
-            candidate[key] = "只作过程回放，不新增参与"
-    for key in ("core_identity", "final_risk_review", "selection_shape_review", "trend_aesthetic_review"):
-        nested = candidate.get(key)
-        if not isinstance(nested, dict):
-            continue
-        nested = dict(nested)
-        if key == "core_identity":
-            nested["position_state"] = "0%"
-            nested["early_participation_allowed"] = False
+    workflow_path = candidate.get("workflow_path") if isinstance(candidate.get("workflow_path"), list) else []
+    workflow_path = [
+        node
+        for node in (_first_runtime_text(value) for value in workflow_path)
+        if re.fullmatch(r"N\d+(?:_\d+)?", node)
+    ]
+    first_seen_node = _first_runtime_text(candidate.get("first_seen_node"))
+    if not re.fullmatch(r"N\d+(?:_\d+)?", first_seen_node):
+        first_seen_node = ""
+    eliminated_at = _first_runtime_text(candidate.get("eliminated_at"))
+    if not re.fullmatch(r"N\d+(?:_\d+)?", eliminated_at):
+        eliminated_at = ""
+    process_reason = _first_runtime_text(candidate.get("process_rejection_reason"))
+    if not process_reason:
+        if _first_runtime_text(candidate.get("price_action_block_reason")) or eliminated_at == "N7":
+            process_reason = "价格行为未通过确认"
+        elif candidate.get("new_entry_qualified") is False:
+            process_reason = "未证明来自板块资金方向"
         else:
-            nested["action"] = "仅保留过程证据"
-        candidate[key] = nested
-    for key in ("planned_participation", "participation_script"):
-        plan = candidate.get(key)
-        if not isinstance(plan, dict):
-            continue
-        plan = dict(plan)
-        for price_key in (
-            "entry_price",
-            "observation_price",
-            "risk_price",
-            "invalid_price",
-            "stop_loss",
-            "support_price",
-            "confirm_price",
-            "trigger_text",
-            "display_anchor_price",
-            "execution_stop",
-            "effective_stop",
-            "second_shot_breakout_price",
-        ):
-            plan.pop(price_key, None)
-        plan.update(
-            {
-                "action": "skip",
-                "attack_state": "0%不参与",
-                "target_position_pct": 0,
-                "buy_window": "",
-                "participation_window": "",
-                "minute_plan": {},
-            }
-        )
-        candidate[key] = plan
+            process_reason = "未取得最终对象资格"
+
+    projected = {
+        **stock,
+        "stock": dict(stock),
+        "source_pools": source_pools,
+        "candidate_role": "过程候选",
+        "candidate_layer": "process_observation",
+        "observation_layer": "process_observation",
+        "execution_eligibility": "observation_only",
+        "new_entry_qualified": False,
+        "front_observation_qualified": False,
+        "primary_buy_candidate": False,
+        "backup_buy_candidate": False,
+        "attack_state": "0%不参与",
+        "target_position_pct": 0,
+        "position_pct": 0,
+        "planned_position_pct": 0,
+        "position_plan_pct": 0,
+        "status": "过程候选",
+        "process_rejection_reason": process_reason,
+        "eliminated_reason": process_reason,
+        "current_reason": process_reason,
+        "condition": process_reason,
+        "reason": process_reason,
+        "process_handling": "只作过程回放，不新增参与",
+        "dest": "只作过程回放，不新增参与",
+        "current_action": "只作过程回放，不新增参与",
+        "tomorrow_action": "只作过程回放，不新增参与",
+        "tmr_forecast": "只作过程回放，不新增参与",
+        "minute_plan": {},
+    }
+    if first_seen_node:
+        projected["first_seen_node"] = first_seen_node
+    if eliminated_at:
+        projected["eliminated_at"] = eliminated_at
+    if workflow_path:
+        projected["workflow_path"] = workflow_path
+    for date_key in ("trade_date", "source_date", "target_date", "query_date", "report_date"):
+        date_value = _first_runtime_text(candidate.get(date_key))
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_value):
+            projected[date_key] = date_value
+    candidate.clear()
+    candidate.update(projected)
     return candidate
 
 
-def _downgrade_empty_final_execution_stage_candidates(execution_stage_context):
+def _downgrade_empty_final_execution_stage_candidates(execution_stage_context, preserve_candidate=None):
     if not isinstance(execution_stage_context, dict):
         return
+    preserve_key = _runtime_candidate_key(preserve_candidate)
 
     def _downgrade_item(item, *, preserve_evidence_text=False):
-        evidence_text = {}
-        if preserve_evidence_text and isinstance(item, dict):
-            evidence_text = {
-                key: item.get(key)
-                for key in ("reason", "condition")
-                if _first_runtime_text(item.get(key))
-            }
+        if preserve_key and _runtime_candidate_key(item) == preserve_key:
+            return
         _downgrade_runtime_candidate_to_process_observation(item)
-        if evidence_text:
-            item.update(evidence_text)
 
     def _downgrade_rows(container, keys, *, preserve_evidence_text=False):
         if not isinstance(container, dict):
@@ -3723,6 +3841,95 @@ def _runtime_sync_selected_candidate_from_final_resolution(
     return selected
 
 
+def _runtime_sync_candidate_surfaces_from_selection_workflow(
+    selection_workflow=None,
+    *,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    workflow = selection_workflow if isinstance(selection_workflow, dict) else {}
+    if not (
+        _runtime_selection_workflow_final_controls_candidate(workflow)
+        or _runtime_selection_workflow_final_controls_zero(workflow)
+    ):
+        return None
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    final_is_zero = _runtime_selection_workflow_final_controls_zero(workflow)
+    selected = (
+        _runtime_stock_payload(final.get("execution_object"))
+        if _runtime_selection_workflow_final_controls_candidate(workflow)
+        else {}
+    )
+    if selected:
+        selected = _runtime_merge_same_stock_candidate_evidence(
+            selected,
+            data,
+            execution_stage_context,
+            market_research_snapshot,
+        )
+        selected.update(_runtime_stock_payload(final.get("execution_object")))
+        selected["target_position_pct"] = _front_page_target_pct(
+            {"target_position_pct": final.get("position_pct", 0)}
+        )
+        selected["position_pct"] = selected["target_position_pct"]
+        selected["new_entry_qualified"] = True
+
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if not isinstance(target, dict):
+            continue
+        if selected:
+            target["selected_position_candidate"] = dict(selected)
+            target["current_core_candidate"] = dict(selected)
+        else:
+            target.pop("selected_position_candidate", None)
+            target.pop("current_core_candidate", None)
+        target.pop("front_observation_target", None)
+        target.pop("watch_anchor", None)
+        target.pop("watch_anchor_type", None)
+        panel_fields = target.get("candidate_quality_panel_fields")
+        if isinstance(panel_fields, dict):
+            panel_fields = dict(panel_fields)
+            panel_fields["primary_buy_candidate"] = dict(selected) if selected else None
+            panel_fields["backup_candidate"] = None
+            target["candidate_quality_panel_fields"] = panel_fields
+        candidate_snapshot = target.get("candidate_snapshot")
+        if isinstance(candidate_snapshot, dict):
+            if selected:
+                candidate_snapshot["selected_position_candidate"] = dict(selected)
+                candidate_snapshot["current_core_candidate"] = dict(selected)
+            else:
+                candidate_snapshot.pop("selected_position_candidate", None)
+                candidate_snapshot.pop("current_core_candidate", None)
+            candidate_snapshot.pop("front_observation_target", None)
+            candidate_snapshot.pop("watch_anchor", None)
+            candidate_snapshot.pop("watch_anchor_type", None)
+        if final_is_zero:
+            target["core_mvp_digest_lines"] = []
+            target["mvp_focus_summary_lines"] = []
+            target["special_probe_text"] = ""
+
+    _downgrade_empty_final_execution_stage_candidates(
+        execution_stage_context,
+        preserve_candidate=selected,
+    )
+    _sync_tracking_memory_with_selection_workflow(
+        workflow,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    if isinstance(execution_stage_context, dict) and selected:
+        execution_stage_context["best_stock"] = dict(selected)
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return selected
+
+
 def _runtime_selection_workflow_observation_target(workflow):
     workflow = workflow if isinstance(workflow, dict) else {}
     for candidate in workflow.get("candidate_pool", []) or []:
@@ -3797,7 +4004,10 @@ def _build_runtime_final_target_resolution(
     workflow_position_pct = _front_page_target_pct(
         {"target_position_pct": workflow_final.get("position_pct", 0)} if isinstance(workflow_final, dict) else {}
     )
-    workflow_zero_observation_target = {}
+    workflow_controls_resolution = bool(
+        _runtime_selection_workflow_final_controls_candidate(workflow)
+        or _runtime_selection_workflow_final_controls_zero(workflow)
+    )
     workflow_zero_controls_execution = False
     if _runtime_selection_workflow_final_controls_candidate(workflow):
         position_decision = dict(position_decision or {})
@@ -3806,19 +4016,14 @@ def _build_runtime_final_target_resolution(
             position_decision.get("target_position_pct", 0),
         )
         selected_position_candidate = (
-            _runtime_merge_same_stock_candidate_evidence(
-                workflow_execution_object,
-                selected_position_candidate,
-                data,
-                execution_stage_context,
-                market_research_snapshot,
-            )
-            if workflow_position_pct > 0 and isinstance(workflow_execution_object, dict) and _runtime_stock_payload(workflow_execution_object)
+            dict(workflow_execution_object)
+            if workflow_position_pct > 0
+            and isinstance(workflow_execution_object, dict)
+            and _runtime_stock_payload(workflow_execution_object)
             else {}
         )
     elif _runtime_selection_workflow_final_controls_zero(workflow):
         workflow_zero_controls_execution = True
-        workflow_zero_observation_target = _runtime_selection_workflow_observation_target(workflow)
         position_decision = dict(position_decision or {})
         position_decision["target_position_pct"] = 0
         selected_position_candidate = {}
@@ -4000,16 +4205,14 @@ def _build_runtime_final_target_resolution(
             else (tradable_proxy if proxy_ready else (execution_new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
         )
     )
-    watch_target = (
-        workflow_zero_observation_target
-        or account_observation_target
-        or (
-            dict(new_entry)
-            if (old_position_first or proxy_ready or (priority in {"wait", "old_position"} and new_entry))
-            else {}
-        )
+    watch_target = account_observation_target or (
+        dict(new_entry)
+        if (old_position_first or proxy_ready or (priority in {"wait", "old_position"} and new_entry))
+        else {}
     )
     if not _candidate_can_be_current_observation_target(watch_target):
+        watch_target = {}
+    if workflow_controls_resolution:
         watch_target = {}
     if tomorrow_empty:
         watch_target = {}
@@ -4019,15 +4222,25 @@ def _build_runtime_final_target_resolution(
         account_exposure_plan["tomorrow_policy"] = (
             "明日不买新股；集合竞价卖清全部可卖旧仓；不做T；未全部成交继续尽早卖"
         )
+    workflow_target = (
+        dict(workflow_execution_object)
+        if _runtime_selection_workflow_final_controls_candidate(workflow)
+        else {}
+    )
+    if workflow_controls_resolution:
+        account_exposure_plan["planned_new_entry_pct"] = workflow_position_pct
+        account_exposure_plan["planned_new_entry_x"] = position_tier_pct_to_x(workflow_position_pct)
+        account_exposure_plan["new_entry_label"] = _runtime_stock_label(workflow_target) if workflow_target else ""
     resolution = {
-        "new_entry_target": dict(execution_new_entry),
+        "canonical_source": "selection_workflow.final" if workflow_controls_resolution else "legacy_runtime_resolution",
+        "new_entry_target": workflow_target if workflow_controls_resolution else dict(execution_new_entry),
         "existing_position_target": dict(existing),
         "old_position_plan": dict(old_position_plan),
         "tradable_proxy_target": dict(tradable_proxy) if proxy_ready else {},
         "watch_target": watch_target,
-        "process_target": dict(execution_new_entry),
-        "ascii_trace_target": dict(execution_new_entry),
-        "display_target": dict(display),
+        "process_target": {} if workflow_controls_resolution else dict(execution_new_entry),
+        "ascii_trace_target": {} if workflow_controls_resolution else dict(execution_new_entry),
+        "display_target": workflow_target if workflow_controls_resolution else dict(display),
         "capital_priority_decision": {
             "capital_priority": priority,
             "reason": reason,
@@ -4838,6 +5051,21 @@ def _rhythm_reset_row_from_candidate(candidate, *, final_reason="", target_date=
     label = _rhythm_reset_stock_label(candidate)
     if not label:
         return {}
+    is_process_observation = _first_runtime_text(
+        candidate.get("observation_layer"),
+        candidate.get("candidate_layer"),
+    ) == "process_observation"
+    if is_process_observation:
+        process_reason = _first_runtime_text(
+            candidate.get("process_rejection_reason"),
+            "未取得最终对象资格",
+        )
+        return {
+            "candidate": label,
+            "why_possible": "只保留本次筛选来源和过程事实。",
+            "why_t0_not": process_reason,
+            "tplus1_confirmation": "只作过程回放，不新增参与；下一份日报重新从市场和板块推导。",
+        }
     stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else {}
     why_possible = _first_runtime_text(
         candidate.get("why_possible"),
@@ -5112,6 +5340,9 @@ def _runtime_final_resolution_allows_core_candidate(final_target_resolution=None
     if core_candidate:
         if _front_page_candidate_position_pct(core_candidate) >= 50:
             return True
+        exposure = resolution.get("account_exposure_plan") if isinstance(resolution.get("account_exposure_plan"), dict) else {}
+        if _front_page_target_pct({"target_position_pct": exposure.get("planned_new_entry_pct", 0)}) >= 50:
+            return True
     if "can_new_entry" in final_gate and not bool(final_gate.get("can_new_entry")) and not bool(final_gate.get("allow_attack_50_ready")):
         return False
     if resolution:
@@ -5169,6 +5400,83 @@ def _replace_pk_decision_stage_lines(report_lines, replacement_lines):
             end = index
             break
     return report_lines[:start] + replacement_lines + report_lines[end:]
+
+
+def _replace_empty_final_step_appendix_with_process_table(report_lines, selection_workflow=None):
+    report_lines = list(report_lines or [])
+    workflow = selection_workflow if isinstance(selection_workflow, dict) else {}
+    if not _runtime_selection_workflow_final_controls_zero(workflow):
+        return report_lines
+    start = next(
+        (
+            index
+            for index, line in enumerate(report_lines)
+            if re.match(r"^#{1,6}\s+(?:附录[：:])?Step\s+1(?:\s|$)", str(line or ""))
+        ),
+        None,
+    )
+    if start is None:
+        return report_lines
+    end = len(report_lines)
+    step_heading_pattern = re.compile(r"^#{1,6}\s+(?:附录[：:])?Step\s+[1-5](?:\s|$)")
+    for index in range(start + 1, len(report_lines)):
+        text = str(report_lines[index] or "")
+        if text.startswith("**过程观察25日跟踪表**"):
+            end = index
+            break
+        if re.match(r"^#{1,6}\s+", text) and not step_heading_pattern.match(text):
+            end = index
+            break
+    replacement = [
+        "##### 附录：候选过程回放",
+        "",
+        "最终为0%不参与；以下只记录候选如何进入筛选以及为何淘汰，不形成下一交易日个股安排。",
+        "",
+        *process_observation_table_lines(workflow.get("candidate_pool")),
+        "",
+    ]
+    return report_lines[:start] + replacement + report_lines[end:]
+
+
+def _collapse_empty_final_candidate_quality_appendix(report_lines):
+    report_lines = list(report_lines or [])
+    start = next(
+        (
+            index
+            for index, line in enumerate(report_lines)
+            if re.match(
+                r"^#{1,6}\s+(?:附录[：:])?候选质量与动作分层(?:（过程证据）)?\s*$",
+                str(line or ""),
+            )
+        ),
+        None,
+    )
+    if start is None:
+        return report_lines
+
+    next_block_markers = (
+        "**先看顺序**",
+        "**过程候选回看**",
+        "**备用观察**",
+        "**明天仓位怎么放**",
+        "**明日执行时间表**",
+        "**不做提醒**",
+    )
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(report_lines))
+            if str(report_lines[index] or "").startswith(next_block_markers)
+        ),
+        len(report_lines),
+    )
+    replacement = [
+        "##### 附录：候选质量与动作分层（过程证据）",
+        "",
+        "最终为0%不参与；候选进入与淘汰过程只看上方统一回放表，本节不再展开个股身份、未来价位或下一交易日动作。",
+        "",
+    ]
+    return report_lines[:start] + replacement + report_lines[end:]
 
 
 def _rerender_pk_decision_stage_after_final_resolution(
@@ -8241,15 +8549,22 @@ def _build_effective_front_page_final_gate(
         updated = dict(final_gate)
         updated.update(
             {
+                "gate_status": "只观察",
+                "operation_state": "观察态",
+                "position_level": "0%不参与",
                 "can_new_entry": False,
                 "should_reduce": True,
                 "allow_attack_50_ready": False,
+                "base_position_cap_pct": 0,
                 "final_action": "先处理旧仓，不新增参与；新强对象只保留观察对象",
+                "final_participation": "先处理旧仓，明日不新增参与。",
+                "gate_reason": "旧仓优先处理，新增参与条件未满足。",
             }
         )
         return updated
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     resolved_target = _runtime_final_resolution_core_candidate(resolution)
+    workflow_final_is_canonical = resolution.get("canonical_source") == "selection_workflow.final"
     if resolution and not resolved_target:
         decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
         risk_comparison_blocks = bool(
@@ -8305,6 +8620,8 @@ def _build_effective_front_page_final_gate(
     if not selected_position_candidate or target_pct < 50:
         return final_gate
     if (
+        not workflow_final_is_canonical
+        and
         opportunity_comparison
         and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison)
     ):
@@ -8474,6 +8791,48 @@ def _build_effective_front_page_final_gate(
         }
     )
     return updated
+
+
+def _store_runtime_front_page_final_gate(
+    final_gate=None,
+    *,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    stored = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
+    if not stored:
+        return {}
+
+    for root in (data, execution_stage_context):
+        if isinstance(root, dict):
+            root["front_page_final_gate"] = dict(stored)
+
+    queue = []
+    for root, is_market_snapshot in (
+        (data, False),
+        (execution_stage_context, False),
+        (market_research_snapshot, True),
+    ):
+        if isinstance(root, dict):
+            queue.append((root, is_market_snapshot))
+    seen = set()
+    while queue:
+        current, is_market_snapshot = queue.pop(0)
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if is_market_snapshot:
+            current["front_page_final_gate"] = dict(stored)
+            current["final_gate"] = dict(stored)
+        elif "front_page_final_gate" in current:
+            current["front_page_final_gate"] = dict(stored)
+        for key in _RUNTIME_CONTEXT_COPY_KEYS:
+            nested = current.get(key)
+            if isinstance(nested, dict):
+                queue.append((nested, key == "market_research_snapshot"))
+    return stored
 
 
 def _has_zero_participation_context(position_decision=None):
@@ -9115,6 +9474,7 @@ def _normalize_attack_preview_appendix_lines(
     selected_position_candidate=None,
     position_decision=None,
     final_target_resolution=None,
+    selection_workflow=None,
 ):
     final_target_resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     capital_priority = _first_runtime_text(
@@ -9141,7 +9501,15 @@ def _normalize_attack_preview_appendix_lines(
             normalized_zero_lines,
             final_target_resolution,
         )
-        return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
+        normalized_zero_lines = _align_appendix_observation_anchor_lines(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _replace_empty_final_step_appendix_with_process_table(
+            normalized_zero_lines,
+            selection_workflow,
+        )
+        return _collapse_empty_final_candidate_quality_appendix(normalized_zero_lines)
     has_selected_target = isinstance(selected_position_candidate, dict) and bool(
         selected_position_candidate.get("name") or selected_position_candidate.get("code")
     )
@@ -9159,7 +9527,15 @@ def _normalize_attack_preview_appendix_lines(
             normalized_zero_lines,
             final_target_resolution,
         )
-        return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
+        normalized_zero_lines = _align_appendix_observation_anchor_lines(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _replace_empty_final_step_appendix_with_process_table(
+            normalized_zero_lines,
+            selection_workflow,
+        )
+        return _collapse_empty_final_candidate_quality_appendix(normalized_zero_lines)
     if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
 
@@ -10219,8 +10595,18 @@ def _appendix_monitoring_labels(item, source_pool, mainline_name):
     return source_pool, item.get("current_action") or item.get("tomorrow_action") or item.get("tmr_forecast") or "继续跟踪", None
 
 
-def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_context=None):
+def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_context=None, selection_workflow=None):
     execution_stage_context = execution_stage_context or {}
+    selection_workflow = (
+        selection_workflow
+        if isinstance(selection_workflow, dict)
+        else execution_stage_context.get("selection_workflow")
+    )
+    workflow_controls_candidates = bool(
+        isinstance(selection_workflow, dict)
+        and selection_workflow.get("schema_version") == "selection_workflow.v1"
+        and "final" in selection_workflow
+    )
     current_turnover = execution_stage_context.get("current_sector_turnover_snapshot") or {}
     mainline_name = (
         execution_stage_context.get("mainline_name")
@@ -10241,6 +10627,73 @@ def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_cont
     monitoring_pool = []
     lifecycle_records = []
     crossline_codes = _appendix_crossline_codes_from_context(execution_stage_context)
+    if workflow_controls_candidates:
+        workflow_final = (
+            selection_workflow.get("final")
+            if isinstance(selection_workflow.get("final"), dict)
+            else {}
+        )
+        final_target = _runtime_stock_payload(workflow_final.get("execution_object"))
+        final_key = _runtime_candidate_key(final_target)
+        final_position_pct = _front_page_target_pct(
+            {"target_position_pct": workflow_final.get("position_pct", 0)}
+        )
+        for row in selection_workflow.get("candidate_pool", []) or []:
+            if not isinstance(row, dict):
+                continue
+            stock = row.get("stock") if isinstance(row.get("stock"), dict) else row
+            code = _appendix_stock_code(stock)
+            name = _appendix_stock_name(stock)
+            dedupe_key = code or name
+            if not dedupe_key or dedupe_key in seen_codes:
+                continue
+            seen_codes.add(dedupe_key)
+            is_final = bool(
+                final_key
+                and final_position_pct >= 50
+                and _runtime_candidate_key(stock) == final_key
+            )
+            source_pool = "明日执行对象" if is_final else "过程候选"
+            current_action = (
+                str(workflow_final.get("action_text") or "按最终计划执行")
+                if is_final
+                else "只作过程回放，不新增参与"
+            )
+            interpretation = (
+                _first_runtime_text(
+                    row.get("current_reason"),
+                    row.get("entered_reason"),
+                    "工作流最终对象",
+                )
+                if is_final
+                else _first_runtime_text(
+                    row.get("process_rejection_reason"),
+                    "未取得最终对象资格",
+                )
+            )
+            monitoring_pool.append(
+                {
+                    "stock_name": name,
+                    "stock_code": code,
+                    "source_pool": source_pool,
+                    "current_action": current_action,
+                }
+            )
+            lifecycle_records.append(
+                {
+                    "stock_name": name,
+                    "stock_code": code,
+                    "first_report_date": row.get("first_report_date") or row.get("source_report_date") or target_date,
+                    "source_report_date": row.get("source_report_date") or target_date,
+                    "tracked_trading_days": row.get("tracked_trading_days") or 1,
+                    "daily_change_series": row.get("daily_change_series") or row.get("daily_changes") or [],
+                    "volume_change_summary": row.get("volume_change_summary") or row.get("volume_state") or "-",
+                    "cumulative_change_pct": row.get("cumulative_change_pct") or row.get("cumulative_change") or "-",
+                    "current_interpretation": interpretation,
+                    "current_action": current_action,
+                }
+            )
+        pool_specs = []
     for key, source_pool in pool_specs:
         for item in execution_stage_context.get(key, []) or []:
             code = _appendix_stock_code(item)
@@ -11990,12 +12443,20 @@ def _render_markdown_report_legacy_body(
         step0_plan["step0_action"] = _INFERRED_PREVIOUS_PLAN_ZERO_ACTION
         step0_prediction_cn = _INFERRED_PREVIOUS_PLAN_ZERO_VERDICT
         step0_action = _INFERRED_PREVIOUS_PLAN_ZERO_ACTION
-    selected_position_candidate = _runtime_sync_selected_candidate_from_final_resolution(
-        final_target_resolution,
+    workflow_selected_candidate = _runtime_sync_candidate_surfaces_from_selection_workflow(
+        selection_workflow,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    if workflow_selected_candidate is None:
+        selected_position_candidate = (
+            _runtime_final_resolution_core_candidate(final_target_resolution)
+            or selected_position_candidate
+            or {}
+        )
+    else:
+        selected_position_candidate = workflow_selected_candidate
     _clear_stale_candidate_quality_panel_targets(
         final_target_resolution,
         data,
@@ -12128,12 +12589,24 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot,
         position_decision,
     )
+    _runtime_sync_candidate_surfaces_from_selection_workflow(
+        selection_workflow,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     front_page_final_gate = _build_effective_front_page_final_gate(
         final_gate_for_front_page,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         opportunity_comparison=final_target_resolution.get("opportunity_comparison"),
         final_target_resolution=final_target_resolution,
+    )
+    _store_runtime_front_page_final_gate(
+        front_page_final_gate,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
     )
     front_structure_layer_text = execution_stage_context.get('front_structure_layer_text', '')
     front_follow_action_text = execution_stage_context.get('front_follow_action_text', '')
@@ -12303,6 +12776,7 @@ def _render_markdown_report_legacy_body(
     derived_appendix_c = _build_appendix_c_continuity_payload(
         target_date=target_date,
         execution_stage_context=execution_stage_context,
+        selection_workflow=selection_workflow,
     )
     appendix_c = derived_appendix_c or data.get("appendix_c") or (market_research_snapshot.get("appendix_c") if isinstance(market_research_snapshot, dict) else {})
     entry_cycle_calibration = _build_entry_cycle_calibration_payload(data, target_date)
@@ -12330,6 +12804,7 @@ def _render_markdown_report_legacy_body(
                 "etf_turnover_series": data.get("etf_turnover_series", {}) or {},
                 "extreme_conviction_list": extreme_conviction_list,
                 "dragon_rebound_watch_pool": execution_stage_context.get("dragon_rebound_watch_pool", []) or [],
+                "selection_workflow": selection_workflow,
                 "final_target_resolution": final_target_resolution,
                 "position_decision": position_decision,
                 "final_execution_target": _runtime_final_execution_target_payload(
@@ -12442,12 +12917,21 @@ def _render_markdown_report_legacy_body(
         step0_plan = execution_stage_context.get("step0_plan", {}) or {}
         step0_prediction_cn = execution_stage_context.get("step0_prediction_cn", step0_prediction)
         step0_action = execution_stage_context.get("step0_action", "")
-    selected_position_candidate = _runtime_sync_selected_candidate_from_final_resolution(
-        final_target_resolution,
+    workflow_selected_candidate = _runtime_sync_candidate_surfaces_from_selection_workflow(
+        selection_workflow,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    if workflow_selected_candidate is None:
+        selected_position_candidate = _runtime_sync_selected_candidate_from_final_resolution(
+            final_target_resolution,
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
+    else:
+        selected_position_candidate = workflow_selected_candidate
     _clear_stale_candidate_quality_panel_targets(
         final_target_resolution,
         data,
@@ -12556,12 +13040,24 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot,
         position_decision,
     )
+    _runtime_sync_candidate_surfaces_from_selection_workflow(
+        selection_workflow,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     front_page_final_gate = _build_effective_front_page_final_gate(
         final_gate_for_front_page,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         opportunity_comparison=final_target_resolution.get("opportunity_comparison"),
         final_target_resolution=final_target_resolution,
+    )
+    _store_runtime_front_page_final_gate(
+        front_page_final_gate,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
     )
     if isinstance(market_research_snapshot, dict):
         if "raw_final_gate" not in market_research_snapshot:
@@ -12661,6 +13157,7 @@ def _render_markdown_report_legacy_body(
             selected_position_candidate=selected_position_candidate,
             position_decision=position_decision,
             final_target_resolution=final_target_resolution,
+            selection_workflow=selection_workflow,
         )
         derivation_appendix = _sniper_target_derivation_full_section(
             sniper_target_derivation,

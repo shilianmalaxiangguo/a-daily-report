@@ -8,6 +8,14 @@ from report.position_tier_contract import (
 
 SCHEMA_VERSION = "selection_workflow.v1"
 DERIVATION_CONTRACT = "sector_first_strict.v1"
+PROCESS_OBSERVATION_TABLE_FIELDS = (
+    "候选",
+    "板块",
+    "历史来源",
+    "筛选路径",
+    "淘汰原因",
+    "过程处理",
+)
 LEGACY_SIGNAL_MARKERS = (
     "涨停",
     "连板",
@@ -162,6 +170,67 @@ def stock_label(value):
     if name and code:
         return f"{name}({code})"
     return name or code or "暂无"
+
+
+def selection_workflow_final_is_zero(workflow):
+    workflow = _as_dict(workflow)
+    if workflow.get("schema_version") != SCHEMA_VERSION or "final" not in workflow:
+        return False
+    final = _as_dict(workflow.get("final"))
+    try:
+        position_pct = normalize_planned_position_tier_pct(final.get("position_pct", 0))
+    except (TypeError, ValueError):
+        position_pct = 0
+    return position_pct <= 0 or not stock_payload(final.get("execution_object"))
+
+
+def process_observation_row(candidate):
+    candidate = _as_dict(candidate)
+    stock = stock_payload(candidate.get("stock")) or stock_payload(candidate)
+    if not stock:
+        return {}
+    source_pools = [
+        clean_visible_text(source)
+        for source in _as_list(candidate.get("source_pools"))
+        if clean_visible_text(source)
+    ]
+    workflow_path = [
+        clean_visible_text(node)
+        for node in _as_list(candidate.get("workflow_path"))
+        if clean_visible_text(node)
+    ]
+    if not workflow_path:
+        workflow_path = [
+            clean_visible_text(node)
+            for node in (candidate.get("first_seen_node"), candidate.get("eliminated_at"))
+            if clean_visible_text(node)
+        ]
+    rejection_reason = clean_visible_text(candidate.get("process_rejection_reason"))
+    if not rejection_reason:
+        rejection_reason = "未取得最终对象资格"
+    return {
+        "候选": stock_label(stock),
+        "板块": clean_visible_text(candidate.get("sector") or stock.get("sector"), "-"),
+        "历史来源": "、".join(source_pools) or "-",
+        "筛选路径": " -> ".join(workflow_path) or "-",
+        "淘汰原因": rejection_reason,
+        "过程处理": "只作过程回放，不新增参与",
+    }
+
+
+def process_observation_table_lines(candidates):
+    rows = [
+        row
+        for row in (process_observation_row(candidate) for candidate in _as_list(candidates))
+        if row
+    ]
+    if not rows:
+        return ["暂无候选过程记录。"]
+    fields = list(PROCESS_OBSERVATION_TABLE_FIELDS)
+    lines = ["| " + " | ".join(fields) + " |", "|" + "|".join(["---"] * len(fields)) + "|"]
+    for row in rows:
+        lines.append("| " + " | ".join(clean_visible_text(row.get(field), "-") for field in fields) + " |")
+    return lines
 
 
 def _as_dict(value):
@@ -938,25 +1007,25 @@ def _candidate_source_rows(execution_stage_context, selected_position_candidate=
     selected_key = stock_key(selected)
     if not selected_key:
         return rows
-    matched_rows = []
-    remaining_rows = []
+    normalized_rows = []
+    matched = False
     for source_key, candidate in rows:
         if _candidate_matches_selected(candidate, selected):
+            matched = True
             merged = dict(candidate)
-            merged.update({key: value for key, value in selected.items() if value not in (None, "")})
-            if not clean_visible_text(merged.get("candidate_role")) and clean_visible_text(candidate.get("candidate_role")):
-                merged["candidate_role"] = candidate.get("candidate_role")
-            if not clean_visible_text(merged.get("sector_derivation_evidence")) and clean_visible_text(candidate.get("sector_derivation_evidence")):
-                merged["sector_derivation_evidence"] = candidate.get("sector_derivation_evidence")
-            matched_rows.append((source_key, merged))
+            source_pools = list(merged.get("source_pools") or [source_key])
+            if "运行时观察对象" not in source_pools:
+                source_pools.append("运行时观察对象")
+            merged["source_pools"] = source_pools
+            normalized_rows.append((source_key, merged))
         else:
-            remaining_rows.append((source_key, candidate))
-    if matched_rows:
-        return matched_rows + remaining_rows
+            normalized_rows.append((source_key, candidate))
+    if matched:
+        return normalized_rows
     enriched = dict(selected)
     enriched.setdefault("source_pools", ["运行时观察对象"])
     enriched.setdefault("entered_reason", "来自运行时观察对象")
-    return [("selected_position_candidate", enriched)] + rows
+    return normalized_rows + [("selected_position_candidate", enriched)]
 
 
 def _quote_backfill_enabled(*sources):
@@ -1386,11 +1455,22 @@ def _candidate_has_market_emotion_derivation(candidate, context):
         "capacity_evidence",
         "public_participation",
         "divergence_acceptance",
+        "competition_comparison",
     )
     if not all(_explicit_bool(proof.get(key)) is True for key in required):
         return False
+    if not clean_visible_text(proof.get("direction")):
+        return False
+    carrier_keys = {
+        stock_key(item) or clean_visible_text(item)
+        for item in _as_list(proof.get("capital_carriers"))
+        if stock_key(item) or clean_visible_text(item)
+    }
+    if len(carrier_keys) < 2:
+        return False
     proof_leader = proof.get("leader") if isinstance(proof.get("leader"), dict) else {}
-    return bool(stock_key(proof_leader) and stock_key(proof_leader) == stock_key(candidate))
+    leader_key = stock_key(proof_leader)
+    return bool(leader_key and leader_key in carrier_keys and leader_key == stock_key(candidate))
 
 
 def _sector_anchor_keys(context, *, direction=""):
@@ -1432,7 +1512,7 @@ def _candidate_origin(source_key, candidate, context, local_trend_sector_proof=N
     if clean_text(source_key) == "selected_position_candidate":
         return "manual_observation"
     if "market_emotion_candidates" in clean_text(source_key) and _candidate_has_market_emotion_derivation(candidate, context):
-        return "market_emotion_line"
+        return "sector_first"
     if _candidate_has_sector_derivation(source_key, candidate, context, local_trend_sector_proof):
         return "sector_first"
     return "legacy_signal_only"
@@ -1440,18 +1520,19 @@ def _candidate_origin(source_key, candidate, context, local_trend_sector_proof=N
 
 def _candidate_entry_basis(source_key, candidate, context, local_trend_sector_proof=None):
     origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
+    if "market_emotion_candidates" in clean_text(source_key) and _candidate_has_market_emotion_derivation(candidate, context):
+        direction = clean_visible_text(_as_dict(_as_dict(context).get("market_emotion_line_proof")).get("direction"))
+        return clean_visible_text(
+            candidate.get("market_emotion_evidence")
+            or candidate.get("entered_reason")
+            or f"来自已证明的{direction}资金方向"
+        )
     if origin == "sector_first":
         return clean_visible_text(
             candidate.get("sector_derivation_evidence")
             or candidate.get("anchor_reason")
             or candidate.get("entered_reason")
             or "来自市场氛围、板块发酵和板块角色推导"
-        )
-    if origin == "market_emotion_line":
-        return clean_visible_text(
-            candidate.get("market_emotion_evidence")
-            or candidate.get("entered_reason")
-            or "来自市场情绪线，不来自单只涨停形态"
         )
     if origin == "manual_observation":
         return "手动或持仓对象只进入风险处理/观察链路，不能绕过板块推导取得新仓入口"
@@ -1474,7 +1555,89 @@ def _candidate_new_entry_qualified(source_key, candidate, context, local_trend_s
     )
     if target_date and candidate_dates and target_date not in candidate_dates:
         return False
-    return _candidate_origin(source_key, candidate, context, local_trend_sector_proof) in {"sector_first", "market_emotion_line"}
+    return _candidate_origin(source_key, candidate, context, local_trend_sector_proof) == "sector_first"
+
+
+def _merged_candidate_source_rows(
+    execution_stage_context,
+    selected_position_candidate=None,
+    local_trend_sector_proof=None,
+):
+    context = _as_dict(execution_stage_context)
+    grouped = {}
+    order = []
+    for source_key, raw_candidate in _candidate_source_rows(context, selected_position_candidate):
+        candidate = dict(raw_candidate)
+        key = stock_key(candidate)
+        if not key:
+            continue
+        origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
+        qualified = _candidate_new_entry_qualified(
+            source_key,
+            candidate,
+            context,
+            local_trend_sector_proof,
+        )
+        if key not in grouped:
+            grouped[key] = {
+                "source_key": source_key,
+                "candidate": candidate,
+                "origin": origin,
+                "qualified": qualified,
+            }
+            order.append(key)
+            continue
+
+        current = grouped[key]
+        current_candidate = current["candidate"]
+        current_sources = list(current_candidate.get("source_pools") or [current["source_key"]])
+        incoming_sources = list(candidate.get("source_pools") or [source_key])
+        source_pools = list(
+            dict.fromkeys(
+                clean_visible_text(source)
+                for source in [*current_sources, *incoming_sources]
+                if clean_visible_text(source)
+            )
+        )
+        current_rank = (current["origin"] == "sector_first", bool(current["qualified"]))
+        incoming_rank = (origin == "sector_first", bool(qualified))
+        if incoming_rank > current_rank:
+            merged = {**current_candidate, **candidate}
+            current.update(
+                {
+                    "source_key": source_key,
+                    "candidate": merged,
+                    "origin": origin,
+                    "qualified": qualified,
+                }
+            )
+        else:
+            merged = {**candidate, **current_candidate}
+            current["candidate"] = merged
+        current["candidate"]["source_pools"] = source_pools
+    return [
+        (grouped[key]["source_key"], grouped[key]["candidate"])
+        for key in order
+    ]
+
+
+def _process_candidate_elimination_reason(
+    candidate,
+    *,
+    candidate_origin="",
+    local_trend_sector_match=False,
+    price_block_reason="",
+):
+    reasons = []
+    if price_block_reason:
+        reasons.append("价格行为未通过确认")
+    if candidate_origin != "sector_first":
+        reasons.append("未证明来自板块资金方向")
+    elif not local_trend_sector_match:
+        reasons.append("未匹配已证明板块方向")
+    if not reasons:
+        reasons.append("未取得最终对象资格")
+    return "；".join(reasons)
 
 
 def _build_candidate_pool(
@@ -1488,7 +1651,11 @@ def _build_candidate_pool(
     final_key = stock_key(final_stock)
     pool = []
     seen = set()
-    for source_key, raw_candidate in _candidate_source_rows(context, selected_position_candidate):
+    for source_key, raw_candidate in _merged_candidate_source_rows(
+        context,
+        selected_position_candidate,
+        local_trend_sector_proof,
+    ):
         candidate = _candidate_with_quote(raw_candidate, quote_lookup)
         key = stock_key(candidate)
         if not key or key in seen:
@@ -1535,6 +1702,18 @@ def _build_candidate_pool(
             explicit_selected=explicit_selected,
         )
         observation_layer = "front_observation" if front_observation_qualified else "process_observation"
+        if not new_entry_qualified:
+            front_observation_qualified = False
+            front_observation_reason = clean_visible_text(
+                eliminated_reason
+                or _candidate_entry_basis(
+                    source_key,
+                    candidate,
+                    context,
+                    local_trend_sector_proof,
+                )
+            )
+            observation_layer = "process_observation"
         stale_final_reason = any(
             marker in clean_visible_text(front_observation_reason)
             for marker in ("已归入明日执行结论", "B1/B2执行计划")
@@ -1553,6 +1732,27 @@ def _build_candidate_pool(
             front_observation_qualified = False
             front_observation_reason = "已归入明日执行结论，后续只按B1/B2执行计划展示"
             observation_layer = "execution_object"
+        is_process_candidate = status != "最终执行对象"
+        process_reason = _process_candidate_elimination_reason(
+            candidate,
+            candidate_origin=candidate_origin,
+            local_trend_sector_match=local_trend_sector_match,
+            price_block_reason=price_block_reason,
+        )
+        if is_process_candidate:
+            leader_debate = {
+                "question": "为什么未进入最终对象",
+                "positive_evidence": [],
+                "negative_evidence": [process_reason],
+                "conclusion": "只作过程回放",
+            }
+            common_selection_consistency = {"status": "过程回放", "summary": process_reason}
+            front_observation_qualified = False
+            front_observation_reason = process_reason
+            observation_layer = "process_observation"
+        else:
+            leader_debate = _leader_debate(candidate)
+            common_selection_consistency = _common_selection_consistency(candidate)
         pool.append(
             {
                 "stock": stock_payload(candidate),
@@ -1567,18 +1767,23 @@ def _build_candidate_pool(
                 "mainline": clean_visible_text(candidate.get("mainline") or context.get("mainline_name")),
                 "sector": clean_visible_text(candidate.get("sector") or candidate.get("sector_name")),
                 "current_driver_tags": _candidate_driver_tags(candidate),
-                "sector_role": clean_visible_text(candidate.get("candidate_role") or candidate.get("core_identity")),
-                "reversal_decision": _anchor_reversal_decision(candidate),
-                "leader_debate": _leader_debate(candidate),
+                "sector_role": "过程候选" if is_process_candidate else clean_visible_text(candidate.get("candidate_role") or candidate.get("core_identity")),
+                "reversal_decision": "淘汰" if is_process_candidate else _anchor_reversal_decision(candidate),
+                "leader_debate": leader_debate,
                 "brooks_price_action_judge": brooks,
                 "limit_down_reversal_plan": limit_down_reversal_plan,
-                "common_selection_consistency": _common_selection_consistency(candidate),
+                "common_selection_consistency": common_selection_consistency,
                 "status": status,
                 "price_action_block_reason": price_block_reason,
+                "process_rejection_reason": process_reason if is_process_candidate else "",
                 "front_observation_qualified": front_observation_qualified,
                 "front_observation_reason": clean_visible_text(front_observation_reason),
                 "observation_layer": observation_layer,
-                "current_reason": clean_visible_text(candidate.get("conviction_rule") or candidate.get("anchor_reversal_reason")),
+                "current_reason": (
+                    process_reason
+                    if is_process_candidate
+                    else clean_visible_text(candidate.get("conviction_rule") or candidate.get("anchor_reversal_reason"))
+                ),
                 "eliminated_at": eliminated_at,
                 "eliminated_reason": eliminated_reason,
                 "compared_against": [],
@@ -1698,42 +1903,10 @@ def _pick_final_candidate(
     if _position_pct(position_decision) <= 0:
         return {}
     context = _as_dict(execution_stage_context)
-    sources = _candidate_sources(context)
-    if stock_key(selected_position_candidate):
-        selected_in_pool = False
-        for source_key, candidate in sources:
-            if _candidate_matches_selected(candidate, selected_position_candidate):
-                selected_in_pool = True
-                merged = dict(candidate)
-                merged.update(
-                    {
-                        key: value
-                        for key, value in _as_dict(selected_position_candidate).items()
-                        if value not in (None, "")
-                    }
-                )
-                merged = _candidate_with_quote(merged, quote_lookup)
-                if _candidate_can_be_final_execution_object(
-                    merged,
-                    source_key=source_key,
-                    context=context,
-                    local_trend_sector_proof=local_trend_sector_proof,
-                ):
-                    return stock_payload(merged)
-        if not selected_in_pool:
-            return {}
-        for source_key, candidate in sources:
-            if _candidate_matches_selected(candidate, selected_position_candidate):
-                continue
-            candidate = _candidate_with_quote(candidate, quote_lookup)
-            if _candidate_can_be_final_execution_object(
-                candidate,
-                source_key=source_key,
-                context=context,
-                local_trend_sector_proof=local_trend_sector_proof,
-            ):
-                return stock_payload(candidate)
-        return {}
+    sources = _merged_candidate_source_rows(
+        context,
+        local_trend_sector_proof=local_trend_sector_proof,
+    )
     for source_key, candidate in sources:
         candidate = _candidate_with_quote(candidate, quote_lookup)
         if _candidate_can_be_final_execution_object(
@@ -2370,14 +2543,7 @@ def build_selection_workflow(
     candidate_direction_mismatch = bool(
         local_trend_sector_proof.get("complete")
         and candidate_pool
-        and not any(
-            item.get("new_entry_qualified")
-            and (
-                item.get("local_trend_sector_match")
-                or item.get("candidate_origin") == "market_emotion_line"
-            )
-            for item in candidate_pool
-        )
+        and not any(item.get("new_entry_qualified") for item in candidate_pool)
     )
     if candidate_direction_mismatch:
         final_failure_conditions.append("个股与已证明方向不匹配")

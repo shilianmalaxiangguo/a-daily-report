@@ -358,7 +358,8 @@ class SelectionWorkflowTest(unittest.TestCase):
         row = workflow["candidate_pool"][0]
         self.assertEqual(row["brooks_price_action_judge"]["candlestick_consequence"], "弱收盘")
         self.assertEqual(row["brooks_price_action_judge"]["status"], "risk_first")
-        self.assertIn("价格否定优先", row["front_observation_reason"])
+        self.assertEqual(row["front_observation_reason"], row["process_rejection_reason"])
+        self.assertIn("价格行为未通过确认", row["process_rejection_reason"])
         self.assertNotIn("已归入明日执行结论", row["front_observation_reason"])
         self.assertNotIn("B1/B2执行", row["front_observation_reason"])
         self.assertEqual(workflow["final"]["execution_object"], {})
@@ -393,7 +394,7 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(row["status"], "过程候选")
         self.assertNotIn("已归入明日执行结论", row["front_observation_reason"])
         self.assertNotIn("B1/B2执行计划", row["front_observation_reason"])
-        self.assertEqual(row["front_observation_reason"], row["eliminated_reason"])
+        self.assertEqual(row["front_observation_reason"], row["process_rejection_reason"])
 
     def test_price_rejected_candidate_cannot_be_final_execution_object(self):
         workflow = build_selection_workflow(
@@ -518,7 +519,8 @@ class SelectionWorkflowTest(unittest.TestCase):
 
         self.assertFalse(row["front_observation_qualified"])
         self.assertEqual(row["observation_layer"], "process_observation")
-        self.assertIn("过程观察", row["front_observation_reason"])
+        self.assertEqual(row["front_observation_reason"], row["process_rejection_reason"])
+        self.assertIn("未证明来自板块资金方向", row["process_rejection_reason"])
 
     def test_sector_derived_candidate_can_be_final_when_price_and_execution_qualify(self):
         workflow = build_selection_workflow(
@@ -1181,7 +1183,7 @@ class SelectionWorkflowTest(unittest.TestCase):
         n7 = next(node for node in workflow["nodes"] if node["node_id"] == "N7")
         self.assertEqual(n7["passes_forward"]["brooks_price_action"]["risk_or_rejection_count"], 1)
 
-    def test_front_observation_qualification_separates_yake_from_shuangxing_process_sample(self):
+    def test_legacy_extreme_candidates_remain_process_evidence_without_sector_proof(self):
         workflow = build_selection_workflow(
             target_date="2026-06-10",
             execution_stage_context={
@@ -1216,12 +1218,19 @@ class SelectionWorkflowTest(unittest.TestCase):
         by_code = {row["stock"]["code"]: row for row in workflow["candidate_pool"]}
 
         self.assertEqual(workflow["final"]["execution_object"], {})
-        self.assertTrue(by_code["002409"]["front_observation_qualified"])
-        self.assertEqual(by_code["002409"]["observation_layer"], "front_observation")
-        self.assertIn("海光信息", by_code["002409"]["front_observation_reason"])
+        self.assertFalse(by_code["002409"]["front_observation_qualified"])
+        self.assertEqual(by_code["002409"]["observation_layer"], "process_observation")
+        self.assertEqual(
+            by_code["002409"]["front_observation_reason"],
+            by_code["002409"]["process_rejection_reason"],
+        )
+        self.assertNotIn("海光信息", by_code["002409"]["front_observation_reason"])
         self.assertFalse(by_code["002585"]["front_observation_qualified"])
         self.assertEqual(by_code["002585"]["observation_layer"], "process_observation")
-        self.assertIn("本板块锚未识别", by_code["002585"]["front_observation_reason"])
+        self.assertEqual(
+            by_code["002585"]["front_observation_reason"],
+            by_code["002585"]["process_rejection_reason"],
+        )
 
     def test_selected_candidate_not_in_pool_cannot_fallback_to_other_candidate(self):
         workflow = build_selection_workflow(
@@ -1290,6 +1299,149 @@ class SelectionWorkflowTest(unittest.TestCase):
         by_code = {item["stock"]["code"]: item for item in workflow["candidate_pool"]}
         self.assertEqual(by_code["001896"]["status"], "最终执行对象")
         self.assertEqual(by_code["600688"]["status"], "过程候选")
+
+    def test_explicit_legacy_target_does_not_reorder_qualified_sector_candidates(self):
+        context = _qualified_sector_context(direction="电力")
+        context["sector_derived_candidates"].append(
+            {
+                "name": "上海电力",
+                "code": "600021",
+                "sector": "电力",
+                "anchor_reversal_decision": "可作为主对象",
+                "candidate_role": "板块锚",
+                "sector_derivation_evidence": "同一资金方向内的次序候选",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "条件不满足回到0%不参与",
+            }
+        )
+
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=context,
+            selected_position_candidate={
+                "name": "上海电力",
+                "code": "600021",
+                "sector": "电力",
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(
+            [row["stock"]["code"] for row in workflow["candidate_pool"][:2]],
+            ["001896", "600021"],
+        )
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "001896")
+
+    def test_same_stock_merges_legacy_and_nested_sector_sources_without_losing_qualification(self):
+        context = _qualified_sector_context(direction="电力")
+        sector_candidate = context.pop("sector_derived_candidates")[0]
+        context["extreme_conviction_list"] = [
+            {
+                "name": "豫能控股",
+                "code": "001896",
+                "sector": "电力",
+                "conviction_reason": "旧强势名单来源",
+            }
+        ]
+        context["step2_bundle"] = {
+            "sector_derived_candidates": [sector_candidate],
+        }
+
+        workflow = build_selection_workflow(
+            target_date="2026-07-27",
+            execution_stage_context=context,
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "001896")
+        self.assertEqual(len(workflow["candidate_pool"]), 1)
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(row["candidate_origin"], "sector_first")
+        self.assertTrue(row["new_entry_qualified"])
+        self.assertEqual(
+            row["source_pools"],
+            ["extreme_conviction_list", "step2_bundle.sector_derived_candidates"],
+        )
+
+    def test_single_emotion_leader_without_multiple_capital_carriers_is_not_qualified(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-29",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "普跌抱团"},
+                "mainline_name": "情绪抱团",
+                "market_emotion_line_proof": {
+                    "complete": True,
+                    "scarcity_recognition": True,
+                    "capacity_evidence": True,
+                    "public_participation": True,
+                    "divergence_acceptance": True,
+                    "capital_carriers": [
+                        {"name": "明新旭腾", "code": "605068"},
+                    ],
+                    "leader": {"name": "明新旭腾", "code": "605068"},
+                },
+                "market_emotion_candidates": [
+                    {
+                        "name": "明新旭腾",
+                        "code": "605068",
+                        "sector": "汽车零部件",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "情绪高标",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "条件不满足回到0%不参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(row["candidate_origin"], "legacy_signal_only")
+        self.assertFalse(row["new_entry_qualified"])
+        self.assertEqual(row["observation_layer"], "process_observation")
+
+    def test_complete_market_emotion_direction_does_not_report_direction_mismatch(self):
+        context = _qualified_sector_context(direction="电力")
+        context.pop("sector_derived_candidates")
+        context["market_emotion_line_proof"] = {
+            "complete": True,
+            "direction": "情绪抱团",
+            "scarcity_recognition": True,
+            "capacity_evidence": True,
+            "public_participation": True,
+            "divergence_acceptance": True,
+            "competition_comparison": True,
+            "capital_carriers": [
+                {"name": "明新旭腾", "code": "605068"},
+                {"name": "北汽蓝谷", "code": "600733"},
+            ],
+            "leader": {"name": "明新旭腾", "code": "605068"},
+        }
+        context["market_emotion_candidates"] = [
+            {
+                "name": "明新旭腾",
+                "code": "605068",
+                "sector": "汽车零部件",
+                "anchor_reversal_decision": "可作为主对象",
+                "candidate_role": "情绪核心",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "条件不满足回到0%不参与",
+            }
+        ]
+
+        workflow = build_selection_workflow(
+            target_date="2026-07-29",
+            execution_stage_context=context,
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "605068")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertTrue(workflow["candidate_pool"][0]["new_entry_qualified"])
+        self.assertNotIn("个股与已证明方向不匹配", workflow["final"]["failure_conditions"])
+        self.assertNotEqual(workflow["final"]["reason"], "个股与已证明方向不匹配")
 
     def test_selected_candidate_needs_execution_evidence_even_when_reversal_passes(self):
         workflow = build_selection_workflow(
