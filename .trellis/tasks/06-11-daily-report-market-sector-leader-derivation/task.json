@@ -15,7 +15,7 @@
   "branch": "codex/sector-first-report-single-source",
   "base_branch": "develop",
   "worktree_path": null,
-  "commit": null,
+  "commit": "ff3432cc7ca392218514aaaf29d2e1b2824a260f",
   "pr_url": null,
   "subtasks": [],
   "children": [],

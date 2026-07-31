@@ -210,4 +210,4 @@
 
 ## 落地 commit
 
-待实现后回填。
+`ff3432cc7ca392218514aaaf29d2e1b2824a260f` (`feat: make sector-first report selection authoritative`)
