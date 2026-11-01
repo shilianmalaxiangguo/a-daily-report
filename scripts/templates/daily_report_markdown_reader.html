@@ -2,7 +2,6 @@
 <html lang="zh-CN">
 	<head>
 	  <meta charset="utf-8">
-	  <meta name="viewport" content="width=device-width, initial-scale=1">
 	  <title>$title</title>
 	  <style>
 	    :root {
@@ -219,8 +218,7 @@
 	      line-height: 1.45;
 	    }
 
-    .outline-nav,
-    .mobile-nav {
+    .outline-nav {
       display: grid;
       gap: 4px;
     }
@@ -292,10 +290,8 @@
 	      padding: 38px clamp(18px, 3vw, 34px) 88px;
 	    }
 
-	    @media (min-width: 761px) {
-	      .bear-shell.is-outline-collapsed .reader-document {
-	        max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width));
-	      }
+	    .bear-shell.is-outline-collapsed .reader-document {
+	      max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width));
 	    }
 
 	    .reader-header {
@@ -355,35 +351,6 @@
 	      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
 	      font-size: 14px;
 	      font-weight: 800;
-	    }
-
-    .mobile-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 18px;
-    }
-
-	    .mobile-nav a {
-	      display: inline-flex;
-	      min-height: 34px;
-	      align-items: center;
-	      border: 1px solid rgba(231, 57, 34, 0.16);
-	      border-radius: 999px;
-	      padding: 5px 12px;
-	      color: var(--reader-muted);
-	      background: rgba(255, 252, 246, 0.74);
-	      font-size: 14px;
-	      font-weight: 800;
-	    }
-
-    .mobile-nav a.level-3 {
-      display: none;
-    }
-
-	    .mobile-nav a:hover {
-	      border-color: var(--accent-red);
-	      color: var(--accent);
 	    }
 
     .markdown-body h1,
@@ -649,7 +616,6 @@
 	      border: 1px solid var(--reader-line);
 	      border-radius: 6px;
 	      box-sizing: border-box;
-	      -webkit-overflow-scrolling: touch;
 	    }
 
 	    .tomorrow-action-calendar-table {
@@ -884,7 +850,6 @@
       overflow-x: auto;
       isolation: isolate;
       border-radius: 8px;
-      -webkit-overflow-scrolling: touch;
     }
 
     .position-timeline-table {
@@ -1661,7 +1626,6 @@
 			      border-radius: 22px;
 			      background: transparent;
 			      contain: paint;
-			      -webkit-overflow-scrolling: touch;
 			    }
 
 		    .bear-chart-card {
@@ -1961,98 +1925,6 @@
 	      }
 	    }
 
-	    @media (max-width: 760px) {
-	      body {
-	        background: var(--reader-bg);
-	      }
-
-      .bear-shell {
-        display: block;
-        width: 100%;
-        min-height: 100vh;
-        margin: 0;
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
-      }
-
-	      .outline-sidebar {
-	        display: none;
-	      }
-
-	      .outline-toggle {
-	        display: none;
-	      }
-
-	      .editor-pane {
-	        margin-left: 0;
-	      }
-
-	      .bear-shell.is-outline-collapsed .editor-pane {
-	        margin-left: 0;
-	      }
-
-			      .reader-document {
-			        max-width: none;
-		        padding: 24px 12px 52px;
-		      }
-
-		      .reader-header,
-		      .markdown-body {
-		        border-radius: 24px;
-		      }
-
-	      .bear-chart-card {
-	        margin: 16px -2px 20px;
-	        padding: 16px 12px 14px;
-	        border-radius: 12px;
-	      }
-
-	      .tomorrow-action-calendar {
-	        margin-bottom: 16px;
-	        padding: 12px;
-	      }
-
-	      .tomorrow-action-calendar-header {
-	        align-items: flex-start;
-	        flex-direction: column;
-	        gap: 4px;
-	      }
-
-	      .tomorrow-action-calendar-header p {
-	        text-align: left;
-	      }
-
-	      .bear-chart-frame {
-	        height: 340px;
-	      }
-
-	      .bear-chart-frame.is-tall {
-	        height: 620px;
-	      }
-
-		      .reader-header h1,
-		      .markdown-body h1 {
-	        font-size: 1.8em;
-	      }
-
-	      .markdown-body h2 {
-	        font-size: 1.5em;
-	      }
-	    }
-
-	    @media (max-width: 440px) {
-	      .reader-header,
-	      .markdown-body {
-	        padding: 20px;
-	      }
-
-	      .meta,
-	      .mobile-nav a {
-	        font-size: 12px;
-	      }
-	    }
-
 	    @media (prefers-reduced-motion: reduce) {
 	      *,
 	      *::before,
@@ -2105,7 +1977,6 @@
         <header class="reader-header">
           <h1>$title</h1>
           <div class="meta">$trade_date · $source</div>
-          $mobile_nav
         </header>
         <div class="markdown-body">
           $document_body
@@ -2119,7 +1990,6 @@
 	  <script>
 	    (() => {
       const outlineMarker = "$" + "outline_nav";
-      const mobileMarker = "$" + "mobile_nav";
       const outlineTitleMarker = "$" + "outline_title";
       const hasTemplatePlaceholders = document.body.textContent.includes(outlineMarker);
       if (hasTemplatePlaceholders) {
@@ -2128,8 +1998,6 @@
         const meta = document.querySelector(".meta");
         const outlineSlot = Array.from(document.querySelectorAll(".outline-sticky"))
           .find((node) => node.textContent.includes(outlineMarker));
-        const mobileSlot = Array.from(document.querySelectorAll(".reader-header"))
-          .find((node) => node.textContent.includes(mobileMarker));
         const body = document.querySelector(".markdown-body");
 
         if (outlineTitle) {
@@ -2154,12 +2022,6 @@
           outlineSlot.innerHTML = outlineSlot.innerHTML
             .replace(outlineTitleMarker, "2026-06-05 A股日报")
             .replace(outlineMarker, `<nav class="outline-nav" aria-label="当前日报标题导航">${previewNav}</nav>`);
-        }
-        if (mobileSlot) {
-          mobileSlot.innerHTML = mobileSlot.innerHTML.replace(
-            mobileMarker,
-            `<nav class="mobile-nav" aria-label="当前日报标题导航">${previewNav}</nav>`
-          );
         }
         if (body) {
           body.innerHTML = `
@@ -3841,7 +3703,6 @@
 	      window.addEventListener("load", scheduleHeadingRefresh, { once: true });
 	      window.addEventListener("wheel", releaseForcedActive, { passive: true });
       window.addEventListener("mousedown", releaseForcedActive, { passive: true });
-      window.addEventListener("touchstart", releaseForcedActive, { passive: true });
       window.addEventListener("keydown", releaseForcedActive);
     })();
   </script>

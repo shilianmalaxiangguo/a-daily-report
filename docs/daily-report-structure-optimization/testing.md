@@ -2,6 +2,9 @@
 
 ## Python 解释器
 
+> 历史记录说明：本文件记录旧版日报结构的验证过程。文中的手机端、窄屏和 `390px`
+> 结果只保留作历史证据，不构成当前日报验收条件；当前默认只做桌面验证。
+
 本轮所有 Python 命令均使用：
 
 ```bash
@@ -297,6 +300,7 @@ git diff --check
 - `A_DAILY_REPORT_RUN_POSTGRES_INTEGRATION=1` 的同库重存测试：1 项通过。
 - 真实 Runtime 与命令入口的正式决定不变、动作优先、保存时点和磁盘正文一致测试：5 项通过。
 - `.generated/venv-py314/bin/python3.14 -m html.parser reports/research/quant-pressure-replay-study-20260711.html`。
-- Playwright 桌面与 `390px`：页面级横向溢出、元素重叠、SVG 非空、公式可见、窗口底色和控制台错误。
+- 历史 Playwright 桌面与 `390px` 检查：页面级横向溢出、元素重叠、SVG 非空、公式可见、
+  窗口底色和控制台错误。
 
-Revision 4 论文 HTML 解析和生成器逐字一致通过，23 项研究测试通过，SHA256 为 `b203af7a579eb16366da899baa7ac43b544fe9b96ba0ab76a26bdda866ca3f8d`。Playwright 结果保持为：桌面与 `390px` 页面级横向溢出和元素重叠均为零，10/10 SVG 非空，公式与四类窗口底色可见，控制台零错误。
+Revision 4 论文 HTML 解析和生成器逐字一致通过，23 项研究测试通过，SHA256 为 `b203af7a579eb16366da899baa7ac43b544fe9b96ba0ab76a26bdda866ca3f8d`。历史 Playwright 结果为：桌面与 `390px` 页面级横向溢出和元素重叠均为零，10/10 SVG 非空，公式与四类窗口底色可见，控制台零错误。

@@ -43,6 +43,8 @@ class SmallCapBacktestReportTests(unittest.TestCase):
         self.assertNotIn('random', payload['recent_metrics'])
         self.assertEqual(len(soup.select('table')), 2)
         self.assertFalse(soup.select('script[src], link[rel=stylesheet]'))
+        self.assertNotIn('name="viewport"', rendered)
+        self.assertNotIn('@media (max-width:', rendered)
         self.assertNotIn('47.5%', soup.get_text())
         self.assertNotIn('full-history', rendered)
         self.assertEqual(rendered, self.render_copy(deepcopy(self.inputs)))

@@ -2,7 +2,6 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$title</title>
   <style>
     :root {
@@ -101,8 +100,7 @@
       line-height: 1.45;
     }
 
-    .outline-nav,
-    .mobile-nav {
+    .outline-nav {
       display: grid;
       gap: 4px;
     }
@@ -167,26 +165,6 @@
       font-size: 14px;
     }
 
-    .mobile-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 18px;
-    }
-
-    .mobile-nav a {
-      padding: 5px 8px;
-      border: 1px solid var(--reader-line);
-      border-radius: 6px;
-      color: var(--reader-muted);
-      font-size: 14px;
-    }
-
-    .mobile-nav a:hover {
-      border-color: var(--accent-red);
-      color: var(--accent);
-    }
-
     section {
       border-bottom: 1px solid var(--reader-line);
       padding: 28px 0;
@@ -202,7 +180,6 @@
       border: 1px solid var(--reader-line);
       border-radius: 8px;
       background: var(--reader-bg);
-      -webkit-overflow-scrolling: touch;
     }
 
     table {
@@ -447,114 +424,6 @@
       color: var(--accent);
     }
 
-    @media (max-width: 640px) {
-      body {
-        background: var(--reader-bg);
-      }
-
-      .bear-shell {
-        display: block;
-        width: 100%;
-        min-height: 100vh;
-        margin: 0;
-        border: 0;
-        border-radius: 0;
-        box-shadow: none;
-      }
-
-      .outline-sidebar {
-        display: none;
-      }
-
-      .reader-document {
-        width: min(100% - 24px, var(--editor-width));
-        padding: 24px 0 48px;
-      }
-
-      .reader-header {
-        margin-bottom: 20px;
-      }
-
-      .dashboard-summary,
-      .chart-grid-core,
-      .chart-grid-explain,
-      .chart-grid-samples {
-        grid-template-columns: 1fr;
-      }
-
-      .daily-chart {
-        height: 300px;
-      }
-
-      .daily-chart-rank-alone {
-        height: 520px;
-      }
-
-      .daily-chart-lhb-flow {
-        height: 420px;
-      }
-
-      .chart-brief-inline {
-        grid-template-columns: 1fr;
-      }
-
-      .chart-grid-core .daily-chart {
-        height: 330px;
-      }
-
-      h1 {
-        font-size: 26px;
-      }
-
-      th,
-      td {
-        padding: 9px 8px;
-        font-size: 14px;
-      }
-
-      .reader-table {
-        margin-inline: -2px;
-      }
-
-      .reader-table.is-two-column table {
-        min-width: 100%;
-      }
-
-      .reader-table.is-two-column th:first-child,
-      .reader-table.is-two-column td:first-child {
-        width: 34%;
-      }
-    }
-
-    @media (min-width: 641px) {
-      .mobile-nav {
-        display: none;
-      }
-    }
-
-    @media (max-width: 1100px) {
-      .chart-grid-explain {
-        grid-template-columns: 1fr;
-      }
-
-      .chart-grid-samples {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 980px) and (min-width: 641px) {
-      .bear-shell {
-        display: block;
-      }
-
-      .outline-sidebar {
-        display: none;
-      }
-
-      .reader-document {
-        width: min(100% - 40px, var(--dashboard-width));
-      }
-    }
   </style>
 </head>
 <body>
@@ -582,16 +451,6 @@
         <header class="reader-header">
           <h1>$title</h1>
           <div class="meta">交易日：$trade_date · 来源：$source</div>
-          <nav class="mobile-nav" aria-label="日报章节">
-            <a href="#chart-dashboard">图表驾驶舱</a>
-            <a href="#tomorrow-action">明日动作</a>
-            <a href="#market-spine">市场结构</a>
-            <a href="#mainline-evidence">主线证据</a>
-            <a href="#candidate-actions">候选动作</a>
-            <a href="#participation-reviews">参与复盘</a>
-            <a href="#data-sources">数据来源</a>
-            <a href="#diagnostics">事实完整性</a>
-          </nav>
         </header>
 
           <section id="chart-dashboard" class="chart-dashboard">

@@ -2888,12 +2888,12 @@ def _collect_prefixed(lines: list[str], index: int, prefix: str) -> tuple[list[s
     return items, index
 
 
-def _render_nav(headings: Iterable[Heading], *, mobile: bool = False) -> str:
+def _render_nav(headings: Iterable[Heading]) -> str:
     items = []
     for index, heading in enumerate(headings):
         if heading.level > 3:
             continue
-        active_class = " is-active" if index == 0 and not mobile else ""
+        active_class = " is-active" if index == 0 else ""
         class_name = f' class="level-{heading.level}{active_class}"'
         current_attr = ' aria-current="true"' if active_class else ""
         items.append(
@@ -2902,8 +2902,7 @@ def _render_nav(headings: Iterable[Heading], *, mobile: bool = False) -> str:
         )
     if not items:
         return ""
-    nav_class = "mobile-nav" if mobile else "outline-nav"
-    return f'<nav class="{nav_class}" aria-label="当前日报标题导航">' + "\n".join(items) + "</nav>"
+    return '<nav class="outline-nav" aria-label="当前日报标题导航">' + "\n".join(items) + "</nav>"
 
 
 def render_markdown_report_html(
@@ -3238,7 +3237,6 @@ def render_markdown_report_html(
     first_h1 = next((heading for heading in headings if heading.level == 1), None)
     page_title = title or (first_h1.title if first_h1 else "A股日报")
     nav = _render_nav(headings)
-    mobile_nav = _render_nav(headings, mobile=True)
     template = Template(_template_path().read_text(encoding="utf-8"))
     return template.safe_substitute(
         title=_html(page_title),
@@ -3246,7 +3244,6 @@ def render_markdown_report_html(
         source=_html(source_label),
         outline_title=_html(page_title),
         outline_nav=nav,
-        mobile_nav=mobile_nav,
         document_body="\n".join(fragments),
         echarts_loader=_echarts_loader_html(output_path),
         mermaid_loader=_mermaid_loader_html(output_path, enabled=has_mermaid_diagram),

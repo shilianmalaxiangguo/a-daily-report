@@ -1047,7 +1047,6 @@ def render_source_health_html(payload) -> str:
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>日报生成前数据源检查 - {target_date}</title>
   <style>
     :root {{
@@ -1231,22 +1230,6 @@ def render_source_health_html(payload) -> str:
     .mark-neutral {{
       color: var(--reader-muted-soft);
       background: rgba(255, 250, 243, 0.86);
-    }}
-    @media (max-width: 760px) {{
-      .bear-source-health {{
-        width: min(100vw - 20px, 1120px);
-        padding: 22px 0 30px;
-      }}
-      h1 {{
-        font-size: 23px;
-      }}
-      .summary {{
-        gap: 7px;
-      }}
-      th,
-      td {{
-        padding: 9px 10px;
-      }}
     }}
   </style>
 </head>

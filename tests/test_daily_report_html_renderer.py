@@ -315,9 +315,10 @@ class DailyReportHtmlRendererTest(unittest.TestCase):
         self.assertNotIn(".window-controls span:first-child", html)
         self.assertNotIn('class="note-rail"', html)
         self.assertNotIn('class="note-item is-active"', html)
-        self.assertIn('@media (max-width: 640px)', html)
+        self.assertNotIn('name="viewport"', html)
+        self.assertNotIn('class="mobile-nav"', html)
+        self.assertNotIn('@media (max-width:', html)
         self.assertIn('<div class="reader-table is-two-column"><table>', html)
-        self.assertIn(".reader-table.is-two-column table", html)
         self.assertIn("明日动作", html)
         self.assertIn("明日新仓", html)
         self.assertIn("观察对象", html)
@@ -491,8 +492,7 @@ class DailyReportHtmlRendererTest(unittest.TestCase):
         self.assertIn(".chart-grid-core .daily-chart", html)
         self.assertIn("grid-template-columns: 1fr", html)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", html)
-        self.assertIn("@media (max-width: 1100px)", html)
-        self.assertIn(".chart-grid-explain {\n        grid-template-columns: 1fr;", html)
+        self.assertNotIn("@media (max-width:", html)
         self.assertIn('class="chart-grid chart-grid-explain"', html)
         self.assertLess(
             html.index('id="daily-chart-mainline-share"'),

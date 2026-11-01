@@ -851,13 +851,24 @@ class DailyReportSkillDocsTest(unittest.TestCase):
 
         self.assertEqual([], offenders)
 
+    def test_current_report_scope_overrides_historical_display_requirements(self):
+        instructions = self._read("AGENTS.md")
+        self.assertIn("只维护和验证桌面端", instructions)
+        self.assertIn("用户不需要任何手机端日报兼容", instructions)
+        self.assertIn("本约定覆盖历史任务档案、旧 PRD、设计文档、测试说明及验证记录", instructions)
+        self.assertIn("不得据此恢复手机适配", instructions)
+        guidelines = self._read(".trellis/spec/frontend/quality-guidelines.md")
+        self.assertIn("只按桌面阅读面维护和验收", guidelines)
+        verification = self._read("references/verification.md")
+        self.assertIn("Default to desktop report checks", verification)
+
     def test_verification_reference_names_practical_commands(self):
         verification = self._read("references/verification.md")
 
         for required in [
-            "venv/bin/python scripts/daily_report_entry_demo.py",
+            ".generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py",
             "scripts/report/report_acceptance_audit.py",
-            "venv/bin/python -m unittest",
+            ".generated/venv-py314/bin/python3.14 -m unittest",
             "tests.test_report_acceptance_audit",
             "tests.test_entry_plan_node_runtime",
             "git diff --check",

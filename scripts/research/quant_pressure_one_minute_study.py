@@ -2267,7 +2267,6 @@ def render_study_html(study):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
   <title>一分钟量化压力表象、公式与交易窗口复核</title>
@@ -2301,7 +2300,7 @@ def render_study_html(study):
     .case-result {{ margin:0; color:var(--muted); font-size:14px; text-align:right; }}
     figure {{ margin:26px 0 32px; }}
     figcaption {{ margin-top:10px; color:var(--muted); font-size:13px; }}
-    .chart-wrap {{ width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }}
+    .chart-wrap {{ width:100%; overflow-x:auto; }}
     svg {{ display:block; width:100%; height:auto; overflow:visible; }}
     .price-line,.fit-actual,.fit-one,.fit-two,.fit-three,.family-linear,.family-sqrt,.family-critical,.family-ordinary {{ fill:none; vector-effect:non-scaling-stroke; stroke-linecap:round; stroke-linejoin:round; }}
     .price-line,.fit-actual {{ stroke:var(--ink); stroke-width:2; }}
@@ -2334,7 +2333,6 @@ def render_study_html(study):
     .plain-list li {{ margin:8px 0; }}
     footer {{ padding:24px 52px 34px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }}
     @media (prefers-color-scheme: dark) {{ :root {{ --bg:#171b19; --paper:#202522; --ink:#edf2ef; --muted:#abb6b0; --line:#45504a; --soft:#292f2c; --red:#ee8177; --red-soft:#3b2927; --blue:#76bad0; --blue-soft:#25363c; --green:#72bea5; --green-soft:#25372f; --amber:#d7a94e; --purple:#bfa0d0; }} }}
-    @media (max-width:800px) {{ .sheet {{ width:100%; margin:0; border-top-width:4px; }} header,main,footer {{ padding-left:20px; padding-right:20px; }} h1 {{ font-size:34px; }} .subtitle {{ font-size:18px; }} .findings,.formula-grid,.steps {{ grid-template-columns:1fr; }} .finding {{ min-height:0; border-right:0; border-bottom:1px solid var(--line); }} .finding:last-child {{ border-bottom:0; }} .case-heading {{ align-items:start; flex-direction:column; }} .case-result {{ text-align:left; }} .chart-wrap svg {{ width:780px; max-width:none; }} table {{ min-width:760px; }} .case-study table {{ min-width:620px; }} }}
     @media print {{ :root {{ --bg:#fff; --paper:#fff; --ink:#111; --muted:#555; --line:#bbb; }} .sheet {{ width:100%; margin:0; border:0; }} section,.case-study,figure {{ break-inside:avoid; }} }}
   </style>
 </head>

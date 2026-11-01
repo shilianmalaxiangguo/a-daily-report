@@ -784,7 +784,9 @@ class QuantPressureOneMinuteStudyTest(unittest.TestCase):
         self.assertGreaterEqual(html.count("<svg"), 7)
         self.assertEqual(html.count("<svg"), html.count("</svg>"))
         self.assertGreaterEqual(html.count('class="chart-legend-label"'), 24)
-        self.assertIn(".chart-wrap svg { width:780px; max-width:none; }", html)
+        self.assertNotIn('name="viewport"', html)
+        self.assertNotIn("@media (max-width:", html)
+        self.assertNotIn("-webkit-overflow-scrolling", html)
 
     def test_checked_in_html_matches_the_generator(self):
         result = self.study.build_study(FIXTURE_ROOT)

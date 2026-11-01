@@ -108,6 +108,8 @@ class DailyReportSourceHealthTest(unittest.TestCase):
             self.assertIn("table-wrap", html)
             self.assertIn("status-mark", html)
             self.assertIn("✓", html)
+            self.assertNotIn('name="viewport"', html)
+            self.assertNotIn("@media (max-width:", html)
             self.assertIn("×", html)
             self.assertIn("-", html)
             self.assertIn("数据源任务", html)

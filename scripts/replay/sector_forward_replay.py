@@ -7035,7 +7035,6 @@ def render_forward_replay_html(payload):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="sector-forward-replay">
   <title>{_html(_requested_start_date(payload))} 至 {_html(_requested_end_date(payload))} 板块资金扩散前向回测</title>
   <style>
@@ -7066,12 +7065,6 @@ def render_forward_replay_html(payload):
 	        <header class="reader-header">
 	          <h1>板块资金扩散前向回测</h1>
 	          <div class="meta">{_html(_requested_start_date(payload))} 至 {_html(_requested_end_date(payload))} · 日线代理 · 非真实分时成交</div>
-	          <nav class="mobile-nav" aria-label="报告目录">
-	            <a href="#report-scope">区间说明</a>
-	            <a href="#replay-summary">回测摘要</a>
-	            <a class="level-3" href="#replay-window-matrix">买卖时间矩阵</a>
-	            <a class="level-3" href="#replay-window-metrics">区间收益</a>
-	          </nav>
 	        </header>
 	        <div class="markdown-body">
 	          <section class="top" id="report-scope">

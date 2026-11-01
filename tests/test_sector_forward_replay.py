@@ -337,6 +337,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         visible = _visible_html(rendered)
 
         self.assertIn('meta name="artifact" content="sector-forward-replay"', visible)
+        self.assertNotIn('name="viewport"', rendered)
+        self.assertNotIn('mobile-nav', rendered)
+        self.assertNotIn('@media (max-width:', rendered)
         self.assertIn("板块资金扩散前向回测", visible)
         self.assertIn("回测摘要", visible)
         self.assertIn("买入 / 卖出时间矩阵", visible)

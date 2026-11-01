@@ -998,7 +998,10 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("--outline-toggle-size: 44px", html)
         self.assertIn(".bear-shell.is-outline-collapsed .outline-sidebar", html)
         self.assertIn(".bear-shell.is-outline-collapsed .editor-pane", html)
-        self.assertIn("@media (min-width: 761px)", html)
+        self.assertNotIn('name="viewport"', html)
+        self.assertNotIn('mobile-nav', html)
+        self.assertNotIn('@media (max-width:', html)
+        self.assertNotIn('touchstart', html)
         self.assertIn(".bear-shell.is-outline-collapsed .reader-document", html)
         self.assertIn(
             "max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width))",

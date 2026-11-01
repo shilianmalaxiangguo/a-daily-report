@@ -680,6 +680,8 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertIn("<details", html)
         self.assertIn("<summary", html)
         self.assertIn("scroll-list", html)
+        self.assertNotIn('name="viewport"', html)
+        self.assertNotIn("@media (max-width:", html)
         self.assertNotIn("<table", html)
 
     def test_renderer_shows_heyuan_path_as_round_elimination(self):
@@ -1798,6 +1800,9 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         )
 
         html = render_sector_capital_preflight_html(payload)
+
+        self.assertNotIn('name="viewport"', html)
+        self.assertNotIn("@media (max-width:", html)
 
         self.assertIn('meta name="artifact" content="sector-capital-preflight"', html)
         self.assertIn("板块资金扩散生成前复核", html)

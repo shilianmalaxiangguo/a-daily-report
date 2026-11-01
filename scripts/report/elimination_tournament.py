@@ -3448,7 +3448,6 @@ def render_elimination_tournament_html(payload):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="elimination-tournament">
   <title>{_html(payload.get("trade_date"))} 过程候选淘汰赛</title>
   <style>
@@ -3956,17 +3955,6 @@ def render_elimination_tournament_html(payload):
 	      color: var(--muted);
 	      background: #f8fafc;
 	    }}
-			    @media (max-width: 760px) {{
-			      main {{ padding: 20px 12px 32px; }}
-			      .final-summary {{ grid-template-columns: 1fr 1fr; }}
-			      .flowchart-head {{ display: block; }}
-			      .flowchart-head strong {{ display: inline-block; margin-top: 10px; }}
-			      .flow-node {{ flex-basis: 232px; min-height: 240px; }}
-			      .key-paths-head {{ display: block; }}
-			      .round-head {{ display: block; }}
-		      .round-counts {{ grid-template-columns: repeat(3, 1fr); margin-top: 12px; }}
-		      .round-lanes {{ grid-template-columns: 1fr; }}
-	    }}
   </style>
 </head>
 <body>
@@ -4406,7 +4394,6 @@ def render_sector_capital_preflight_html(payload):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="sector-capital-preflight">
   <title>{_html(payload.get("trade_date"))} 板块资金扩散生成前复核</title>
   <style>
@@ -4947,18 +4934,6 @@ def render_sector_capital_preflight_html(payload):
     .is-empty {{
       color: var(--muted);
       background: #f8fafc;
-    }}
-    @media (max-width: 760px) {{
-	      main {{ padding: 20px 12px 32px; }}
-	      .final-summary {{ grid-template-columns: 1fr 1fr; }}
-	      .flowchart-head {{ display: block; }}
-	      .flowchart-head strong {{ display: inline-block; margin-top: 10px; }}
-	      .flow-node {{ flex-basis: 232px; min-height: 240px; }}
-	      .audit-table-block summary {{ display: block; }}
-	      .audit-table-block summary strong {{ display: block; margin-top: 4px; text-align: left; }}
-	      .round-head {{ display: block; }}
-      .round-counts {{ grid-template-columns: repeat(3, 1fr); margin-top: 12px; }}
-      .round-lanes {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
