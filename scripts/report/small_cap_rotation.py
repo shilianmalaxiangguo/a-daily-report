@@ -1,13 +1,9 @@
-"""The execution plan: small-stock rotation, five cold names with growing revenue and profit, every 20 sessions.
+"""Build the v0.3 shortlist and rotation calendar; cash and NAV belong to small_cap_tracking.
 
-Decision days are every 20th trading session counted from 2024-07-01. On a decision day, eligible stocks (not ST,
-listed at least 120 days) are ranked by average turnover over the last 20 sessions; in the lowest fifth, keep those
-on the main board or ChiNext whose latest quarter announced on or before that day (and after the quarter ended)
-shows revenue and profit growth above zero; the five with the lowest turnover are bought at the next open (a name
-opening at the limit is skipped for the next one) and held to the close of the next decision day. Since v0.3
-(2026-10-31) a name that closes 10% or more above the price paid is sold at the next open and the money waits for
-the next rotation (wiki/交易思想/小盘轮换策略.md); the same plan without that
-rule is kept beside it. Net value is reported against ChiNext, the user's anchor, and the CSI All Share.
+Every 20 sessions from 2024-07-01, rank eligible stocks by their 20-session average turnover. Within the lowest
+fifth, select main-board/ChiNext stocks with positive revenue and profit growth announced by the decision date.
+Five names plus three backups are frozen for the period. New plans do not compute account simulations or fresh
+mid-period rankings. Old frozen plan rendering and explicit research comparisons remain readable separately.
 """
 from datetime import date, timedelta
 import json
@@ -17,22 +13,22 @@ import numpy as np
 
 from report.fact_utils import evidence_hash
 
-SCHEMA = 'small_cap_plan.v7'
+SCHEMA = 'small_cap_plan.v8'
 SCHEMAS = ('small_cap_plan.v1', 'small_cap_plan.v2', 'small_cap_plan.v3', 'small_cap_plan.v4', 'small_cap_plan.v5',
-           'small_cap_plan.v6', SCHEMA)
+           'small_cap_plan.v6', 'small_cap_plan.v7', SCHEMA)
 # v2 adds the next session, the next decision day and the day the switch trades; v3 lists only boards the account
 # can buy, keeping the all-board list for reference; v4 holds five names and tracks the pool and CSI 2000; v5 keeps
 # the first published list of a period for the rest of it and works the plan through the user's 10,000-yuan account;
 # v6 adds, on days inside a period, the list ranked at today's close for someone starting only now; v7 sells a name
 # at the next open after it closes 10% above the price paid and keeps the result without that rule beside it.
-SAME_LIST = ('small_cap_plan.v5', 'small_cap_plan.v6', SCHEMA)   # lists made by the same selection rule
+# v8 only builds the shortlist and calendar; account results come from continuous tracking.
+SAME_LIST = ('small_cap_plan.v5', 'small_cap_plan.v6', 'small_cap_plan.v7', SCHEMA)
 TAKE_PROFIT = 0.10               # the user's take-profit line (2026-10-31, v0.3), against the price paid
 SELL_FEE = 0.0001 + 0.00001 + 0.0005   # commission, transfer fee and stamp duty on a sale
 WEEKDAYS = ('周一', '周二', '周三', '周四', '周五', '周六', '周日')
 BARRED = ('688', '689')          # the user's account (2026-10-30): main board and ChiNext, not STAR
 BOARDS_TEXT = '主板和创业板'
 FLOOR = 0.7                      # the user's floor for the whole account's net value (2026-10-30)
-ACCOUNT_YUAN = 10_000.0          # the user's principal (2026-10-30); the plan is worked through it lot by lot
 ACCOUNT_FEE = 0.0001 + 0.00001   # commission 0.01% with no minimum (2026-10-31) plus transfer fee, on buying
 
 
@@ -40,13 +36,13 @@ def board_of(code):
     return '科创板' if code.startswith(('688', '689')) else '创业板' if code.startswith(('300', '301', '302')) else '主板'
 ANCHOR = '2024-07-01'
 CYCLE = 20
-NAMES = 5                        # the user's account (2026-10-31): 10,000 yuan, commission 0.01% with no minimum
+NAMES = 5
 BACKUPS = 3
 LISTED_DAYS = 120
 COST = 0.002
 CASH = 0.015 / 252
 ROOT = Path(__file__).resolve().parents[2]
-HISTORY = ROOT / '.generated/backtest-history'
+HISTORY = ROOT / 'data/market-history'
 
 
 def _iso(value):
@@ -194,17 +190,13 @@ def rotation_curve(h, records, start, eligible=None, barred=BARRED, names=NAMES,
     return np.array(nav)
 
 
-def load_inputs(target_date, history=HISTORY):
-    """Trading sessions from the anchor, growth records and ChiNext prices, from the local caches."""
+def load_inputs(*, history=HISTORY):
+    """Trading sessions from the anchor and dated financial growth records."""
     calendar = json.loads((history / 'calendar.json').read_text(encoding='utf-8'))
     sessions = sorted({_iso(r['cal_date']) for r in calendar['rows'] if int(r['is_open']) == 1})
-    fina_path, index_path = history / 'fina_indicator.json', history / 'indices.json'
+    fina_path = history / 'fina_indicator.json'
     records = growth_records(json.loads(fina_path.read_text(encoding='utf-8'))) if fina_path.is_file() else {}
-    chinext = {}
-    if index_path.is_file():
-        rows = (json.loads(index_path.read_text(encoding='utf-8')).get('indices') or {}).get('399006.SZ', {}).get('rows') or []
-        chinext = {_iso(r['trade_date']): (float(r['open']), float(r['close'])) for r in rows if _iso(r['trade_date']) <= target_date}
-    return sessions, records, chinext
+    return sessions, records
 
 
 def _eligible(value, h, t):
@@ -219,62 +211,7 @@ def _eligible(value, h, t):
     return out & ~np.isnan(h['close'][:, t])
 
 
-def _span_return(h, members, t, end):
-    growth = np.where(np.isnan(h['returns']), 0.0, h['returns'] / 100)
-    value = np.array([h['close'][i, t + 1] / h['open'][i, t + 1] * np.prod(1 + growth[i, t + 2:end + 1]) for i in members])
-    return float(value.mean() - 1) * 100, [float(v - 1) * 100 for v in value]
-
-
-def _last_close(h, i, end):
-    seen = np.flatnonzero(~np.isnan(h['close'][i, :end + 1]))
-    return float(h['close'][i, seen[-1]]) if len(seen) else None
-
-
-def _index_return(prices, days, t, end):
-    """Open of t+1 to close of end; None when either price is missing."""
-    first, last = prices.get(days[t + 1]), prices.get(days[end])
-    if not first or not last or not first[0] or not last[1]:
-        return None
-    return (last[1] / first[0] - 1) * 100
-
-
-def account_orders(items, price, cash=ACCOUNT_YUAN, names=NAMES):
-    """Whole-lot orders down the list: each empty place gets the cash over the empty places; a name whose lot (100
-    shares) costs more than that is passed over. price(item) is the price, or None when it cannot be bought."""
-    orders, skipped = [], []
-    for item in items:
-        if len(orders) == names:
-            break
-        p = price(item)
-        if p is None:
-            skipped.append({'code': item['code'], 'name': item['name'], 'reason': '开盘涨停或停牌，买不到'})
-            continue
-        budget = cash / (names - len(orders))
-        lots = int(budget // (p * 100))
-        while lots > 0 and lots * 100 * p * (1 + ACCOUNT_FEE) > budget:
-            lots -= 1
-        if not lots:
-            skipped.append({'code': item['code'], 'name': item['name'],
-                            'reason': f'一手{p * 100:,.0f}元，超过这一份{budget:,.0f}元'})
-            continue
-        amount = lots * 100 * p
-        cash -= amount * (1 + ACCOUNT_FEE)
-        orders.append({'code': item['code'], 'name': item['name'], 'price': round(float(p), 3), 'lots': lots,
-                       'amount': round(float(amount), 2)})
-    return orders, skipped, cash
-
-
-def load_index(code, target_date, history=HISTORY):
-    """{date: (open, close)} of a cached index up to target_date."""
-    path = history / 'indices.json'
-    if not path.is_file():
-        return {}
-    rows = (json.loads(path.read_text(encoding='utf-8')).get('indices') or {}).get(code, {}).get('rows') or []
-    return {_iso(r['trade_date']): (float(r['open']), float(r['close'])) for r in rows
-            if _iso(r['trade_date']) <= target_date and r.get('open') and r.get('close')}
-
-
-def build_plan(value, target_date, *, sessions, records, chinext, frozen=None, csi2000=None):
+def build_plan(value, target_date, *, sessions, records, frozen=None):
     """None with a reason when the calendar or data window cannot place today in the cycle.
 
     frozen: earlier official plans by date; the first one published for this period (on the decision day or later)
@@ -293,7 +230,6 @@ def build_plan(value, target_date, *, sessions, records, chinext, frozen=None, c
         return None, '换手日不在本次行情窗口内，不能排名单'
     h = history_from_artifact(value)
     turnover = average_turnover(h['amount'])
-    csi = {r['date']: (r.get('open'), r['close']) for r in value['benchmark']['rows']}
 
     def names_at(t):
         eligible = _eligible(value, h, t)
@@ -318,10 +254,6 @@ def build_plan(value, target_date, *, sessions, records, chinext, frozen=None, c
             break
         except ValueError:
             continue
-    if published and since:
-        index = {code: k for k, code in enumerate(h['codes'])}
-        listed = [p for p in published['picks'] + published['backups'] if p['code'] in index]
-        ranked = [(index[p['code']], (p['period'], p['sales_yoy'], p['profit_yoy'], p['announced'])) for p in listed]
     switch = position - since + CYCLE
     plan = {'schema': SCHEMA, 'target_date': target_date, 'anchor': ANCHOR, 'cycle': CYCLE, 'decision_date': decision,
             'sessions_since': since, 'sessions_to_next': CYCLE - since,
@@ -335,76 +267,7 @@ def build_plan(value, target_date, *, sessions, records, chinext, frozen=None, c
             'picks': published['picks'] if published and since else [describe(i, f, t) for i, f in ranked[:NAMES]],
             'backups': published['backups'] if published and since else [describe(i, f, t) for i, f in ranked[NAMES:NAMES + BACKUPS]],
             'all_boards': published['all_boards'] if published and since else [describe(i, f, t) for i, f in full[:NAMES]],
-            'holding': None, 'previous': [], 'take_profit': TAKE_PROFIT}
-    end = days.index(target_date)
-    index = {code: k for k, code in enumerate(h['codes'])}
-    listed = [p for p in plan['picks'] + plan['backups'] if p['code'] in index]
-    if not since:
-        orders, skipped, cash = account_orders(listed, lambda p: float(h['close'][index[p['code']], t]))
-        value_pct = None
-    else:
-        orders, skipped, cash = account_orders(
-            listed, lambda p: float(h['open'][index[p['code']], t + 1]) if _buyable(h, index[p['code']], t) else None)
-        growth = np.where(np.isnan(h['returns']), 0.0, h['returns'] / 100)
-        worth, hold, cash_now = cash, cash, cash
-        for o in orders:
-            i = index[o['code']]
-            path, sold, due = held_path(h, i, t, end, live=True)
-            hold += o['amount'] * h['close'][i, t + 1] / h['open'][i, t + 1] * np.prod(1 + growth[i, t + 2:end + 1])
-            back = o['amount'] * float(path[-1]) * (1 - SELL_FEE) if sold else 0.0
-            worth += back or o['amount'] * float(path[-1])
-            cash_now += back
-            o.update({'take_profit_price': round(o['price'] * (1 + TAKE_PROFIT), 2), 'last_close': _last_close(h, i, end),
-                      'gain_pct': round(float(path[-1] - 1) * 100, 2), 'status': 'sold' if sold else 'due' if due else 'holding',
-                      'sold_date': days[sold] if sold else None, 'sold_price': float(h['open'][i, sold]) if sold else None})
-        value_pct = round(float(worth / ACCOUNT_YUAN - 1) * 100, 2)
-        hold_pct = round(float(hold / ACCOUNT_YUAN - 1) * 100, 2)
-    plan['account'] = {'base': ACCOUNT_YUAN, 'priced': 'close' if not since else 'open', 'date': days[t] if not since else days[t + 1],
-                       'orders': orders, 'skipped': skipped, 'cash_left': round(float(cash), 2), 'value_pct': value_pct,
-                       'take_profit': TAKE_PROFIT}
-    if since:
-        plan['account'].update({'cash_now': round(float(cash_now), 2), 'value_hold_pct': hold_pct})
-    plan['fresh'] = None
-    if since:                                 # someone starting inside the period uses the latest close's ranking
-        today = [(i, f) for i, f in names_at(end)[0] if not h['codes'][i].startswith(BARRED)]
-        picks = [describe(i, f, end) for i, f in today[:NAMES]]
-        backups = [describe(i, f, end) for i, f in today[NAMES:NAMES + BACKUPS]]
-        orders, skipped, cash = account_orders(picks + backups, lambda p: float(h['close'][index[p['code']], end]))
-        plan['fresh'] = {'date': target_date, 'picks': picks, 'backups': backups, 'orders': orders, 'skipped': skipped,
-                         'cash_left': round(float(cash), 2)}
-    if since and ranked:
-        members = bought(h, ranked, t)
-        if members:
-            basket, each = _span_return(h, members, t, end)
-            paths = [held_path(h, i, t, end, live=True) for i in members]
-            pool = bought(h, [(i, f) for i, f in full if not h['codes'][i].startswith(BARRED)], t, None)
-            pool_pct = _span_return(h, pool, t, end)[0] if pool else None
-            plan['holding'] = {'entry_date': days[t + 1], 'names': [value['profile']['names'][i] for i in members],
-                               'codes': [h['codes'][i] for i in members],
-                               'each_pct': [round(float(path[-1] - 1) * 100, 2) for path, _, _ in paths],
-                               'each_hold_pct': [round(x, 2) for x in each],
-                               'status': ['sold' if sold else 'due' if due else 'holding' for _, sold, due in paths],
-                               'sold_dates': [days[sold] if sold else None for _, sold, _ in paths],
-                               'basket_pct': round(float(np.mean([path[-1] for path, _, _ in paths])) * (1 - COST / 2) * 100 - 100, 2),
-                               'basket_hold_pct': round((1 + basket / 100) * (1 - COST / 2) * 100 - 100, 2),
-                               'pool_pct': None if pool_pct is None else round((1 + pool_pct / 100) * (1 - COST / 2) * 100 - 100, 2),
-                               'pool_size': len(pool), 'csi2000_pct': _index_return(csi2000 or {}, days, t, end),
-                               'chinext_pct': _index_return(chinext, days, t, end), 'csi_all_pct': _index_return(csi, days, t, end)}
-    for back in (1, 2):
-        p = t - back * CYCLE
-        if p < 19 or p + CYCLE > len(days) - 1:
-            continue
-        old = [(i, f) for i, f in names_at(p)[0] if not h['codes'][i].startswith(BARRED)]
-        members = bought(h, old, p)
-        if not members:
-            continue
-        basket, _ = _span_return(h, members, p, p + CYCLE)
-        with_rule = float(np.mean([held_path(h, i, p, p + CYCLE)[0][-1] for i in members]))
-        plan['previous'].append({'decision_date': days[p], 'end_date': days[p + CYCLE], 'names': [value['profile']['names'][i] for i in members],
-                                 'basket_pct': round(with_rule * (1 - COST / 2) ** 2 * 100 - 100, 2),
-                                 'basket_hold_pct': round((1 + basket / 100) * (1 - COST / 2) ** 2 * 100 - 100, 2),
-                                 'chinext_pct': _index_return(chinext, days, p, p + CYCLE),
-                                 'csi_all_pct': _index_return(csi, days, p, p + CYCLE)})
+            'take_profit': TAKE_PROFIT}
     plan['artifact_hash'] = evidence_hash(plan)
     return plan, None
 
@@ -457,6 +320,7 @@ def _pct(value):
 
 
 def render_plan(soup, plan, backtest=None, *, tracked=False):
+    current = tracked or plan['schema'] == SCHEMA
     def text(tag, content, cls=None):
         node = soup.new_tag(tag, attrs={'class': cls} if cls else {})
         node.string = content
@@ -468,7 +332,7 @@ def render_plan(soup, plan, backtest=None, *, tracked=False):
     upcoming = f'下一个交易日{label}' if label else '下一个交易日'
     if plan['sessions_since'] == 0:
         status = (f"今天（{plan['decision_date']}）收盘后定了新名单：{upcoming}开盘，卖出上一期不在新名单里的，"
-                  '买入新进名单的，还在名单里的不动；开盘涨停买不到、或一手的钱不够的，按顺序用备选补上。')
+                  '买入新进名单的，还在名单里的不动；开盘无法买入时，按顺序用三只备选补上，买不满留现金。')
     else:
         switch = (f"下次在{day_label(plan['next_decision'])}收盘后定新名单，{day_label(plan.get('next_switch')) or '再下一个交易日'}开盘换股"
                   if plan.get('next_decision') else f"再过{plan['sessions_to_next']}个交易日定新名单，次一个交易日开盘换股")
@@ -532,7 +396,7 @@ def render_plan(soup, plan, backtest=None, *, tracked=False):
         section.append(_account_block(soup, text, plan, account))
     if not tracked and (fresh := plan.get('fresh')):
         section.append(_fresh_block(soup, text, plan, fresh))
-    for item in ([] if tracked else plan['previous']):
+    for item in ([] if tracked else plan.get('previous', [])):
         shadow = f"，不止盈为{_pct(item['basket_hold_pct'])}" if item.get('basket_hold_pct') is not None else ''
         section.append(text('p', f"按规则回算的上一期（{item['decision_date']}定名单，持有到{item['end_date']}）：{'、'.join(item['names'])}，"
                              f"合计{_pct(item['basket_pct'])}{f'（按止盈10%{shadow}）' if plan.get('take_profit') else ''}，同期创业板指{_pct(item['chinext_pct'])}、中证全指{_pct(item['csi_all_pct'])}。"
@@ -544,12 +408,13 @@ def render_plan(soup, plan, backtest=None, *, tracked=False):
                          f"（本期{plan['cold_basket']}只），只留最近一季收入和利润同比都为正的{('、在' + plan['boards'] + '里') if plan.get('boards') else ''}（{plan['qualified']}只），按成交额从小到大取前{len(plan['picks']) or NAMES}只；"
                          '定名单那天收盘后出新名单，下一个交易日开盘卖出不在新名单里的、买入新进的，名单里没变的不动；'
                          + ('当前连续跟踪按等额碎股模拟；换手时空名额用“现金÷剩余名额”，最多五只名单与三只备选，买不到则保留现金；'
-                            if tracked else f"怎么买：用来做这个计划的钱分成{len(plan['picks']) or NAMES}份，按名单顺序买，每只用“现金÷还空着的名额”；"
+                            if current else f"怎么买：用来做这个计划的钱分成{len(plan['picks']) or NAMES}份，按名单顺序买，每只用“现金÷还空着的名额”；"
                             '一手（100股）的钱超过这一份就跳过，用下一只补；已经拿着、还在名单里的不动，也不补到等额。')
                          + ('持有期间：收盘比买价高10%（含分红送转），下一个交易日开盘卖，卖出的钱留到下一个换手日，这一期不再买回；'
                             '不设止损，被戴帽也不单独卖，到换手日自然换掉；' if plan.get('take_profit') else '持有期间不设止损；')
                          + f"整个账户净值跌破{FLOOR}就全部停下重新检验。"
-                         + ('连续跟踪、冻结回测与真实成交各有独立口径，不把回测收益当作未来预期。' if tracked else
+                         + '费用：佣金万一免五，过户费与卖出印花税另计。'
+                         + ('连续跟踪、冻结回测与真实成交各有独立口径，不把回测收益当作未来预期。' if current else
                             '完整比较见独立回测报告；日报单期演示不代表连续账户或真实成交。')))
     return section
 

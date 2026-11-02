@@ -111,7 +111,7 @@ def collect_facts(pro, data, day, items, root, *, snapshot_source='official'):
     for row in market['benchmark']['rows']:
         if row['date'] == day:
             benchmarks['000985.CSI'] = {'name': '中证全指', 'open': row.get('open'), 'close': row['close']}
-    path = root / '.generated/backtest-history/indices.json'
+    path = root / 'data/market-history/indices.json'
     indices = json.loads(path.read_text(encoding='utf-8')).get('indices', {}) if path.is_file() else {}
     for code, name in [('399006.SZ', '创业板指'), ('932000.CSI', '中证2000')]:
         for row in indices.get(code, {}).get('rows', []):
@@ -267,7 +267,7 @@ def prepare(data, day, *, root, allow_collect=False, pro=None, snapshot_source='
     seed = load_seed(root)
     if seed is None or day < seed['start_date']:
         return None
-    rows = json.loads((root / '.generated/backtest-history/calendar.json').read_text(encoding='utf-8'))['rows']
+    rows = json.loads((root / 'data/market-history/calendar.json').read_text(encoding='utf-8'))['rows']
     sessions_from_calendar([r for r in rows if r['cal_date'] <= day.replace('-', '')], day, count=1)
     sessions = sorted({f"{r['cal_date'][:4]}-{r['cal_date'][4:6]}-{r['cal_date'][6:]}"
                        for r in rows if int(r['is_open']) == 1})

@@ -1,5 +1,7 @@
 # 文件夹地图
 
+当前只运行小盘轮换 v0.3，阿尔法／贝塔是显式备用研究。先读本页，再读当前Wiki；旧报告与压缩归档不构成现行要求。
+
 ```text
 a-daily-report/
 ├── README.md / AGENTS.md / SKILL.md / CONTEXT.md  当前入口和约定
@@ -10,50 +12,52 @@ a-daily-report/
 │   ├── daily_report_entry_demo.py               旧命令的短跳转
 │   ├── alpha_beta_research.py                   显式备用研究入口
 │   ├── report/
-│   │   ├── small_cap_rotation.py                选股、卖出、单期模拟
-│   │   ├── small_cap_tracking.py                连续模拟、现金与原买价
+│   │   ├── small_cap_rotation.py                当前名单与日历；旧快照只读展示
+│   │   ├── small_cap_tracking.py                唯一连续模拟账户、现金与原买价
 │   │   ├── small_cap_report.py                  必需采集、快照、桌面页面
 │   │   ├── market_returns.py                    按日期采集与验证全市场行情
 │   │   ├── small_cap_history.py                 行情转计算矩阵
 │   │   ├── fact_utils.py                        日期、数值、指纹等共用工具
-│   │   └── render_small_cap_backtest_report.py   重绘冻结比较结果
-│   ├── market_data/                            数据源连接与日期工具
-│   └── research/alpha_beta/                     备用模型、旧规则和回测
-├── tests/                                      只测试保留的功能
+│   │   └── render_small_cap_backtest_report.py   只重绘冻结比较
+│   ├── market_data/                            本项目数据源连接与日期工具
+│   └── research/alpha_beta/                     备用模型、历史规则和回测
+├── tests/                                      保留功能及历史只读兼容测试
 ├── wiki/                                       当前策略、证据和表达约定
 ├── references/                                 产物契约、验证命令
 ├── docs/
 │   ├── structure.md / cleanup-2026-11-02.md      本地图与实际清理记录
-│   ├── research/                               小盘冻结比较、阿尔法／贝塔证据
-│   └── archive/                                精华说明、压缩源码、逐文件摘要
-├── reports/                                    历史产物与新小盘页面
-├── snapshots/                                  不可覆盖的冻结事实
-└── .generated/                                 环境、行情缓存、本地保护副本和验证日志
+│   ├── small-cap-tracking.md                    当前净值计算与延续
+│   ├── research/                               小盘冻结比较、备用研究证据
+│   └── archive/                                精华说明与经核验的压缩源码
+├── data/
+│   ├── market-history/                         日历、财报、指数及备用研究基础事实
+│   └── market-returns/                         按日期保存的原始行情
+├── reports/                                    新小盘页面与不可覆盖的历史原件
+├── snapshots/                                  不可覆盖的冻结事实和连续记录
+└── .generated/venv-py314/                       固定Python环境，必须保留
 ```
 
-## 每次生成实际经过什么
+## 当前调用路径
 
 `daily_report_current → small_cap_report / small_cap_tracking → market_returns / small_cap_rotation → 小盘HTML`。
 
-联网只需交易日历、个股日线、股票基础资料、目标日ST、季度财报、中证全指及两条对照指数；连续模拟增加同日涨跌停价格与停牌。离线只读所选JSON与连续记录，不读旧HTML，不运行旧策略。阿尔法／贝塔在独立命令中显式调用，共用行情校验，不反向进入小盘。
+新计划只生成本期五只、三只备选与换手日历，不计算一万元单期账户、中途新排名或旧期收益。连续持仓、现金与净值只由 small_cap_tracking 生成。旧v7快照保留原指纹读取，不裁剪、不重新计算；计划存储版本升级不改变v0.3选股和买卖参数。
 
-## 产物放在哪里
+联网只需行情、日历、股票资料、目标日ST、季度财报、指数与同日涨跌停及停牌事实。行情配置只读取本项目根目录的.env及明确传入的配置，不搜索启动目录。当前入口不依赖WorkBuddy、旧UI、数据库或外部项目。
 
-| 文件夹 | 内容 |
-|---|---|
-| `reports/small-cap/` | 新的小盘桌面日报 |
-| `reports/replay/small-cap/` | 按来源分别命名的离线阅读页 |
-| `snapshots/small-cap/` | 新小盘快照；只含当前行情和计划 |
-| `snapshots/small-cap/tracking/` | 每交易日连续模拟记录；facts子目录保存同日成交条件 |
-| `snapshots/small-cap/rebuilt/` | 显式历史采集产生的独立快照 |
-| `reports/research/` | 冻结回测比较和备用研究结果 |
-| 旧 `reports/`、`snapshots/` | 原件继续保留，不覆盖 |
-| `.generated/backtest-history/`、`.generated/market-returns-v2/` | 日历、财报和原始行情缓存 |
+阿尔法／贝塔由独立命令显式运行；共用行情校验，可调用保留的小盘研究对照，不反向进入小盘执行。
 
-## 为什么仍有大文件夹
+## 数据和产物
 
-主要体积来自冻结事实、历史报告、Python环境和其他Git工作树。它们不是当前运行代码，清理策略源码不会让历史数据凭空变小。
+- data/market-history、data/market-returns、config与snapshots是运行及查证资料，不能当临时缓存整体删除。连续跟踪还必须承接此前每个交易日的record和facts。
+- snapshots/small-cap/tracking保存正式连续记录；replay、rebuilt在独立子目录累计，不混用。
+- 新日报放在reports/small-cap；回放放在reports/replay/small-cap。文件名包含内容摘要，同日同内容复用，修正文案另存，历史原件不覆盖。以生成命令输出的路径为准。
+- 当前回测比较入口是reports/research/small_cap_v0.3_frozen_compare_current.html；冻结输入仍是docs/research/small-cap-v0.3/comparison-inputs.json。
 
-`data/`、`logs/`、`output/`、`.worktrees/`、`venv/`、`snap-ui/`及独立UI副本没有用于新入口。数据、Git工作树和独立项目保留；旧环境尚未核清所有外部启动引用，本次未删除。根目录散落的旧截图、临时HTML和旧Wiki压缩包另存本地历史产物目录。
+## 旧东西去了哪里
 
-查旧方法先看 `docs/archive/README.md`，需要原文才按清单取出压缩包中的单个文件；不要重新解压到 `scripts/` 或根指令目录。
+项目内旧.worktrees、三个独立UI工作副本、旧venv、旧data/logs/output、浏览器产物及.generated中的旧源码和指令已退出项目目录。先按逐文件摘要核验封存，再移除展开副本，未提交内容和独有快照一并保存。
+
+78份历史报告附带的旧AGENTS.md与旧Obsidian插件配置也已封存；报告正文和事实快照保留，旧指令不在报告目录继续生效。
+
+本机隔离归档在 `~/.hermes/archives/a-daily-report/hygiene-20261102-223943/`，不参与运行。可随源码发布的历史精华和压缩包仍在docs/archive。查证时只取需要的成员到临时目录，不把旧项目整体解压回当前目录。具体范围和验证见[清理记录](cleanup-2026-11-02.md)。

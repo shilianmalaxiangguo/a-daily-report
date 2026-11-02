@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import time
 from zoneinfo import ZoneInfo
-from report.fact_utils import _target_date
+from report.fact_utils import _target_date, evidence_hash
 from report.small_cap_report import ROOT, collect, render, save_snapshot, selected_snapshot, write_new
 from report.small_cap_tracking import prepare, save as save_tracking
 
@@ -57,8 +57,9 @@ def main(argv=None, *, root=ROOT):
         directory = root / ('reports/replay/small-cap' if replay else 'reports/small-cap')
         suffix = f'_{args.snapshot_source}_replay' if args.replay else '_rebuilt' if args.historical_rebuild else ''
         label = '小盘轮换_净值报告' if tracking else '小盘轮换'
-        path = directory / f'{day}_{label}{suffix}.html'
-        write_new(path, render(data, day, source=source, tracking=tracking))
+        page = render(data, day, source=source, tracking=tracking)
+        path = directory / f'{day}_{label}{suffix}_{evidence_hash(page)[:12]}.html'
+        write_new(path, page)
         print(f'小盘日报：{path}')
         return 0
     finally:

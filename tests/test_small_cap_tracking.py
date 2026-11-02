@@ -181,7 +181,7 @@ class SmallCapTrackingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'config').mkdir(); (root / 'config/small-cap-tracking.json').write_text(json.dumps(SEED))
-            history = root / '.generated/backtest-history'; history.mkdir(parents=True)
+            history = root / 'data/market-history'; history.mkdir(parents=True)
             (history / 'calendar.json').write_text(json.dumps({'rows': CALENDAR}))
             data = {'reading_small_cap_plan': plan(START), 'reading_market_returns': {'artifact_hash': 'market'}}
             f = facts(START)
@@ -232,7 +232,7 @@ class SmallCapTrackingTest(unittest.TestCase):
     def test_current_page_uses_only_tracking_for_holdings_and_hides_period_demo(self):
         with patch('tests.test_market_alpha_beta.RETRIEVED', '2026-11-02T16:00:00+08:00'):
             _, market = world(START)
-        p, reason = build_plan(market, START, sessions=calendar_through(START), records=growth_records(fina(START)), chinext={})
+        p, reason = build_plan(market, START, sessions=calendar_through(START), records=growth_records(fina(START)))
         self.assertIsNone(reason)
         record = first()
         data = {'reading_market_returns': market, 'reading_small_cap_plan': p}

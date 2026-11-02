@@ -26,7 +26,7 @@ import daily_report_current as entry
 def sample():
     day = end_with(5)
     _, market = world(day)
-    plan, reason = build_plan(market, day, sessions=calendar_through(day), records=growth_records(fina(day)), chinext={})
+    plan, reason = build_plan(market, day, sessions=calendar_through(day), records=growth_records(fina(day)))
     assert reason is None
     return day, {'reading_market_returns': market, 'reading_small_cap_plan': plan}
 
@@ -74,7 +74,7 @@ class SmallCapEntryTest(unittest.TestCase):
             self.assertEqual(output.read_bytes(), first)
             self.assertNotIn('retired_account', first.decode())
             self.assertIn('万一免五', first.decode())
-            self.assertIn('单期模拟', first.decode())
+            self.assertIn('没有账户净值', first.decode())
 
     def test_source_outputs_have_separate_names(self):
         day, data = sample()
@@ -91,6 +91,25 @@ class SmallCapEntryTest(unittest.TestCase):
             paths = list((root / 'reports/replay/small-cap').glob('*.html'))
             self.assertEqual(len(paths), 2)
             self.assertNotEqual(paths[0].read_bytes(), paths[1].read_bytes())
+
+    def test_historical_v7_entry_is_read_only_and_page_revisions_keep_originals(self):
+        day, data = sample()
+        data['reading_small_cap_plan'] = json.loads((ROOT / 'tests/fixtures/small-cap-plan-v7.json').read_text())['normal']
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = old_snapshot(root, day, data)
+            before = snapshot.read_bytes()
+            with patch('socket.socket', side_effect=AssertionError('离线不能联网')), redirect_stdout(io.StringIO()):
+                entry.main([day, '--replay'], root=root)
+                first = next((root / 'reports/replay/small-cap').glob('*.html'))
+                original = first.read_bytes()
+                with patch.object(entry, 'render', return_value=original.decode() + '<!-- revised explanation -->'):
+                    entry.main([day, '--replay'], root=root)
+                    entry.main([day, '--replay'], root=root)
+            self.assertEqual(snapshot.read_bytes(), before)
+            self.assertEqual(first.read_bytes(), original)
+            self.assertEqual(len(list((root / 'reports/replay/small-cap').glob('*.html'))), 2)
+            self.assertIn('历史单期演示（非当前净值报告）', original.decode())
 
     def test_corrupt_plan_and_market_dates_stop(self):
         day, data = sample()
@@ -198,6 +217,8 @@ class FrozenComparisonTest(unittest.TestCase):
         self.assertIn('2025-02-28', page)
         self.assertIn('2026-10-29', page)
         self.assertIn('不是用户的佣金', page)
+        self.assertIn('当前日报自2026-11-02', page)
+        self.assertNotIn('日报仍是每期重置', page)
         bad = deepcopy(value);bad['backtest']['curves']['small_cap_plan'].pop()
         with self.assertRaises(ValueError):render(bad)
 
@@ -253,10 +274,10 @@ class AuditRegressionTest(unittest.TestCase):
                 return pd.DataFrame(records.get(params['period'],[]))
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); refresh_plan_inputs(Provider(),day,history=root)
-            sessions,cold,_=load_inputs(day,history=root)
+            sessions,cold=load_inputs(history=root)
             warm=growth_records({'periods':records})
-            a,why=build_plan(market,day,sessions=sessions,records=cold,chinext={})
-            b,_=build_plan(market,day,sessions=sessions,records=warm,chinext={})
+            a,why=build_plan(market,day,sessions=sessions,records=cold)
+            b,_=build_plan(market,day,sessions=sessions,records=warm)
             self.assertIsNone(why)
             self.assertEqual(len(a['picks']),5)
             self.assertEqual(a['picks'],b['picks'])

@@ -1,0 +1,879 @@
+{
+  "description": "Synthetic v7 plans frozen before removing legacy computations; read-only historical rendering fixtures.",
+  "normal": {
+    "schema": "small_cap_plan.v7",
+    "target_date": "2026-09-14",
+    "anchor": "2024-07-01",
+    "cycle": 20,
+    "decision_date": "2026-09-09",
+    "sessions_since": 5,
+    "sessions_to_next": 15,
+    "next_session": null,
+    "next_decision": null,
+    "next_switch": null,
+    "cold_basket": 10,
+    "qualified": 7,
+    "boards": "主板和创业板",
+    "list_source": "recomputed",
+    "list_from": null,
+    "picks": [
+      {
+        "code": "601003.SH",
+        "name": "名称601003",
+        "industry": "行业甲",
+        "turnover_yi": 0.04,
+        "close": 9.60765957606535,
+        "period": "20260630",
+        "sales_yoy": 10.0,
+        "profit_yoy": 5.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601004.SH",
+        "name": "名称601004",
+        "industry": "行业乙",
+        "turnover_yi": 0.05,
+        "close": 9.79480560185727,
+        "period": "20260630",
+        "sales_yoy": 11.0,
+        "profit_yoy": 6.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601005.SH",
+        "name": "名称601005",
+        "industry": "行业甲",
+        "turnover_yi": 0.06,
+        "close": 9.380959823774683,
+        "period": "20260630",
+        "sales_yoy": 12.0,
+        "profit_yoy": 7.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601006.SH",
+        "name": "名称601006",
+        "industry": "行业乙",
+        "turnover_yi": 0.07,
+        "close": 10.934809788002196,
+        "period": "20260630",
+        "sales_yoy": 13.0,
+        "profit_yoy": 8.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601007.SH",
+        "name": "名称601007",
+        "industry": "行业甲",
+        "turnover_yi": 0.08,
+        "close": 8.153800922989321,
+        "period": "20260630",
+        "sales_yoy": 14.0,
+        "profit_yoy": 9.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "backups": [
+      {
+        "code": "601008.SH",
+        "name": "名称601008",
+        "industry": "行业乙",
+        "turnover_yi": 0.09,
+        "close": 9.938532433550488,
+        "period": "20260630",
+        "sales_yoy": 15.0,
+        "profit_yoy": 10.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601009.SH",
+        "name": "名称601009",
+        "industry": "行业甲",
+        "turnover_yi": 0.1,
+        "close": 9.381652732747154,
+        "period": "20260630",
+        "sales_yoy": 16.0,
+        "profit_yoy": 11.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "all_boards": [
+      {
+        "code": "601003.SH",
+        "name": "名称601003",
+        "industry": "行业甲",
+        "turnover_yi": 0.04,
+        "close": 9.60765957606535,
+        "period": "20260630",
+        "sales_yoy": 10.0,
+        "profit_yoy": 5.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601004.SH",
+        "name": "名称601004",
+        "industry": "行业乙",
+        "turnover_yi": 0.05,
+        "close": 9.79480560185727,
+        "period": "20260630",
+        "sales_yoy": 11.0,
+        "profit_yoy": 6.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601005.SH",
+        "name": "名称601005",
+        "industry": "行业甲",
+        "turnover_yi": 0.06,
+        "close": 9.380959823774683,
+        "period": "20260630",
+        "sales_yoy": 12.0,
+        "profit_yoy": 7.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601006.SH",
+        "name": "名称601006",
+        "industry": "行业乙",
+        "turnover_yi": 0.07,
+        "close": 10.934809788002196,
+        "period": "20260630",
+        "sales_yoy": 13.0,
+        "profit_yoy": 8.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601007.SH",
+        "name": "名称601007",
+        "industry": "行业甲",
+        "turnover_yi": 0.08,
+        "close": 8.153800922989321,
+        "period": "20260630",
+        "sales_yoy": 14.0,
+        "profit_yoy": 9.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "holding": {
+      "entry_date": "2026-09-10",
+      "names": [
+        "名称601003",
+        "名称601004",
+        "名称601005",
+        "名称601006",
+        "名称601007"
+      ],
+      "codes": [
+        "601003.SH",
+        "601004.SH",
+        "601005.SH",
+        "601006.SH",
+        "601007.SH"
+      ],
+      "each_pct": [
+        -1.93,
+        -4.0,
+        -3.57,
+        -5.26,
+        0.02
+      ],
+      "each_hold_pct": [
+        -1.93,
+        -4.0,
+        -3.57,
+        -5.26,
+        0.02
+      ],
+      "status": [
+        "holding",
+        "holding",
+        "holding",
+        "holding",
+        "holding"
+      ],
+      "sold_dates": [
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "basket_pct": -3.04,
+      "basket_hold_pct": -3.04,
+      "pool_pct": -3.22,
+      "pool_size": 7,
+      "csi2000_pct": null,
+      "chinext_pct": null,
+      "csi_all_pct": -3.3523150399793367
+    },
+    "previous": [
+      {
+        "decision_date": "2026-08-20",
+        "end_date": "2026-09-09",
+        "names": [
+          "名称601003",
+          "名称601004",
+          "名称601005",
+          "名称601006",
+          "名称601007"
+        ],
+        "basket_pct": -6.75,
+        "basket_hold_pct": -6.75,
+        "chinext_pct": null,
+        "csi_all_pct": -10.271388736178121
+      }
+    ],
+    "take_profit": 0.1,
+    "account": {
+      "base": 10000.0,
+      "priced": "open",
+      "date": "2026-09-10",
+      "orders": [
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "price": 9.667,
+          "lots": 2,
+          "amount": 1933.42,
+          "take_profit_price": 10.63,
+          "last_close": 9.480702058799098,
+          "gain_pct": -1.93,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "price": 9.811,
+          "lots": 2,
+          "amount": 1962.24,
+          "take_profit_price": 10.79,
+          "last_close": 9.419106800363469,
+          "gain_pct": -4.0,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "price": 9.363,
+          "lots": 2,
+          "amount": 1872.58,
+          "take_profit_price": 10.3,
+          "last_close": 9.028705949047756,
+          "gain_pct": -3.57,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "price": 10.929,
+          "lots": 1,
+          "amount": 1092.95,
+          "take_profit_price": 12.02,
+          "last_close": 10.354265974410119,
+          "gain_pct": -5.26,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601007.SH",
+          "name": "名称601007",
+          "price": 8.146,
+          "lots": 3,
+          "amount": 2443.94,
+          "take_profit_price": 8.96,
+          "last_close": 8.147891611827728,
+          "gain_pct": 0.02,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        }
+      ],
+      "skipped": [],
+      "cash_left": 693.86,
+      "value_pct": -2.41,
+      "take_profit": 0.1,
+      "cash_now": 693.86,
+      "value_hold_pct": -2.41
+    },
+    "fresh": {
+      "date": "2026-09-14",
+      "picks": [
+        {
+          "code": "601001.SH",
+          "name": "名称601001",
+          "industry": "行业甲",
+          "turnover_yi": 0.02,
+          "close": 8.9029823080012,
+          "period": "20260630",
+          "sales_yoy": 30.0,
+          "profit_yoy": 20.0,
+          "announced": "2026-09-12"
+        },
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "industry": "行业甲",
+          "turnover_yi": 0.04,
+          "close": 9.480702058799098,
+          "period": "20260630",
+          "sales_yoy": 10.0,
+          "profit_yoy": 5.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "industry": "行业乙",
+          "turnover_yi": 0.05,
+          "close": 9.419106800363469,
+          "period": "20260630",
+          "sales_yoy": 11.0,
+          "profit_yoy": 6.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "industry": "行业甲",
+          "turnover_yi": 0.06,
+          "close": 9.028705949047756,
+          "period": "20260630",
+          "sales_yoy": 12.0,
+          "profit_yoy": 7.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "industry": "行业乙",
+          "turnover_yi": 0.07,
+          "close": 10.354265974410119,
+          "period": "20260630",
+          "sales_yoy": 13.0,
+          "profit_yoy": 8.0,
+          "announced": "2026-08-20"
+        }
+      ],
+      "backups": [
+        {
+          "code": "601007.SH",
+          "name": "名称601007",
+          "industry": "行业甲",
+          "turnover_yi": 0.08,
+          "close": 8.147891611827728,
+          "period": "20260630",
+          "sales_yoy": 14.0,
+          "profit_yoy": 9.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601008.SH",
+          "name": "名称601008",
+          "industry": "行业乙",
+          "turnover_yi": 0.09,
+          "close": 9.556409916964718,
+          "period": "20260630",
+          "sales_yoy": 15.0,
+          "profit_yoy": 10.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601009.SH",
+          "name": "名称601009",
+          "industry": "行业甲",
+          "turnover_yi": 0.1,
+          "close": 9.004534817814381,
+          "period": "20260630",
+          "sales_yoy": 16.0,
+          "profit_yoy": 11.0,
+          "announced": "2026-08-20"
+        }
+      ],
+      "orders": [
+        {
+          "code": "601001.SH",
+          "name": "名称601001",
+          "price": 8.903,
+          "lots": 2,
+          "amount": 1780.6
+        },
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "price": 9.481,
+          "lots": 2,
+          "amount": 1896.14
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "price": 9.419,
+          "lots": 2,
+          "amount": 1883.82
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "price": 9.029,
+          "lots": 2,
+          "amount": 1805.74
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "price": 10.354,
+          "lots": 2,
+          "amount": 2070.85
+        }
+      ],
+      "skipped": [],
+      "cash_left": 561.81
+    },
+    "artifact_hash": "3de415a09979414c5f84ec99dd78e865ce0a9a6aca0a9f581607b323585e0493"
+  },
+  "take_profit": {
+    "schema": "small_cap_plan.v7",
+    "target_date": "2026-09-14",
+    "anchor": "2024-07-01",
+    "cycle": 20,
+    "decision_date": "2026-09-09",
+    "sessions_since": 5,
+    "sessions_to_next": 15,
+    "next_session": null,
+    "next_decision": null,
+    "next_switch": null,
+    "cold_basket": 10,
+    "qualified": 7,
+    "boards": "主板和创业板",
+    "list_source": "recomputed",
+    "list_from": null,
+    "picks": [
+      {
+        "code": "601003.SH",
+        "name": "名称601003",
+        "industry": "行业甲",
+        "turnover_yi": 0.04,
+        "close": 9.60765957606535,
+        "period": "20260630",
+        "sales_yoy": 10.0,
+        "profit_yoy": 5.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601004.SH",
+        "name": "名称601004",
+        "industry": "行业乙",
+        "turnover_yi": 0.05,
+        "close": 9.79480560185727,
+        "period": "20260630",
+        "sales_yoy": 11.0,
+        "profit_yoy": 6.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601005.SH",
+        "name": "名称601005",
+        "industry": "行业甲",
+        "turnover_yi": 0.06,
+        "close": 9.380959823774683,
+        "period": "20260630",
+        "sales_yoy": 12.0,
+        "profit_yoy": 7.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601006.SH",
+        "name": "名称601006",
+        "industry": "行业乙",
+        "turnover_yi": 0.07,
+        "close": 10.934809788002196,
+        "period": "20260630",
+        "sales_yoy": 13.0,
+        "profit_yoy": 8.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601007.SH",
+        "name": "名称601007",
+        "industry": "行业甲",
+        "turnover_yi": 0.08,
+        "close": 8.153800922989321,
+        "period": "20260630",
+        "sales_yoy": 14.0,
+        "profit_yoy": 9.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "backups": [
+      {
+        "code": "601008.SH",
+        "name": "名称601008",
+        "industry": "行业乙",
+        "turnover_yi": 0.09,
+        "close": 9.938532433550488,
+        "period": "20260630",
+        "sales_yoy": 15.0,
+        "profit_yoy": 10.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601009.SH",
+        "name": "名称601009",
+        "industry": "行业甲",
+        "turnover_yi": 0.1,
+        "close": 9.381652732747154,
+        "period": "20260630",
+        "sales_yoy": 16.0,
+        "profit_yoy": 11.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "all_boards": [
+      {
+        "code": "601003.SH",
+        "name": "名称601003",
+        "industry": "行业甲",
+        "turnover_yi": 0.04,
+        "close": 9.60765957606535,
+        "period": "20260630",
+        "sales_yoy": 10.0,
+        "profit_yoy": 5.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601004.SH",
+        "name": "名称601004",
+        "industry": "行业乙",
+        "turnover_yi": 0.05,
+        "close": 9.79480560185727,
+        "period": "20260630",
+        "sales_yoy": 11.0,
+        "profit_yoy": 6.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601005.SH",
+        "name": "名称601005",
+        "industry": "行业甲",
+        "turnover_yi": 0.06,
+        "close": 9.380959823774683,
+        "period": "20260630",
+        "sales_yoy": 12.0,
+        "profit_yoy": 7.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601006.SH",
+        "name": "名称601006",
+        "industry": "行业乙",
+        "turnover_yi": 0.07,
+        "close": 10.934809788002196,
+        "period": "20260630",
+        "sales_yoy": 13.0,
+        "profit_yoy": 8.0,
+        "announced": "2026-08-20"
+      },
+      {
+        "code": "601007.SH",
+        "name": "名称601007",
+        "industry": "行业甲",
+        "turnover_yi": 0.08,
+        "close": 8.153800922989321,
+        "period": "20260630",
+        "sales_yoy": 14.0,
+        "profit_yoy": 9.0,
+        "announced": "2026-08-20"
+      }
+    ],
+    "holding": {
+      "entry_date": "2026-09-10",
+      "names": [
+        "名称601003",
+        "名称601004",
+        "名称601005",
+        "名称601006",
+        "名称601007"
+      ],
+      "codes": [
+        "601003.SH",
+        "601004.SH",
+        "601005.SH",
+        "601006.SH",
+        "601007.SH"
+      ],
+      "each_pct": [
+        12.36,
+        10.25,
+        -3.57,
+        -5.26,
+        0.02
+      ],
+      "each_hold_pct": [
+        6.74,
+        10.25,
+        -3.57,
+        -5.26,
+        0.02
+      ],
+      "status": [
+        "sold",
+        "due",
+        "holding",
+        "holding",
+        "holding"
+      ],
+      "sold_dates": [
+        "2026-09-13",
+        null,
+        null,
+        null,
+        null
+      ],
+      "basket_pct": 2.66,
+      "basket_hold_pct": 1.53,
+      "pool_pct": 0.05,
+      "pool_size": 7,
+      "csi2000_pct": null,
+      "chinext_pct": null,
+      "csi_all_pct": -3.3523150399793367
+    },
+    "previous": [
+      {
+        "decision_date": "2026-08-20",
+        "end_date": "2026-09-09",
+        "names": [
+          "名称601003",
+          "名称601004",
+          "名称601005",
+          "名称601006",
+          "名称601007"
+        ],
+        "basket_pct": -6.75,
+        "basket_hold_pct": -6.75,
+        "chinext_pct": null,
+        "csi_all_pct": -10.271388736178121
+      }
+    ],
+    "take_profit": 0.1,
+    "account": {
+      "base": 10000.0,
+      "priced": "open",
+      "date": "2026-09-10",
+      "orders": [
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "price": 9.608,
+          "lots": 2,
+          "amount": 1921.53,
+          "take_profit_price": 10.57,
+          "last_close": 10.255407984683677,
+          "gain_pct": 12.36,
+          "status": "sold",
+          "sold_date": "2026-09-13",
+          "sold_price": 10.795166299667029
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "price": 9.795,
+          "lots": 2,
+          "amount": 1958.96,
+          "take_profit_price": 10.77,
+          "last_close": 10.798773176047641,
+          "gain_pct": 10.25,
+          "status": "due",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "price": 9.363,
+          "lots": 2,
+          "amount": 1872.58,
+          "take_profit_price": 10.3,
+          "last_close": 9.028705949047756,
+          "gain_pct": -3.57,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "price": 10.929,
+          "lots": 1,
+          "amount": 1092.95,
+          "take_profit_price": 12.02,
+          "last_close": 10.354265974410119,
+          "gain_pct": -5.26,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        },
+        {
+          "code": "601007.SH",
+          "name": "名称601007",
+          "price": 8.146,
+          "lots": 3,
+          "amount": 2443.94,
+          "take_profit_price": 8.96,
+          "last_close": 8.147891611827728,
+          "gain_pct": 0.02,
+          "status": "holding",
+          "sold_date": null,
+          "sold_price": null
+        }
+      ],
+      "skipped": [],
+      "cash_left": 709.02,
+      "value_pct": 3.12,
+      "take_profit": 0.1,
+      "cash_now": 2866.74,
+      "value_hold_pct": 2.05
+    },
+    "fresh": {
+      "date": "2026-09-14",
+      "picks": [
+        {
+          "code": "601001.SH",
+          "name": "名称601001",
+          "industry": "行业甲",
+          "turnover_yi": 0.02,
+          "close": 8.9029823080012,
+          "period": "20260630",
+          "sales_yoy": 30.0,
+          "profit_yoy": 20.0,
+          "announced": "2026-09-12"
+        },
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "industry": "行业甲",
+          "turnover_yi": 0.04,
+          "close": 10.255407984683677,
+          "period": "20260630",
+          "sales_yoy": 10.0,
+          "profit_yoy": 5.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "industry": "行业乙",
+          "turnover_yi": 0.05,
+          "close": 10.798773176047641,
+          "period": "20260630",
+          "sales_yoy": 11.0,
+          "profit_yoy": 6.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "industry": "行业甲",
+          "turnover_yi": 0.06,
+          "close": 9.028705949047756,
+          "period": "20260630",
+          "sales_yoy": 12.0,
+          "profit_yoy": 7.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "industry": "行业乙",
+          "turnover_yi": 0.07,
+          "close": 10.354265974410119,
+          "period": "20260630",
+          "sales_yoy": 13.0,
+          "profit_yoy": 8.0,
+          "announced": "2026-08-20"
+        }
+      ],
+      "backups": [
+        {
+          "code": "601007.SH",
+          "name": "名称601007",
+          "industry": "行业甲",
+          "turnover_yi": 0.08,
+          "close": 8.147891611827728,
+          "period": "20260630",
+          "sales_yoy": 14.0,
+          "profit_yoy": 9.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601008.SH",
+          "name": "名称601008",
+          "industry": "行业乙",
+          "turnover_yi": 0.09,
+          "close": 9.556409916964718,
+          "period": "20260630",
+          "sales_yoy": 15.0,
+          "profit_yoy": 10.0,
+          "announced": "2026-08-20"
+        },
+        {
+          "code": "601009.SH",
+          "name": "名称601009",
+          "industry": "行业甲",
+          "turnover_yi": 0.1,
+          "close": 9.004534817814381,
+          "period": "20260630",
+          "sales_yoy": 16.0,
+          "profit_yoy": 11.0,
+          "announced": "2026-08-20"
+        }
+      ],
+      "orders": [
+        {
+          "code": "601001.SH",
+          "name": "名称601001",
+          "price": 8.903,
+          "lots": 2,
+          "amount": 1780.6
+        },
+        {
+          "code": "601003.SH",
+          "name": "名称601003",
+          "price": 10.255,
+          "lots": 2,
+          "amount": 2051.08
+        },
+        {
+          "code": "601004.SH",
+          "name": "名称601004",
+          "price": 10.799,
+          "lots": 1,
+          "amount": 1079.88
+        },
+        {
+          "code": "601005.SH",
+          "name": "名称601005",
+          "price": 9.029,
+          "lots": 2,
+          "amount": 1805.74
+        },
+        {
+          "code": "601006.SH",
+          "name": "名称601006",
+          "price": 10.354,
+          "lots": 3,
+          "amount": 3106.28
+        }
+      ],
+      "skipped": [],
+      "cash_left": 175.34
+    },
+    "artifact_hash": "5689ed3fd5e5db1e14d2afd1ee78c7eca62c7f2b081387ef6978b8e27209b6c1"
+  }
+}

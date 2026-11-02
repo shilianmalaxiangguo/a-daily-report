@@ -33,3 +33,11 @@ The better the quality, the faster you go; the only way to go fast is to go well
 遵守 [日报术语契约](wiki/交易思想/日报术语契约.md)。使用交易语言说明条件、资格、可做与不做；事实、计划、模拟和成交分开。缺失不是零，回测不是收益保证。
 
 完整保留功能测试：`.generated/venv-py314/bin/python3.14 -m unittest discover -s tests -t .`。不为通过旧测试重新解压归档源码。归档查证只按 docs/archive/README.md 取具体文件。
+
+## 防止旧内容重新进入当前入口
+
+- 新计划只生成名单与换手日历，不恢复单期账户、中途新排名或旧期收益计算。旧v7快照原样读取，不能裁剪重签名影响连续记录。
+- 行情配置只读项目根.env，不按启动目录发现配置；运行数据在data/market-history与data/market-returns，不在.generated。
+- .generated只保留固定Python环境及本轮必要临时验证产物。旧工作目录、旧UI与旧指令不解压回项目；本机封存位置见docs/cleanup-2026-11-02.md。
+- 当前HTML按内容摘要另存，历史原件不覆盖；以入口命令输出的路径为准。
+- 后续临时Git工作目录放到项目外，完成后清理；不再把旧源码和旧指令备份散放在.generated。

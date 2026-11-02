@@ -8,6 +8,7 @@ TUSHARE_HTTP_URL_ENV = "TUSHARE_HTTP_URL"
 TUSHARE_TOKEN = ""
 TUSHARE_HTTP_URL = ""
 TUSHARE_TIMEOUT_SECONDS = 60
+PROJECT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
 __all__ = [
     "TUSHARE_HTTP_URL",
@@ -34,10 +35,7 @@ def _load_tushare_module(ts_module=None):
 
 
 def _local_env_candidates():
-    return [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parent.parent.parent / ".env",
-    ]
+    return [PROJECT_ENV]
 
 
 def _read_env_file(env_path):

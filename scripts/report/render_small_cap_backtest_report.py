@@ -64,7 +64,7 @@ def render(inputs):
             '<p class="limit">等权模型沿用窗口前买价，每期来回成本0.2%，不是用户的佣金。整手账户使用万一免五，另计税费。收益不是实盘预期。</p>'+
             '<section><h2>同窗口比较</h2>'+chart(dates, curves)+'<table>'+heading+''.join(rows)+'</table></section>'+
             '<section><h2>独立连续整手账户</h2><table>'+heading+''.join(account_rows)+'</table>'+
-            '<p>该冻结账户尚未限制3只备选，也未接入0.7底线卖出；日报仍是每期重置1万元的单期模拟。三者不可混称。</p></section>'+
+            '<p>这份旧连续整手回测未限制3只备选，也未接入0.7底线卖出，保留为历史比较。当前日报自2026-11-02起按指定五只、各20%预算，从开盘买入前净值1连续跟踪，延续原买价、现金与待卖；不再每期重置1万元。冻结等权回测、旧连续整手账户与当前连续碎股模拟是三个不同模型。</p></section>'+
             '<p>数据出处：docs/research/small-cap-v0.3/comparison-inputs.json。历史研究源码及摘要见 docs/archive/；原始快照与行情缓存保留。止盈规则是在看过结果后采纳，需继续前推检验。</p>'+
             '<script>document.querySelectorAll("input[data-key]").forEach(el=>el.addEventListener("change",()=>{document.querySelectorAll("[data-series]").forEach(line=>{if(line.dataset.series===el.dataset.key)line.style.display=el.checked?"":"none"})}));</script></main></html>')
 
@@ -72,7 +72,7 @@ def render(inputs):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='重绘小盘冻结比较，不重新回测')
     parser.add_argument('--input', type=Path, default=ROOT / 'docs/research/small-cap-v0.3/comparison-inputs.json')
-    parser.add_argument('--output', type=Path, default=ROOT / 'reports/research/small_cap_v0.3_frozen_compare.html')
+    parser.add_argument('--output', type=Path, default=ROOT / 'reports/research/small_cap_v0.3_frozen_compare_current.html')
     args = parser.parse_args(argv)
     write_new(args.output, render(json.loads(args.input.read_text(encoding='utf-8'))))
     print(args.output)

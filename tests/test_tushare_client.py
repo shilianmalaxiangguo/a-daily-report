@@ -180,7 +180,7 @@ class TushareClientTest(unittest.TestCase):
                 "TUSHARE_TOKEN=dotenv-token\nTUSHARE_HTTP_URL=http://a.sszhixia.cn/\n",
                 encoding="utf-8",
             )
-            with patch.dict("os.environ", {}, clear=True), patch.object(Path, "cwd", return_value=Path(tmpdir)):
+            with patch.dict("os.environ", {}, clear=True), patch.object(client, "PROJECT_ENV", env_path):
                 pro = client.create_tushare_pro_api(ts_module=FakeTs())
 
         self.assertEqual(calls, [{"token": "dotenv-token", "timeout": client.TUSHARE_TIMEOUT_SECONDS}])
@@ -211,7 +211,7 @@ class TushareClientTest(unittest.TestCase):
                     "TUSHARE_HTTP_URL": "http://legacy-proxy.invalid/",
                 },
                 clear=True,
-            ), patch.object(Path, "cwd", return_value=Path(tmpdir)):
+            ), patch.object(client, "PROJECT_ENV", env_path):
                 pro = client.create_tushare_pro_api(ts_module=FakeTs())
 
         self.assertIsInstance(pro, client.TushareReplayProApi)
@@ -223,6 +223,24 @@ class TushareClientTest(unittest.TestCase):
                 "https://tushare.indevs.in/tushare/pro",
             ],
         )
+
+    def test_foreign_working_directory_cannot_supply_credentials(self):
+        import tempfile
+        from unittest.mock import patch
+        import market_data.tushare_client as client
+        with tempfile.TemporaryDirectory() as tmp:
+            foreign = Path(tmp) / 'foreign'; foreign.mkdir()
+            project = Path(tmp) / 'project'; project.mkdir()
+            (foreign / '.env').write_text('TUSHARE_TOKEN=foreign-token\nTUSHARE_HTTP_URL=https://foreign.invalid/tushare/pro\n')
+            own = project / '.env'
+            own.write_text('TUSHARE_TOKEN=project-token\nTUSHARE_HTTP_URL=https://project.invalid/tushare/pro\n')
+            with patch.dict(os.environ, {}, clear=True), patch.object(client, 'PROJECT_ENV', own), \
+                 patch.object(Path, 'cwd', return_value=foreign):
+                config = client.resolve_tushare_runtime_config()
+                self.assertEqual(config['token'], 'project-token')
+                self.assertEqual(config['http_url'], 'https://project.invalid/tushare/pro')
+                own.unlink()
+                self.assertEqual(client.resolve_tushare_runtime_config(), {'token': '', 'http_url': ''})
 
     def test_check_tushare_runtime_ready_reports_b_channel_provider(self):
         from unittest.mock import patch

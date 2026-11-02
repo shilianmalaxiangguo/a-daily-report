@@ -3,6 +3,8 @@ from copy import deepcopy
 from datetime import date, timedelta
 from pathlib import Path
 import sys
+import json
+from unittest.mock import patch
 import unittest
 
 import numpy as np
@@ -10,7 +12,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from bs4 import BeautifulSoup
 from report.fact_utils import evidence_hash
-from report.small_cap_rotation import (ACCOUNT_FEE, ANCHOR, BACKUPS, NAMES, SELL_FEE, account_orders, build_plan, day_label,
+from report.small_cap_rotation import (ANCHOR, BACKUPS, NAMES, SELL_FEE, build_plan, day_label,
                                        growth_records, held_path, render_plan, rotation_curve, validate_plan)
 from report.small_cap_history import history_from_artifact
 from tests.test_market_alpha_beta import NEW, ST, facts, scenario, sessions
@@ -60,47 +62,31 @@ class PlanTest(unittest.TestCase):
         end = end_with(5)
         days, value = world(end)
         decision = days[-6]
-        plan, reason = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(decision)), chinext={})
+        plan, reason = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(decision)))
         self.assertIsNone(reason)
         self.assertEqual(plan['decision_date'], decision)
         self.assertEqual((plan['sessions_since'], plan['sessions_to_next']), (5, 15))
         self.assertEqual([p['code'] for p in plan['picks']], GROWING[:NAMES])
         self.assertEqual([p['code'] for p in plan['backups']], GROWING[NAMES:NAMES + BACKUPS])
         self.assertNotIn(ST, [p['code'] for p in plan['picks'] + plan['backups']])
-        h = history_from_artifact(value)
-        t, final = days.index(decision), len(days) - 1
-        rets = np.where(np.isnan(h['returns']), 0.0, h['returns'] / 100)
-        each = [h['close'][i, t + 1] / h['open'][i, t + 1] * np.prod(1 + rets[i, t + 2:final + 1]) for i in
-                (h['codes'].index(c) for c in GROWING[:NAMES])]
-        self.assertAlmostEqual(plan['holding']['basket_pct'], round((np.mean(each) * (1 - 0.001) - 1) * 100, 2), places=6)
-        self.assertEqual(plan['holding']['codes'], GROWING[:NAMES])
-        pool = [h['close'][i, t + 1] / h['open'][i, t + 1] * np.prod(1 + rets[i, t + 2:final + 1]) for i in
-                (h['codes'].index(c) for c in GROWING)]
-        self.assertEqual(plan['holding']['pool_size'], len(GROWING))
-        account = plan['account']
-        self.assertEqual((account['priced'], account['date']), ('open', days[t + 1]))
-        worth = account['cash_left'] + sum(o['amount'] * h['close'][h['codes'].index(o['code']), t + 1] / h['open'][h['codes'].index(o['code']), t + 1]
-                                           * np.prod(1 + rets[h['codes'].index(o['code']), t + 2:final + 1]) for o in account['orders'])
-        self.assertAlmostEqual(account['value_pct'], round((worth / 10_000 - 1) * 100, 2), places=6)
-        self.assertEqual([o['code'] for o in account['orders']], [c for c in GROWING if c in [o['code'] for o in account['orders']]])
-        self.assertAlmostEqual(plan['holding']['pool_pct'], round((np.mean(pool) * (1 - 0.001) - 1) * 100, 2), places=6)
-        self.assertEqual(len(plan['previous']), 1)
+        self.assertEqual(plan['schema'], 'small_cap_plan.v8')
+        self.assertTrue({'holding', 'account', 'fresh', 'previous'}.isdisjoint(plan))
         validate_plan(plan, end)
 
     def test_decision_day_has_no_holding_and_changes_are_refused(self):
         end = end_with(0)
         days, value = world(end)
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(end)), chinext={})
+        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(end)))
         self.assertEqual(plan['decision_date'], end)
         self.assertEqual((plan['sessions_since'], plan['sessions_to_next']), (0, 20))
-        self.assertIsNone(plan['holding'])
+        self.assertNotIn('holding', plan)
         changed = deepcopy(plan)
         changed['picks'][0]['name'] = '改过'
         with self.assertRaises(ValueError):
             validate_plan(changed, end)
         with self.assertRaises(ValueError):
             validate_plan(plan, days[-2])
-        self.assertEqual(build_plan(value, end, sessions=[], records={}, chinext={})[0], None)
+        self.assertEqual(build_plan(value, end, sessions=[], records={})[0], None)
 
     def test_rotation_curve_follows_the_picks_between_decision_days(self):
         days, value = world('2024-08-30')
@@ -121,11 +107,11 @@ class PlanTest(unittest.TestCase):
     def test_page_shows_the_plan_and_its_rules(self):
         end = end_with(5)
         days, value = world(end)
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(days[-6])), chinext={})
+        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(days[-6])))
         section = render_plan(BeautifulSoup('', 'html.parser'), plan)
         text = section.get_text(' ', strip=True)
-        for phrase in ('执行计划：小盘轮换', '持有的第5个交易日', '再过15个交易日定新名单', '名单', '备选', '本期等权模拟买入', '净值跌破0.7',
-                       '一手约（元）', f'名单每天显示的都是这一期定下的那{NAMES}只', '怎么买', '一手（100股）的钱超过这一份就跳过'):
+        for phrase in ('执行计划：小盘轮换', '持有的第5个交易日', '再过15个交易日定新名单', '名单', '备选', '净值跌破0.7',
+                       '一手约（元）', f'名单每天显示的都是这一期定下的那{NAMES}只', '买不到则保留现金'):
             self.assertIn(phrase, text)
         self.assertEqual(len(section.select('tr.dash-row-plan')), NAMES)
         self.assertEqual(len(section.select('tr.dash-row-backup')), len(GROWING) - NAMES)
@@ -134,7 +120,7 @@ class PlanTest(unittest.TestCase):
         end = end_with(5)
         days, value = world(end)
         after = lambda k: (date.fromisoformat(end) + timedelta(days=k)).isoformat()
-        plan, _ = build_plan(value, end, sessions=calendar_through(after(30)), records=growth_records(fina(days[-6])), chinext={})
+        plan, _ = build_plan(value, end, sessions=calendar_through(after(30)), records=growth_records(fina(days[-6])))
         self.assertEqual((plan['next_session'], plan['next_decision'], plan['next_switch']), (after(1), after(15), after(16)))
         text = render_plan(BeautifulSoup('', 'html.parser'), plan).get_text(' ', strip=True)
         self.assertIn(f'下一个交易日{day_label(after(1))}是第6个', text)
@@ -150,12 +136,11 @@ class PlanTest(unittest.TestCase):
         for period in rows['periods'].values():
             for row in period:
                 row['ts_code'] = renamed.get(row['ts_code'], row['ts_code'])
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(rows), chinext={})
+        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(rows))
         tradable = ['300004.SZ'] + COLD[5:10]
         self.assertEqual([p['code'] for p in plan['picks']], tradable[:NAMES])
         self.assertEqual([p['code'] for p in plan['backups']], tradable[NAMES:NAMES + BACKUPS])
         self.assertEqual([p['code'] for p in plan['all_boards']], (['688003.SH'] + tradable)[:NAMES])
-        self.assertEqual(plan['holding']['codes'], tradable[:NAMES])
         section = render_plan(BeautifulSoup('', 'html.parser'), plan)
         text = section.get_text(' ', strip=True)
         self.assertIn(f'前{NAMES}名里有科创板的名称601003', text)
@@ -169,66 +154,53 @@ class PlanTest(unittest.TestCase):
         decision = days[-6]
         records = growth_records(fina(decision))
         _, first = world(decision)
-        published, _ = build_plan(first, decision, sessions=calendar_through(decision), records=records, chinext={})
+        published, _ = build_plan(first, decision, sessions=calendar_through(decision), records=records)
         self.assertEqual(published['list_source'], 'today')
         value['st_codes'] = list(value.get('st_codes') or []) + [COLD[3]]          # named ST after the list was published
-        again, _ = build_plan(value, end, sessions=calendar_through(end), records=records, chinext={})
+        again, _ = build_plan(value, end, sessions=calendar_through(end), records=records)
         self.assertEqual(again['list_source'], 'recomputed')
         self.assertNotIn(COLD[3], [p['code'] for p in again['picks']])
-        kept, _ = build_plan(value, end, sessions=calendar_through(end), records=records, chinext={}, frozen={decision: published})
+        kept, _ = build_plan(value, end, sessions=calendar_through(end), records=records, frozen={decision: published})
         self.assertEqual(kept['list_source'], 'published')
         self.assertEqual(kept['picks'], published['picks'])
-        self.assertEqual(kept['holding']['codes'], [p['code'] for p in published['picks']])
         self.assertIn(f'名单取自{decision}发布的日报，整期不变', render_plan(BeautifulSoup('', 'html.parser'), kept).get_text())
         middle = days[-4]                                                         # first published two sessions later
         _, window = world(middle)
-        mid_plan, _ = build_plan(window, middle, sessions=calendar_through(middle), records=records, chinext={})
+        mid_plan, _ = build_plan(window, middle, sessions=calendar_through(middle), records=records)
         self.assertEqual(mid_plan['sessions_since'], 2)
-        later, _ = build_plan(value, end, sessions=calendar_through(end), records=records, chinext={}, frozen={middle: mid_plan})
+        later, _ = build_plan(value, end, sessions=calendar_through(end), records=records, frozen={middle: mid_plan})
         self.assertEqual((later['list_source'], later['list_from']), ('published', middle))
         self.assertEqual(later['picks'], mid_plan['picks'])
-        same_rule = {**mid_plan, 'schema': 'small_cap_plan.v6'}                    # v6 lists follow the same selection rule
+        same_rule = {**mid_plan, 'schema': 'small_cap_plan.v7'}                    # v6 lists follow the same selection rule
         same_rule['artifact_hash'] = evidence_hash({k: v for k, v in same_rule.items() if k != 'artifact_hash'})
-        self.assertEqual(build_plan(value, end, sessions=calendar_through(end), records=records, chinext={},
+        self.assertEqual(build_plan(value, end, sessions=calendar_through(end), records=records,
                                     frozen={middle: same_rule})[0]['list_source'], 'published')
         other_rule = {**mid_plan, 'schema': 'small_cap_plan.v4'}
-        self.assertEqual(build_plan(value, end, sessions=calendar_through(end), records=records, chinext={},
+        self.assertEqual(build_plan(value, end, sessions=calendar_through(end), records=records,
                                     frozen={middle: other_rule})[0]['list_source'], 'recomputed')
 
-    def test_someone_starting_mid_period_gets_the_latest_close_ranking(self):
+    def test_new_plan_does_not_run_historical_accounts_or_mid_period_ranking(self):
         end = end_with(5)
         days, value = world(end)
-        decision = days[-6]
-        records = growth_records(fina(decision))
-        _, first = world(decision)
-        published, _ = build_plan(first, decision, sessions=calendar_through(decision), records=records, chinext={})
-        self.assertIsNone(published['fresh'])                                    # on the decision day the two are the same
+        records = growth_records(fina(days[-6]))
+        _, first = world(days[-6])
+        published, _ = build_plan(first, days[-6], sessions=calendar_through(end), records=records)
         value['st_codes'] = list(value.get('st_codes') or []) + [COLD[3]]
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=records, chinext={}, frozen={decision: published})
-        self.assertIn(COLD[3], [p['code'] for p in plan['picks']])               # holders keep the period's list
-        fresh = plan['fresh']
-        self.assertEqual(fresh['date'], end)
-        # COLD[1] reported three days after the decision day, so today it qualifies; COLD[3] is now ST
-        self.assertEqual([p['code'] for p in fresh['picks']], [COLD[1]] + [c for c in GROWING if c != COLD[3]][:NAMES - 1])
-        self.assertEqual(len(fresh['orders']), NAMES)
-        text = render_plan(BeautifulSoup('', 'html.parser'), plan).get_text(' ', strip=True)
-        self.assertIn('这一期中途才开始的', text)
-        self.assertIn('已经在拿的，继续拿上面这一期的名单', text)
-        self.assertIn('新进', text)
+        with patch('report.small_cap_rotation.held_path', side_effect=AssertionError('当前名单不回算账户')), \
+             patch('report.small_cap_rotation.bought', side_effect=AssertionError('当前名单不生成旧收益')):
+            plan, _ = build_plan(value, end, sessions=calendar_through(end), records=records, frozen={days[-6]: published})
+        self.assertEqual(plan['picks'], published['picks'])
+        self.assertIn(COLD[3], [p['code'] for p in plan['picks']])
+        self.assertTrue({'account', 'fresh', 'holding', 'previous'}.isdisjoint(plan))
 
-    def test_ten_thousand_yuan_buys_whole_lots_down_the_list(self):
-        items = [{'code': c, 'name': n} for c, n in (('A', '福然德'), ('B', '天新药业'), ('C', '申通地铁'), ('D', '长久物流'),
-                                                       ('E', '钱江水利'), ('F', '绿城水务'))]
-        prices = {'A': 9.77, 'B': 24.62, 'C': 7.36, 'D': 5.68, 'E': 7.74, 'F': 4.41}
-        orders, skipped, cash = account_orders(items, lambda p: prices[p['code']])
-        self.assertEqual([(o['code'], o['lots']) for o in orders], [('A', 2), ('C', 2), ('D', 3), ('E', 3), ('F', 5)])
-        self.assertEqual([s['code'] for s in skipped], ['B'])
-        self.assertIn('一手2,462元', skipped[0]['reason'])
-        spent = sum(o['amount'] for o in orders) * (1 + ACCOUNT_FEE)
-        self.assertAlmostEqual(cash, 10_000 - spent, places=6)
-        orders, skipped, _ = account_orders(items, lambda p: None if p['code'] == 'A' else prices[p['code']])
-        self.assertEqual(skipped[0]['reason'], '开盘涨停或停牌，买不到')
-        self.assertEqual(orders[0]['code'], 'C')
+    def test_historical_v7_snapshot_keeps_its_identity_and_rendering(self):
+        plan = json.loads((Path(__file__).parent / 'fixtures/small-cap-plan-v7.json').read_text())['normal']
+        before = deepcopy(plan)
+        validate_plan(plan, plan['target_date'])
+        section = render_plan(BeautifulSoup('', 'html.parser'), plan)
+        self.assertIn('本期等权模拟买入', section.get_text())
+        self.assertIsNotNone(section.select_one('.dash-plan-account'))
+        self.assertEqual(plan, before)
 
     def test_period_check_tells_whether_the_pool_still_beats_small_caps(self):
         from research.alpha_beta.strategy_backtest import plan_periods
@@ -245,7 +217,7 @@ class PlanTest(unittest.TestCase):
         self.assertAlmostEqual(style['pool_minus_csi2000_pp'], (1.003 ** 120 - 1.001 ** 120) * 100, delta=0.1)   # periods rounded to 0.01%
         end = end_with(5)
         _, value = world(end)
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(end)), chinext={})
+        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(end)))
         section = render_plan(BeautifulSoup('', 'html.parser'), plan, {'plan_periods': periods, 'style_check': style})
         self.assertEqual(len(section.select('tr.dash-row-period')), 7)
         self.assertIn('股票池仍跑赢中证2000', section.get_text())
@@ -260,7 +232,7 @@ class PlanTest(unittest.TestCase):
         from report.small_cap_report import render
         day = end_with(5)
         _, value = world(day)
-        plan, reason = build_plan(value, day, sessions=calendar_through(day), records=growth_records(fina(day)), chinext={})
+        plan, reason = build_plan(value, day, sessions=calendar_through(day), records=growth_records(fina(day)))
         self.assertIsNone(reason)
         data = {'reading_market_returns': value, 'reading_small_cap_plan': plan}
         soup = BeautifulSoup(render(data, day, source='合成测试'), 'html.parser')
@@ -290,14 +262,11 @@ class PlanTest(unittest.TestCase):
         np.testing.assert_allclose(path, [1.02, 1.11, 1.15, 1.16, 1.16])
         self.assertEqual(sold, 4)
 
-    def test_the_plan_takes_profit_and_keeps_the_money_for_the_next_switch(self):
-        end = end_with(5)
-        entry = len(sessions(end)) - 5                                             # bought at the open of days[-5]
+    def test_historical_take_profit_account_can_still_be_read_without_recomputing(self):
+        plan = json.loads((Path(__file__).parent / 'fixtures/small-cap-plan-v7.json').read_text())['take_profit']
+        end = plan['target_date']
+        days = sessions(end)
         first, second = GROWING[0], GROWING[1]
-        changes = {first: {entry: 0.0, entry + 1: 6.0, entry + 2: 6.0, entry + 3: 0.0, entry + 4: -5.0},   # +12.36% by days[-3]
-                   second: {entry: 0.0, entry + 1: 0.0, entry + 2: 0.0, entry + 3: 5.0, entry + 4: 5.0}}   # +10.25% at today's close
-        days, value = world(end, changes)
-        plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(days[-6])), chinext={})
         holding = plan['holding']
         self.assertEqual(holding['codes'][:2], [first, second])
         self.assertEqual((holding['status'][:2], holding['sold_dates'][:2]), (['sold', 'due'], [days[-2], None]))

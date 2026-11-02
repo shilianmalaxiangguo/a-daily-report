@@ -246,7 +246,7 @@ def collect_market_returns(pro, target_date, *, cache_root=None, provider_hosts=
     calendar = _pages(pro, 'trade_cal', exchange='SSE', start_date=start, end_date=target.replace('-', ''),
                       fields='cal_date,is_open')
     days = sessions_from_calendar(calendar, target, sessions)
-    root = Path(cache_root) if cache_root is not None else Path(__file__).resolve().parents[2] / '.generated/market-returns-v2'
+    root = Path(cache_root) if cache_root is not None else Path(__file__).resolve().parents[2] / 'data/market-returns'
     pages, issues = {}, []
     for day in days:
         path = root / (day + '.json')

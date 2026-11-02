@@ -20,7 +20,7 @@
 
 - `retired-source-2026-11-02.tar.gz`：清理前远端 develop 中退出活跃目录的文件；`retired-source-manifest.json` 记录来源提交、每个文件及压缩包SHA-256。
 - `local-research-2026-11-02.tar.gz`：本机研究原文与结果，包含小盘卖法研究、连续账户模型、独立复算及历史比较；清单为 `local-research-manifest.json`。保留原文，不伪称当前脚本已复现冻结结果。
-- `.generated/cleanup-20261102/local-before-cleanup.tar.gz`：本机全部被迁移或替换的源码及文档保护副本，包含未提交版本；其清单只留本机，不混入远端发布。
+- 本机隔离归档 `~/.hermes/archives/a-daily-report/hygiene-20261102-223943/retired-local-assets.tar.gz` 中的 `staging/generated/cleanup-20261102/local-before-cleanup.tar.gz`：上一轮本机保护副本，含未提交版本；不再散放在现行.generated目录。
 
 取出单个文件的示例（输出到终端，不恢复旧目录）：
 
@@ -29,3 +29,7 @@ tar -xOf docs/archive/retired-source-2026-11-02.tar.gz scripts/report/runtime.py
 ```
 
 旧小盘证据中提及的 `docs/reviews/2026-10-30-wiki-evidence/sell_rules.py`、`real_account.py` 等原路径记录在本机研究压缩包内；冻结来源哈希原样保存。原报告与快照继续在原目录，不在源码删除范围内。
+
+本轮旧工作目录与独立UI整体封存在同一隔离目录的retired-projects.tar.gz，附逐文件摘要和Git索引元数据。现行项目不保留展开的旧源码副本；查证时只提取需要的文件到临时位置。
+
+历史报告附带的78份旧指令及旧编辑器配置另封存在historical-instructions-and-editor.tar.gz，原路径和SHA-256在同名manifest中；当前报告目录不再保留这些AGENTS.md。

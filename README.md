@@ -16,7 +16,7 @@
 
 ## 常用命令
 
-所有 Python 命令固定使用 `.generated/venv-py314/bin/python3.14`。依赖清单在 `requirements.txt`；数据和环境保留在本机，不随源码发布。
+所有 Python 命令固定使用 `.generated/venv-py314/bin/python3.14`。依赖清单在 `requirements.txt`；数据保存在data/market-history与data/market-returns，环境保留在.generated/venv-py314；都在本机，不随源码发布。行情客户端只读本项目.env，不搜索启动目录。
 
 ```bash
 # 离线读取已核对具有v0.3计划的重建快照
@@ -28,7 +28,7 @@
 # 当日无正式快照时，采集行情、财报、日历与对照指数
 .generated/venv-py314/bin/python3.14 scripts/daily_report_current.py YYYY-MM-DD
 
-# 重绘已有冻结回测比较；不重新回测
+# 重绘已有冻结回测比较，另存small_cap_v0.3_frozen_compare_current.html；不重新回测
 PYTHONPATH=scripts .generated/venv-py314/bin/python3.14 -m report.render_small_cap_backtest_report
 
 # 当前源码的全部测试
@@ -39,6 +39,6 @@ PYTHONPATH=scripts .generated/venv-py314/bin/python3.14 -m report.render_small_c
 
 ## 实现边界
 
-5只名单加3只备选、每20交易日换手、止盈10%、账户底线0.7。佣金为万一免五，税费另计。2026-11-02起按用户指定五只、各20%预算，以当天开盘买入前净值1建立连续碎股模拟；持仓、原买价、现金和待卖逐日延续，无需接入真实账户。起点前的单期整手演示只供历史阅读，当前跟踪不显示该演示或中途重新排名买入表。计算与费用见[说明](docs/small-cap-tracking.md)。
+5只名单加3只备选、每20交易日换手、止盈10%、账户底线0.7。佣金为万一免五，税费另计。2026-11-02起按用户指定五只、各20%预算，以当天开盘买入前净值1建立连续碎股模拟；持仓、原买价、现金和待卖逐日延续，无需接入真实账户。起点前的单期整手演示只供历史阅读，新计划只生成名单与日历，不再计算该演示、中途新排名或旧期收益；历史快照只读展示。计算与费用见[说明](docs/small-cap-tracking.md)。
 
-只维护桌面页面。历史日报、快照、原始行情和独立 UI 项目保留；它们不再决定当前日报内容。当前入口不加载板块图、数据库、旧执行流程、模型解读或阿尔法／贝塔研究。
+只维护桌面页面。历史日报、快照和原始行情保留；旧工作副本、旧环境和独立UI已封存到项目外。HTML文件名附内容摘要，以生成命令最后输出的路径为准；同内容复用，文案修订另存。当前入口不加载板块图、数据库、旧执行流程、模型解读或阿尔法／贝塔研究。

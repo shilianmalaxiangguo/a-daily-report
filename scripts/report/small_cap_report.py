@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 from report.fact_utils import evidence_hash
 from report.market_returns import _pages, collect_market_returns, validate_market_returns
-from report.small_cap_rotation import (SCHEMA, build_plan, load_index, load_inputs,
+from report.small_cap_rotation import (SCHEMA, build_plan, load_inputs,
                                        refresh_plan_inputs, render_plan, validate_plan)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,7 +67,7 @@ def validate_data(data, day):
     market, plan = data.get('reading_market_returns'), data.get('reading_small_cap_plan')
     validate_market_returns(market, day)
     validate_plan(plan, day)
-    if plan['schema'] != SCHEMA:
+    if plan['schema'] not in ('small_cap_plan.v7', SCHEMA):
         raise ValueError('所选快照没有当前版本小盘计划，停止生成；不重算旧规则')
     return {'reading_market_returns': market, 'reading_small_cap_plan': plan}
 
@@ -146,16 +146,15 @@ def refresh_indices(pro, day, history):
 def collect(day, *, root=ROOT, pro=None, historical=False):
     from market_data.tushare_client import create_tushare_pro_api
     pro = pro or create_tushare_pro_api()
-    history = root / '.generated/backtest-history'
+    history = root / 'data/market-history'
     refresh_plan_inputs(pro, day, history=history)
     refresh_indices(pro, day, history)
-    market = collect_market_returns(pro, day, cache_root=root / '.generated/market-returns-v2')
+    market = collect_market_returns(pro, day, cache_root=root / 'data/market-returns')
     if market.get('st_codes') is None:
         raise ValueError('目标日ST事实缺失，停止生成名单')
-    sessions, records, chinext = load_inputs(day, history=history)
-    plan, reason = build_plan(market, day, sessions=sessions, records=records, chinext=chinext,
-                              frozen={} if historical else frozen_plans(root, day, sessions),
-                              csi2000=load_index('932000.CSI', day, history=history))
+    sessions, records = load_inputs(history=history)
+    plan, reason = build_plan(market, day, sessions=sessions, records=records,
+                              frozen={} if historical else frozen_plans(root, day, sessions))
     if plan is None:
         raise ValueError(f'小盘计划未生成：{reason}')
     return validate_data({'reading_market_returns': market, 'reading_small_cap_plan': plan}, day)
@@ -173,11 +172,14 @@ def render(data, day, *, source, tracking=None):
                                    '<nav aria-label="报告内容"><a href="#nav-curve">净值曲线</a><a href="#fund-positions">成分股</a>'
                                    '<a href="#fund-method">计算说明</a></nav>', 'html.parser'))
     else:
-        header.append(BeautifulSoup(f'<h1>{day} 小盘轮换 v0.3</h1><p>当前执行阅读页 · 5只名单与3只备选 · 每20交易日换手</p>', 'html.parser'))
+        identity = '历史单期演示（非当前净值报告）' if data['reading_small_cap_plan'].get('account') else '选股名单与换手日历（非账户净值）'
+        header.append(BeautifulSoup(f'<h1>{day} 小盘轮换 v0.3</h1><p>{identity} · 5只名单与3只备选 · 每20交易日换手</p>', 'html.parser'))
     main.append(header)
     if not tracking:
         limits = soup.new_tag('p', attrs={'class': 'limit'})
-        limits.string = '账户边界：下表为每期重新起算的1万元单期模拟，不是连续账户或实际成交。尚未承接真实旧仓、现金和原买价，也未实现跨期0.7底线卖出。'
+        limits.string = ('历史账户演示：下表保留冻结快照中的1万元单期模拟，不是当前连续净值或实际成交。当前净值请阅读2026-11-02起的连续跟踪报告。'
+                         if data['reading_small_cap_plan'].get('account') else
+                         '本页仅展示选股名单与换手日历；没有账户净值，不据此推断实际持仓或成交。')
         main.append(limits)
     if tracking:
         from report.small_cap_tracking import render_tracking
