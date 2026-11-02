@@ -16,7 +16,7 @@ from report.fact_utils import evidence_hash
 from report.small_cap_rotation import ACCOUNT_FEE, SELL_FEE, ANCHOR, build_plan, growth_records
 from report.small_cap_report import render
 from report.small_cap_tracking import (SCHEMA, advance, collect_facts, directory, is_switch,
-                                       load_seed, prepare, save, signed, validate_facts)
+                                       curve_data, load_seed, prepare, render_tracking, save, signed, validate_facts)
 from tests.test_small_cap_plan import calendar_through, fina, world
 
 SEED = load_seed(ROOT)
@@ -243,14 +243,81 @@ class SmallCapTrackingTest(unittest.TestCase):
         self.assertIsNone(soup.select_one('#small-cap-plan'))
         self.assertIsNone(soup.select_one('.dash-plan-account'))
         self.assertIsNone(soup.select_one('.dash-plan-fresh'))
+        self.assertFalse(soup.select_one('.plan-disclosure').has_attr('open'))
         self.assertNotIn('每期重新起算', soup.get_text())
         self.assertNotIn('未实现跨期', soup.get_text())
         self.assertEqual(json.loads(soup.select_one('#small-cap-tracking').string)['positions'], record['positions'])
+        record.update(positions=[], cash=.65, nav=.65, stopped=True)
+        stopped = BeautifulSoup(render(data, START, source='合成事实', tracking=tracking), 'html.parser')
+        self.assertIsNone(stopped.select_one('#daily-plan'))
+        self.assertIn('后续定名单和调仓均停止', stopped.get_text())
         from report.small_cap_rotation import render_plan
         p.update(sessions_since=0, next_session=DAYS[1], next_decision=None, next_switch=None)
         text = render_plan(BeautifulSoup('', 'html.parser'), p, tracked=True).get_text()
         self.assertIn(DAYS[1] + '开盘换股', text)
         self.assertNotIn('下次待核实', text)
+
+    def test_curve_keeps_opening_origin_all_closes_and_missing_index_gaps(self):
+        history = []
+        for i, day in enumerate(DAYS[:27]):
+            record = deepcopy(first())
+            record['date'] = day
+            record['nav'] = 1 + i * .001
+            record['benchmarks']['000985.CSI']['nav'] = None if i == 3 else 1 + i * .002
+            history.append(record)
+        tracking = {'record': history[-1], 'history': history}
+        rows = curve_data(tracking)
+        self.assertEqual(len(rows), 28)
+        self.assertEqual(rows[0]['values'], [1, None, None, 1])
+        self.assertEqual(rows[4]['values'][-1], None)
+        self.assertEqual(rows[-1]['values'][0], history[-1]['nav'])
+        soup = BeautifulSoup(render_tracking(tracking), 'html.parser')
+        self.assertEqual(json.loads(soup.select_one('#nav-curve-data').string), rows)
+        index_path = soup.select_one('[data-series="3"] path')['d']
+        self.assertEqual(index_path.count('M'), 2)
+        self.assertEqual(soup.select_one('[data-series="0"] path')['d'].count('M'), 1)
+        self.assertEqual(soup.select_one('input[type=range]')['max'], '27')
+
+    def test_first_day_summary_matches_holdings_and_dates_without_invented_history(self):
+        record = first(close=10.1)
+        record.update(next_decision='2026-11-20', next_switch='2026-11-23')
+        soup = BeautifulSoup(render_tracking({'record': record, 'history': [record]}), 'html.parser')
+        overview = soup.select_one('#continuous-tracking')
+        self.assertEqual(overview.select_one('.fund-nav').text, f'{record["nav"]:.6f}')
+        self.assertEqual(overview.select_one('.fund-return').text, f'{(record["nav"] - 1) * 100:+.3f}%')
+        self.assertIn('2026-11-23 开盘', overview.get_text())
+        self.assertIn('2026-11-20 收盘定名单', overview.get_text())
+        self.assertEqual(len(overview.select('.fund-holdings a')), 5)
+        for item in record['positions']:
+            self.assertIn(item['name'], overview.get_text())
+            self.assertIn(f'{item["value"] / record["nav"] * 100:.2f}%', overview.get_text())
+        self.assertEqual(len(json.loads(soup.select_one('#nav-curve-data').string)), 2)
+        self.assertIn('尚无跨日轨迹', soup.get_text())
+
+    def test_cash_only_and_stopped_summary_do_not_instruct_new_rotation(self):
+        record = first()
+        record.update(positions=[], cash=.65, nav=.65, stopped=True, next_decision='2026-11-20', next_switch='2026-11-23')
+        soup = BeautifulSoup(render_tracking({'record': record, 'history': [record]}), 'html.parser')
+        overview = soup.select_one('#continuous-tracking').get_text()
+        self.assertIn('现金 100.00%', overview)
+        self.assertIn('已停用，不再调仓', overview)
+        self.assertNotIn('2026-11-23 开盘', overview)
+        self.assertNotIn('2026-11-20 收盘定名单', overview)
+        self.assertNotIn('等待下一可卖开盘退出', overview)
+        self.assertIn('已触发0.7底线并清仓', overview)
+        self.assertIn('当前无股票持仓', soup.select_one('#fund-positions').get_text())
+        self.assertNotIn('下次换手', soup.get_text())
+        self.assertNotIn('恢复买入', soup.get_text())
+        waiting = first(close=6.5)
+        waiting_page = BeautifulSoup(render_tracking({'record': waiting, 'history': [waiting]}), 'html.parser')
+        self.assertIn('等待下一可卖开盘退出', waiting_page.get_text())
+        self.assertNotIn('下次换手', waiting_page.get_text())
+
+    def test_curve_rejects_non_finite_plot_range_before_emitting_bad_svg(self):
+        record = first()
+        record['nav'] = 1.79e308
+        with self.assertRaisesRegex(ValueError, '曲线范围异常'):
+            render_tracking({'record': record, 'history': [record]})
 
 
 if __name__ == '__main__':

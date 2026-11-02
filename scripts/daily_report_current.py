@@ -56,7 +56,8 @@ def main(argv=None, *, root=ROOT):
         replay = args.replay or args.historical_rebuild or day != today.isoformat()
         directory = root / ('reports/replay/small-cap' if replay else 'reports/small-cap')
         suffix = f'_{args.snapshot_source}_replay' if args.replay else '_rebuilt' if args.historical_rebuild else ''
-        path = directory / f'{day}_小盘轮换{suffix}.html'
+        label = '小盘轮换_净值报告' if tracking else '小盘轮换'
+        path = directory / f'{day}_{label}{suffix}.html'
         write_new(path, render(data, day, source=source, tracking=tracking))
         print(f'小盘日报：{path}')
         return 0

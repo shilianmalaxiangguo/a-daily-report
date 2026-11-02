@@ -31,6 +31,37 @@ th{background:#efeee9;color:#36352f}th:nth-child(-n+2),td:nth-child(-n+2){text-a
 .limit{background:#fff4db;padding:14px 18px}.source{font-size:14px;overflow-wrap:anywhere}
 '''
 
+TRACKING_STYLE = '''
+body{background:#edf2f6;color:#183a56;font-family:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif}
+main{margin-top:28px}header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+header h1{font-size:27px;margin:0}header p{margin:2px 0;color:#596e7f;font-size:14px}
+header nav{display:flex;gap:24px}a{color:#285e86;text-underline-offset:4px}
+section{border:1px solid #d8e1e8;padding:26px 30px;margin:20px 0;border-radius:8px}
+h2{font-size:21px;margin:0 0 14px}h3{font-size:17px}p{max-width:78em}
+.fund-overview{display:grid;grid-template-columns:1.05fr .8fr 1.4fr;gap:32px;align-items:center}
+.fund-overview dl{margin:0}.fund-overview dt{font-size:14px;color:#596e7f}.fund-overview dd{margin:4px 0}
+.fund-nav{font-size:62px;line-height:1.15;font-weight:600;letter-spacing:-2px;font-variant-numeric:tabular-nums}
+.fund-return{font-size:32px;line-height:1.4;font-weight:600}.fund-date{font-size:24px;font-weight:600}
+.fund-meta,.source,small,.dash-note{color:#596e7f;font-size:14px}.fund-positive{color:#c43535}.fund-negative{color:#15734e}
+.fund-holdings{margin-top:22px;padding-top:16px;border-top:1px solid #d8e1e8;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.fund-holdings a{text-decoration:none;border:1px solid #d8e1e8;border-radius:5px;padding:5px 12px;color:#183a56}
+.fund-holdings span{font-size:14px;color:#596e7f}.fund-status{margin-top:14px;font-size:14px}.fund-status strong{color:#c43535}
+.chart-heading{display:flex;justify-content:space-between;align-items:baseline}.chart-heading p{margin:0;color:#596e7f;font-size:14px}
+.nav-legend{display:flex;gap:26px;align-items:center;margin:14px 0}.nav-legend label{cursor:pointer;font-size:14px;display:flex;gap:7px;align-items:center}
+.nav-legend i{width:22px;height:3px;display:inline-block;background:var(--series-color)}
+input[type=checkbox]{accent-color:#285e86}input:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid #285e86;outline-offset:4px}
+.nav-chart{display:block;width:100%;height:auto}.nav-series[hidden]{display:none}.nav-chart text{font:13px "Avenir Next","PingFang SC",sans-serif;fill:#596e7f}
+.nav-chart .nav-axis-label{font-size:12px}.nav-chart .nav-grid{stroke:#e5ebf0}.nav-chart .nav-origin{stroke:#9aafbf;stroke-dasharray:5 5}
+.nav-chart .nav-cursor{stroke:#91a5b5;stroke-dasharray:3 4;pointer-events:none}
+.nav-inspection{display:flex;gap:26px;align-items:center;font-size:14px;font-variant-numeric:tabular-nums;min-height:32px}
+.nav-inspection strong{min-width:165px}.nav-inspection span{white-space:nowrap}.nav-slider{display:flex;gap:18px;align-items:center;color:#596e7f;font-size:14px}
+.nav-slider input{flex:1;accent-color:#285e86}.chart-note{font-size:14px;color:#596e7f;margin-bottom:0}
+th{background:#f2f6f9;color:#183a56}th,td{border-bottom-color:#d8e1e8;padding:11px 10px}
+.fund-disclosure summary{cursor:pointer;font-weight:600}.fund-disclosure p{font-size:14px;color:#596e7f}
+.fund-disclosure details[open] summary{margin-bottom:18px}
+.plan-disclosure summary{cursor:pointer;font-weight:600}.plan-disclosure>section{margin-top:18px}
+'''
+
 
 def validate_data(data, day):
     market, plan = data.get('reading_market_returns'), data.get('reading_small_cap_plan')
@@ -134,19 +165,37 @@ def render(data, day, *, source, tracking=None):
     data = validate_data(data, day)
     soup = BeautifulSoup('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><main></main></body></html>', 'html.parser')
     title = soup.new_tag('title'); title.string = f'{day} 小盘轮换 v0.3'; soup.head.append(title)
-    css = soup.new_tag('style'); css.string = STYLE; soup.head.append(css)
+    css = soup.new_tag('style'); css.string = STYLE + (TRACKING_STYLE if tracking else ''); soup.head.append(css)
     main = soup.main
     header = soup.new_tag('header')
-    header.append(BeautifulSoup(f'<h1>{day} 小盘轮换 v0.3</h1><p>当前执行阅读页 · 5只名单与3只备选 · 每20交易日换手</p>', 'html.parser'))
+    if tracking:
+        header.append(BeautifulSoup(f'<div><h1>小盘轮换 v0.3</h1><p>{day} 收盘净值报告 · 连续模拟</p></div>'
+                                   '<nav aria-label="报告内容"><a href="#nav-curve">净值曲线</a><a href="#fund-positions">成分股</a>'
+                                   '<a href="#fund-method">计算说明</a></nav>', 'html.parser'))
+    else:
+        header.append(BeautifulSoup(f'<h1>{day} 小盘轮换 v0.3</h1><p>当前执行阅读页 · 5只名单与3只备选 · 每20交易日换手</p>', 'html.parser'))
     main.append(header)
-    limits = soup.new_tag('p', attrs={'class': 'limit'})
-    limits.string = ('连续模拟：从2026-11-02开盘起按指定五只等额跟踪，原买价、现金和待卖记录逐日延续；不需要接入真实账户。'
-                     if tracking else '账户边界：下表为每期重新起算的1万元单期模拟，不是连续账户或实际成交。尚未承接真实旧仓、现金和原买价，也未实现跨期0.7底线卖出。')
-    main.append(limits)
+    if not tracking:
+        limits = soup.new_tag('p', attrs={'class': 'limit'})
+        limits.string = '账户边界：下表为每期重新起算的1万元单期模拟，不是连续账户或实际成交。尚未承接真实旧仓、现金和原买价，也未实现跨期0.7底线卖出。'
+        main.append(limits)
     if tracking:
         from report.small_cap_tracking import render_tracking
         main.append(BeautifulSoup(render_tracking(tracking), 'html.parser'))
-    main.append(render_plan(soup, data['reading_small_cap_plan'], tracked=bool(tracking)))
+    if tracking and tracking['record']['stopped']:
+        stopped = soup.new_tag('p', attrs={'class': 'source'})
+        stopped.string = '连续模拟已停用，后续定名单和调仓均停止，等待复核。'
+        main.append(stopped)
+    elif tracking:
+        plan_section = render_plan(soup, data['reading_small_cap_plan'], tracked=True)
+        disclosure = soup.new_tag('details', attrs={'class': 'plan-disclosure'})
+        summary = soup.new_tag('summary')
+        summary.string = '本期选股依据与换手日历（非当前持仓）'
+        disclosure.append(summary)
+        disclosure.append(plan_section)
+        main.append(disclosure)
+    else:
+        main.append(render_plan(soup, data['reading_small_cap_plan']))
     note = soup.new_tag('p', attrs={'class': 'source'})
     note.string = f'事实来源：{source}；行情取得时间：{data["reading_market_returns"]["retrieved_at"]}；小盘计划指纹：{data["reading_small_cap_plan"]["artifact_hash"]}。回测不代表未来收益。'
     main.append(note)
