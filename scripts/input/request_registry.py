@@ -69,20 +69,63 @@ _EXTRA_KWARGS_BY_REQUEST_KEY = {
     "concept_fund_flow": (("snapshot_fallback_fn", "get_concept_fund_flow_from_snapshot"),),
 }
 
+# 历史重建模式下允许注入的兜底源白名单。
+# 入选条件：兜底函数必须按目标日期取数（日期参数化、可证明属于目标日），
+# 例如 finshare 龙虎榜按 start/end 日期查询；当前型实时源一律禁止。
+_HISTORICAL_ALLOWED_FALLBACK_KEYS = frozenset({"lhb_snapshot"})
 
-def _wrap_tushare_first_helper(request_key, helper, helpers):
+
+def _empty_rows(*args, **kwargs):
+    return []
+
+
+_HISTORICAL_KWARGS_BY_REQUEST_KEY = {
+    "new_high_feedback": {
+        "persist_facts": False,
+        "fetch_akshare_one_year_high_rows_fn": _empty_rows,
+    },
+    "top50_turnover_share_series": {"persist_facts": False},
+    "price_band_style_series": {
+        "persist_facts": False,
+        "fetch_ths_price_band_history_fn": _empty_rows,
+    },
+    "margin_pressure": {"persist_facts": False},
+}
+
+
+def _wrap_tushare_first_helper(
+    request_key,
+    helper,
+    helpers,
+    *,
+    historical_rebuild=False,
+):
     wrapped = helper
-    fallback_kwarg = _FALLBACK_KWARG_BY_REQUEST_KEY.get(request_key)
+    fallback_kwarg = (
+        None
+        if historical_rebuild
+        else _FALLBACK_KWARG_BY_REQUEST_KEY.get(request_key)
+    )
+    # 历史重建允许的兜底源：兜底函数本身按目标日期取数（可证明属于目标日），
+    # 而不是当前型实时源；当前型源在历史重建中依然禁止混入。
+    if historical_rebuild and request_key in _HISTORICAL_ALLOWED_FALLBACK_KEYS:
+        fallback_kwarg = _FALLBACK_KWARG_BY_REQUEST_KEY.get(request_key)
     if fallback_kwarg:
         kwarg_name, fallback_helper_name = fallback_kwarg
         fallback_helper = helpers.get(fallback_helper_name)
         if callable(fallback_helper) and _helper_accepts_kwarg(wrapped, kwarg_name):
             wrapped = _wrap_default_kwarg(wrapped, kwarg_name, fallback_helper)
 
-    for kwarg_name, helper_name in _EXTRA_KWARGS_BY_REQUEST_KEY.get(request_key, ()):
+    extra_kwargs = () if historical_rebuild else _EXTRA_KWARGS_BY_REQUEST_KEY.get(request_key, ())
+    for kwarg_name, helper_name in extra_kwargs:
         extra_helper = helpers.get(helper_name)
         if callable(extra_helper) and _helper_accepts_kwarg(wrapped, kwarg_name):
             wrapped = _wrap_default_kwarg(wrapped, kwarg_name, extra_helper)
+
+    if historical_rebuild:
+        for kwarg_name, value in _HISTORICAL_KWARGS_BY_REQUEST_KEY.get(request_key, {}).items():
+            if _helper_accepts_kwarg(wrapped, kwarg_name):
+                wrapped = _wrap_default_kwarg(wrapped, kwarg_name, value)
 
     return wrapped
 
@@ -115,7 +158,7 @@ def resolve_request_target_date(target_date=None, *, now=None):
     return yesterday.strftime("%Y-%m-%d")
 
 
-def build_input_request_registry(helpers=None):
+def build_input_request_registry(helpers=None, *, historical_rebuild=False):
     helpers = helpers or {}
     registry = {}
 
@@ -124,6 +167,11 @@ def build_input_request_registry(helpers=None):
         helper = helpers.get(helper_name)
         if not callable(helper):
             raise KeyError(f"Missing input request helper: {helper_name}")
-        registry[request_key] = _wrap_tushare_first_helper(request_key, helper, helpers)
+        registry[request_key] = _wrap_tushare_first_helper(
+            request_key,
+            helper,
+            helpers,
+            historical_rebuild=historical_rebuild,
+        )
 
     return registry

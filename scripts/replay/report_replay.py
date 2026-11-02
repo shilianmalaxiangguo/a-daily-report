@@ -1,13 +1,32 @@
 import datetime
+import json
+from copy import deepcopy
 from pathlib import Path
 
 from knowledge.llm_wiki_context import build_replay_llm_wiki_context
+from domains.market_activity.new_high_runtime import (
+    is_missing_new_high_name,
+    is_missing_new_high_sector,
+    new_high_feedback_has_invalid_content,
+    reconcile_new_high_feedback_identity,
+)
 from market_data.kline_dates import parse_kline_date
 from report.position_context import (
     existing_position_summary_from_context,
     extract_position_timeline_markdown,
     normalize_inferred_previous_target_records,
     prepend_position_timeline_markdown,
+)
+from report.formal_account_decision import (
+    DECISION_PRODUCT_FREEZE_KEY,
+    apply_decision_product_freeze,
+    build_legacy_decision_product_freeze,
+    validate_decision_product_freeze,
+)
+from report.replay_role_isolation import (
+    isolate_replay_named_role_fields as _isolate_replay_named_role_fields,
+    normalized_replay_role_date as _normalized_replay_role_date,
+    replay_role_date_after as _replay_role_date_after,
 )
 
 __all__ = [
@@ -17,7 +36,23 @@ __all__ = [
 ]
 
 _MISSING = object()
+_REPLAY_DECISION_FREEZE_LOCK_KEY = "_replay_decision_product_freeze_locked"
+_REPLAY_DECISION_ROOT_KEYS = (
+    "selection_workflow",
+    "final_target_resolution",
+    "position_decision",
+    "two_layer_decision_payload",
+    "formal_decision_input",
+    "formal_account_decision",
+)
+_REPLAY_POSTERIOR_SCHEMA_VERSION = "replay_posterior_facts.v1"
+_TARGET_DATED_NEW_HIGH_SOURCES = {
+    "akshare.stock_rank_cxg_ths.one_year_high",
+    "report_markdown.new_high_feedback",
+    "tushare.stk_factor_pro.topdays",
+}
 _REPORT_STOCK_LIST_KEYS = {
+    "top_stocks",
     "hot_rank_top30",
     "hot_rank_top50",
     "integrated_hot_list",
@@ -67,6 +102,7 @@ _REPORT_STOCK_OBJECT_KEYS = {
     "candidate",
 }
 _REPORT_STOCK_CONTAINER_KEYS = {
+    "new_high_feedback",
     "execution_stage_context",
     "market_research_snapshot",
     "candidate_snapshot",
@@ -78,6 +114,7 @@ _REPORT_STOCK_CONTAINER_KEYS = {
     "opportunity_comparison",
     "additional_target_comparisons",
 }
+_DEFAULT_STOCK_IDENTITY_FACT_ROOT = Path(__file__).resolve().parent / "facts" / "stock-identities"
 
 
 def _load_default_mainline_helpers():
@@ -93,6 +130,7 @@ def _load_default_mainline_helpers():
         get_wind_a_from_tushare_first,
     )
     from market_data.tushare_market_activity_service import fetch_tushare_open_trade_dates
+    from market_data.tushare_turnover_service import fetch_stock_batch_quote_info
     from input.ths_sector_runtime import get_sector_turnover_snapshot_from_ths
     from research.market_research_runtime import (
         _fill_sector_snapshot_total_turnover,
@@ -112,6 +150,26 @@ def _load_default_mainline_helpers():
         service = DatabaseService.fact_store_from_environment()
         return service.query_new_high_feedback_series(end_date, window_days=window_days)
 
+    def _query_top50_turnover_share_series(end_date, window_days=25):
+        service = DatabaseService.fact_store_from_environment()
+        return service.query_top_turnover_share_series(end_date, window_days=window_days, limit=50)
+
+    def _get_replay_new_high_feedback(target_date=None, **kwargs):
+        kwargs["persist_facts"] = False
+        return get_new_high_feedback_from_tushare_first(
+            target_date=target_date,
+            database_service_cls=DatabaseService,
+            fetch_tushare_open_trade_dates_fn=fetch_tushare_open_trade_dates,
+            **kwargs,
+        )
+
+    def _get_replay_price_band_style_series(target_date=None, **kwargs):
+        kwargs["persist_facts"] = False
+        return get_price_band_style_series_from_tushare_first(
+            target_date=target_date,
+            **kwargs,
+        )
+
     return {
         "_use_default_query_new_high_feedback_series": True,
         "build_mainline_history_record": build_mainline_history_record,
@@ -128,14 +186,14 @@ def _load_default_mainline_helpers():
         "get_market_total_turnover_from_fact_db": get_market_total_turnover_from_fact_db_runtime,
         "get_turnover_rank_from_fact_db": get_turnover_rank_from_fact_db_runtime,
         "get_wind_a_from_tushare": get_wind_a_from_tushare_first,
-        "get_new_high_feedback_from_tushare": lambda target_date=None, **kwargs: get_new_high_feedback_from_tushare_first(
-            target_date=target_date,
-            database_service_cls=DatabaseService,
-            fetch_tushare_open_trade_dates_fn=fetch_tushare_open_trade_dates,
-            **kwargs,
-        ),
+        "get_new_high_feedback_from_tushare": _get_replay_new_high_feedback,
         "query_new_high_feedback_series": _query_new_high_feedback_series,
-        "get_price_band_style_series_from_tushare": get_price_band_style_series_from_tushare_first,
+        "query_top50_turnover_share_series": _query_top50_turnover_share_series,
+        "get_price_band_style_series_from_tushare": _get_replay_price_band_style_series,
+        "fetch_new_high_stock_batch_info": lambda codes, target_date=None: fetch_stock_batch_quote_info(
+            codes,
+            target_date,
+        ),
     }
 
 
@@ -186,6 +244,328 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _replay_posterior_facts(value, target_date):
+    value = deepcopy(value) if isinstance(value, dict) else {}
+    value["schema_version"] = _REPLAY_POSTERIOR_SCHEMA_VERSION
+    value["target_date"] = str(target_date or "").strip()
+    for key in ("decision_reviews", "decision_outcomes"):
+        if not isinstance(value.get(key), list):
+            value[key] = []
+    return value
+
+
+def _append_replay_posterior_row(posterior, key, row):
+    if not isinstance(posterior, dict) or not isinstance(row, dict):
+        return
+    rows = posterior.setdefault(key, [])
+    if row not in rows:
+        rows.append(deepcopy(row))
+
+
+def _decision_record_is_after_target(record, target_date):
+    if not isinstance(record, dict):
+        return False
+    for key in (
+        "report_date",
+        "first_seen_trade_date",
+        "cycle_start_trade_date",
+    ):
+        if _replay_role_date_after(record.get(key), target_date):
+            return True
+    return False
+
+
+def _participation_review_is_after_target(review, target_date):
+    if not isinstance(review, dict):
+        return False
+    for value in (
+        review.get("review_trade_date"),
+        review.get("review_date"),
+        (review.get("source_dates") or {}).get("price_source_date")
+        if isinstance(review.get("source_dates"), dict)
+        else None,
+    ):
+        if _replay_role_date_after(value, target_date):
+            return True
+    return False
+
+
+def _backtest_outcome_is_after_target(row, target_date):
+    if not isinstance(row, dict):
+        return False
+    source_dates = row.get("source_dates") if isinstance(row.get("source_dates"), dict) else {}
+    for value in (
+        row.get("review_trade_date"),
+        row.get("price_source_date"),
+        source_dates.get("price_source_date"),
+    ):
+        if _replay_role_date_after(value, target_date):
+            return True
+    return False
+
+
+def _target_date_backtest_plan(row, target_date):
+    row = row if isinstance(row, dict) else {}
+    plan_keys = (
+        "mention_trade_date",
+        "stock_code",
+        "stock_name",
+        "rank",
+        "source_section",
+        "sector_candidate",
+        "position_plan_pct",
+        "position_plan_label",
+        "buy_window",
+        "is_final_execution_target",
+    )
+    plan = {key: deepcopy(row.get(key)) for key in plan_keys if key in row}
+    source_dates = row.get("source_dates") if isinstance(row.get("source_dates"), dict) else {}
+    target_source_dates = {
+        key: value
+        for key, value in source_dates.items()
+        if not _replay_role_date_after(value, target_date)
+    }
+    if target_source_dates:
+        plan["source_dates"] = target_source_dates
+    plan["fact_status"] = "待补事实"
+    plan["missing_fields"] = ["目标日后验结果未进入当时判断"]
+    return plan
+
+
+def isolate_replay_decision_ledger_artifacts(
+    artifacts,
+    target_date,
+    *,
+    posterior=None,
+):
+    posterior = _replay_posterior_facts(posterior, target_date)
+    if not isinstance(artifacts, dict):
+        return artifacts, posterior
+    updated = deepcopy(artifacts)
+    index = updated.get("index")
+    if not isinstance(index, dict):
+        updated["tracking_lines"] = []
+        return updated, posterior
+    index = deepcopy(index)
+    target = _normalized_replay_role_date(target_date)
+
+    hashes = index.get("selection_input_hash_by_trade_date")
+    if isinstance(hashes, dict):
+        index["selection_input_hash_by_trade_date"] = {
+            str(date): value
+            for date, value in hashes.items()
+            if not _replay_role_date_after(date, target)
+        }
+    dates = index.get("available_trade_dates")
+    if isinstance(dates, list):
+        index["available_trade_dates"] = [
+            date for date in dates if not _replay_role_date_after(date, target)
+        ]
+    snapshots = index.get("snapshots")
+    if isinstance(snapshots, list):
+        index["snapshots"] = [
+            deepcopy(row)
+            for row in snapshots
+            if isinstance(row, dict)
+            and not _replay_role_date_after(row.get("trade_date"), target)
+        ]
+
+    by_stock_code = index.get("by_stock_code")
+    retained_dates = []
+    if isinstance(by_stock_code, dict):
+        filtered_by_stock = {}
+        for stock_code, records in by_stock_code.items():
+            kept_records = []
+            record_rows = records if isinstance(records, list) else []
+            for raw_record in record_rows:
+                if not isinstance(raw_record, dict) or _decision_record_is_after_target(
+                    raw_record,
+                    target,
+                ):
+                    continue
+                record = deepcopy(raw_record)
+                mentions = record.get("mentions")
+                if isinstance(mentions, list):
+                    record["mentions"] = [
+                        deepcopy(mention)
+                        for mention in mentions
+                        if isinstance(mention, dict)
+                        and not _replay_role_date_after(
+                            mention.get("mention_trade_date"),
+                            target,
+                        )
+                    ]
+                review = record.get("participation_review")
+                if _participation_review_is_after_target(review, target):
+                    _append_replay_posterior_row(
+                        posterior,
+                        "decision_reviews",
+                        {
+                            "case_id": record.get("case_id"),
+                            "report_date": record.get("report_date"),
+                            "stock_code": record.get("stock_code") or stock_code,
+                            "stock_name": record.get("stock_name"),
+                            "participation_review_status": record.get(
+                                "participation_review_status"
+                            ),
+                            "participation_review": deepcopy(review),
+                        },
+                    )
+                    record.pop("participation_review", None)
+                    record.pop("participation_review_status", None)
+                latest_candidates = [
+                    _normalized_replay_role_date(record.get("report_date")),
+                    *[
+                        _normalized_replay_role_date(item.get("mention_trade_date"))
+                        for item in record.get("mentions") or []
+                        if isinstance(item, dict)
+                    ],
+                ]
+                latest_candidates = [item for item in latest_candidates if item]
+                if latest_candidates:
+                    record["latest_trade_date"] = max(latest_candidates)
+                    retained_dates.extend(latest_candidates)
+                kept_records.append(record)
+            if kept_records:
+                filtered_by_stock[str(stock_code)] = kept_records
+        index["by_stock_code"] = filtered_by_stock
+
+    backtest_rows = index.get("extreme_conviction_backtest_rows")
+    if isinstance(backtest_rows, list):
+        filtered_backtest_rows = []
+        for raw_row in backtest_rows:
+            if not isinstance(raw_row, dict):
+                continue
+            if _replay_role_date_after(raw_row.get("mention_trade_date"), target):
+                continue
+            if _backtest_outcome_is_after_target(raw_row, target):
+                _append_replay_posterior_row(
+                    posterior,
+                    "decision_outcomes",
+                    deepcopy(raw_row),
+                )
+                filtered_backtest_rows.append(
+                    _target_date_backtest_plan(raw_row, target)
+                )
+            else:
+                filtered_backtest_rows.append(deepcopy(raw_row))
+        index["extreme_conviction_backtest_rows"] = filtered_backtest_rows
+
+    retained_dates.extend(
+        _normalized_replay_role_date(item)
+        for item in index.get("available_trade_dates") or []
+    )
+    retained_dates = [item for item in retained_dates if item and item <= target]
+    index["latest_trade_date"] = max(retained_dates) if retained_dates else ""
+    updated["index"] = index
+    updated["case_count"] = sum(
+        len(records)
+        for records in (index.get("by_stock_code") or {}).values()
+        if isinstance(records, list)
+    )
+    updated["tracking_lines"] = []
+    return updated, posterior
+
+
+def _isolate_replay_future_role_facts(snapshot_data, target_date):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    posterior = _replay_posterior_facts(
+        snapshot_data.get("replay_posterior_facts"),
+        target_date,
+    )
+    artifacts = snapshot_data.get("decision_ledger_artifacts")
+    if isinstance(artifacts, dict):
+        artifacts, posterior = isolate_replay_decision_ledger_artifacts(
+            artifacts,
+            target_date,
+            posterior=posterior,
+        )
+        snapshot_data["decision_ledger_artifacts"] = artifacts
+    _isolate_replay_named_role_fields(snapshot_data, target_date)
+    if posterior.get("decision_reviews") or posterior.get("decision_outcomes"):
+        snapshot_data["replay_posterior_facts"] = posterior
+    else:
+        snapshot_data.pop("replay_posterior_facts", None)
+    return snapshot_data
+
+
+def _clear_replay_active_decision_roots(snapshot_data):
+    if not isinstance(snapshot_data, dict):
+        return
+    targets = [snapshot_data]
+    for source in (
+        snapshot_data.get("execution_stage_context"),
+        snapshot_data.get("market_research_snapshot"),
+    ):
+        if isinstance(source, dict):
+            targets.append(source)
+            nested = source.get("market_research_snapshot")
+            if isinstance(nested, dict):
+                targets.append(nested)
+    seen = set()
+    for target in targets:
+        marker = id(target)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        for key in _REPLAY_DECISION_ROOT_KEYS:
+            target.pop(key, None)
+
+
+def _prepare_replay_decision_product_freeze(snapshot_data, target_date):
+    if not isinstance(snapshot_data, dict):
+        return {}
+    artifact = snapshot_data.get(DECISION_PRODUCT_FREEZE_KEY)
+    if not isinstance(artifact, dict) or not artifact:
+        artifact = build_legacy_decision_product_freeze(
+            snapshot_data,
+            target_date=target_date,
+        )
+        if artifact:
+            snapshot_data[DECISION_PRODUCT_FREEZE_KEY] = deepcopy(artifact)
+    valid, errors = validate_decision_product_freeze(
+        artifact,
+        target_date=target_date,
+    ) if artifact else (False, ["decision_product_freeze_missing"])
+    complete = bool(valid and artifact.get("availability") == "complete")
+    if valid:
+        _, review = apply_decision_product_freeze(
+            snapshot_data,
+            artifact,
+            target_date=target_date,
+        )
+    if complete:
+        snapshot_data.pop(_REPLAY_DECISION_FREEZE_LOCK_KEY, None)
+        return review
+    if not valid:
+        _clear_replay_active_decision_roots(snapshot_data)
+    snapshot_data[_REPLAY_DECISION_FREEZE_LOCK_KEY] = True
+    availability = (
+        "historical_snapshot_missing"
+        if not artifact
+        else "historical_snapshot_invalid"
+        if not valid
+        else "historical_snapshot_incomplete"
+    )
+    review = {
+        "schema_version": "decision_product_freeze_review.v1",
+        "target_date": str(target_date or "").strip(),
+        "availability": availability,
+        "artifact_origin": str((artifact or {}).get("artifact_origin") or "").strip(),
+        "freeze_hash": str((artifact or {}).get("freeze_hash") or "").strip(),
+        "valid": False,
+        "errors": sorted(
+            set(
+                [*errors]
+                + (["decision_product_freeze_incomplete"] if valid else [])
+            )
+        ),
+    }
+    snapshot_data["decision_product_freeze_review"] = review
+    return review
 
 
 def _hoist_report_analysis_atoms(snapshot_data):
@@ -418,8 +798,59 @@ def _store_replay_unavailable_price_band_series(snapshot_data, series, target_da
     return snapshot_data
 
 
+def _ensure_replay_metric_history(snapshot_data, target_date, helpers=None):
+    """Fill dated history gaps without replacing frozen same-day facts."""
+    helpers = helpers or {}
+    target_day = parse_kline_date(target_date)
+    if target_day is None:
+        return snapshot_data
+    for key, rows_key, query_key in (
+        ("top50_turnover_share_series", "rows", "query_top50_turnover_share_series"),
+        ("new_high_feedback", "trend_rows", "query_new_high_feedback_series"),
+    ):
+        payload = snapshot_data.get(key)
+        query = helpers.get(query_key)
+        if not isinstance(payload, dict) or not payload.get(rows_key) or not callable(query):
+            continue
+        try:
+            queried = query(target_date, window_days=25)
+        except Exception:
+            continue
+        history = queried.get("rows", []) if isinstance(queried, dict) else queried or []
+        original = {str(row.get("trade_date") or row.get("date")): deepcopy(row)
+                    for row in payload[rows_key] if isinstance(row, dict)}
+        added = []
+        for row in history:
+            if not isinstance(row, dict):
+                continue
+            day = parse_kline_date(row.get("trade_date") or row.get("date"))
+            if day is None or day >= target_day or day.isoformat() in original:
+                continue
+            if any(row.get(field) and parse_kline_date(row[field]) != day
+                   for field in ("source_date", "query_date")):
+                continue
+            fields = ("top_amount_yi", "market_amount_yi", "share_pct") if key.startswith("top50") else ("new_high_count", "all_a_share_pct")
+            if any(row.get(field) is None for field in fields):
+                continue
+            original[day.isoformat()] = {**deepcopy(row), "trade_date": day.isoformat()}
+            added.append(day.isoformat())
+        if not added:
+            continue
+        rows = [original[day] for day in sorted(original)
+                if parse_kline_date(day) is not None and parse_kline_date(day) <= target_day][-25:]
+        if key == "new_high_feedback":
+            for previous, current in zip(rows, rows[1:]):
+                if previous.get("new_high_count") is not None and current.get("new_high_count") is not None:
+                    current["change_text"] = f"{int(current['new_high_count']) - int(previous['new_high_count']):+d}"
+        snapshot_data[key] = {**payload, rows_key: rows,
+                              "history_backfill": {"source": "postgres.daily_report_facts", "dates": sorted(added)}}
+    return snapshot_data
+
+
 def _new_high_feedback_needs_refresh(feedback, target_date):
     if not isinstance(feedback, dict):
+        return True
+    if new_high_feedback_has_invalid_content(feedback):
         return True
     rows = [row for row in feedback.get("trend_rows") or [] if isinstance(row, dict)]
     if len(rows) < 25:
@@ -480,6 +911,53 @@ def _replay_new_high_feedback_candidate(target_date, helpers=None):
     return {}
 
 
+def _is_verified_local_new_high_rebuild(feedback, target_date):
+    if not isinstance(feedback, dict) or _new_high_feedback_needs_refresh(feedback, target_date):
+        return False
+    source = str(feedback.get("source_policy") or feedback.get("source") or "").strip()
+    if source != "storage.stock_daily_quotes_recent.high_break":
+        return False
+    target = str(target_date or "").strip()
+    if not target or any(
+        str(feedback.get(key) or "").strip() != target
+        for key in ("trade_date", "source_date", "query_date", "requested_trade_date")
+    ):
+        return False
+    new_high_count = int(_safe_float(feedback.get("new_high_count"), 0))
+    if new_high_count <= 0:
+        return True
+    if is_missing_new_high_sector(feedback.get("leading_sectors")):
+        return False
+    stocks = [row for row in feedback.get("top_stocks") or [] if isinstance(row, dict)]
+    if not stocks:
+        return False
+    default_topdays = int(_safe_float(feedback.get("topdays_threshold"), 250))
+    for row in stocks:
+        if is_missing_new_high_sector(row.get("sector") or row.get("industry")):
+            return False
+        if "history_trade_days" not in row:
+            return False
+        topdays = max(int(_safe_float(row.get("topdays"), default_topdays)), 1)
+        if int(_safe_float(row.get("history_trade_days"), -1)) < max(topdays - 1, 1):
+            return False
+    return True
+
+
+def _is_reusable_replay_new_high_feedback(feedback, target_date):
+    if not isinstance(feedback, dict) or _new_high_feedback_needs_refresh(feedback, target_date):
+        return False
+    source = str(feedback.get("source_policy") or feedback.get("source") or "").strip()
+    if source == "storage.stock_daily_quotes_recent.high_break":
+        return _is_verified_local_new_high_rebuild(feedback, target_date)
+    if source not in _TARGET_DATED_NEW_HIGH_SOURCES:
+        return False
+    target = str(target_date or "").strip()
+    return bool(target) and all(
+        str(feedback.get(key) or "").strip() == target
+        for key in ("trade_date", "source_date", "query_date", "requested_trade_date")
+    )
+
+
 def _load_replay_snapshot_candidate(target_date, helpers=None):
     helpers = helpers or {}
     loader = helpers.get("load_replay_snapshot_data")
@@ -499,7 +977,7 @@ def _load_replay_snapshot_candidate(target_date, helpers=None):
 
 def _use_replay_new_high_feedback_if_complete(snapshot_data, target_date, safe_float, helpers=None):
     feedback = _replay_new_high_feedback_candidate(target_date, helpers=helpers)
-    if not isinstance(feedback, dict) or _new_high_feedback_needs_refresh(feedback, target_date):
+    if not _is_reusable_replay_new_high_feedback(feedback, target_date):
         return False
     if _same_day_new_high_fact_differs(feedback, target_date, helpers=helpers):
         return False
@@ -530,9 +1008,14 @@ def _ensure_replay_new_high_feedback(snapshot_data, target_date, safe_float, hel
     if "new_high_feedback" not in snapshot_data:
         return snapshot_data
     helpers = helpers or {}
+    replay_candidate = _replay_new_high_feedback_candidate(target_date, helpers=helpers)
+    replay_candidate_invalid = bool(replay_candidate) and new_high_feedback_has_invalid_content(replay_candidate)
+    replay_candidate_verified = _is_verified_local_new_high_rebuild(replay_candidate, target_date)
     if (
         not _new_high_feedback_needs_refresh(snapshot_data.get("new_high_feedback"), target_date)
         and not _same_day_new_high_fact_differs(snapshot_data.get("new_high_feedback"), target_date, helpers=helpers)
+        and not replay_candidate_invalid
+        and not replay_candidate_verified
     ):
         return snapshot_data
     if _use_replay_new_high_feedback_if_complete(snapshot_data, target_date, safe_float, helpers=helpers):
@@ -1163,8 +1646,9 @@ def _normalize_replay_quote_trade_date(value):
         return ""
     digits = "".join(ch for ch in text if ch.isdigit())
     if len(digits) == 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
-    return text[:10]
+        text = f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    parsed = parse_kline_date(text[:10])
+    return parsed.isoformat() if parsed is not None else ""
 
 
 def _normalize_replay_stock_info_map(stock_full_info):
@@ -1174,6 +1658,49 @@ def _normalize_replay_stock_info_map(stock_full_info):
         if code and isinstance(info, dict):
             normalized[code] = dict(info)
     return normalized
+
+
+def _load_replay_stock_identity_facts(target_date, *, fact_root=None):
+    normalized_target = _normalize_replay_quote_trade_date(target_date)
+    if not normalized_target:
+        return {}
+    root = Path(fact_root) if fact_root is not None else _DEFAULT_STOCK_IDENTITY_FACT_ROOT
+    path = root / f"{normalized_target}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if _normalize_replay_quote_trade_date(payload.get("target_date")) != normalized_target:
+        return {}
+
+    identities = {}
+    for row in payload.get("identities") or []:
+        if not isinstance(row, dict):
+            continue
+        code = _normalize_replay_quote_code(row.get("code") or row.get("ts_code"))
+        name = str(row.get("name") or "").strip()
+        industry = str(row.get("industry") or row.get("sector") or "").strip()
+        identity_source_date = _normalize_replay_quote_trade_date(row.get("identity_source_date"))
+        identity_source = str(row.get("identity_source") or "").strip()
+        if (
+            not code
+            or is_missing_new_high_name(name, code)
+            or is_missing_new_high_sector(industry)
+            or not identity_source_date
+            or identity_source_date > normalized_target
+            or not identity_source
+        ):
+            continue
+        identities[code] = {
+            "name": name,
+            "industry": industry,
+            "trade_date": normalized_target,
+            "identity_source_date": identity_source_date,
+            "identity_source": identity_source,
+        }
+    return identities
 
 
 def _replay_report_stock_code(row):
@@ -1189,10 +1716,19 @@ def _replay_report_stock_code(row):
 def _patch_replay_quote_fields(row, info):
     patched = dict(row or {})
     info = info or {}
-    if not patched.get("name"):
+    code = _replay_report_stock_code(patched)
+    if is_missing_new_high_name(patched.get("name") or patched.get("名称"), code):
         name_from_info = info.get("name") or info.get("名称", "")
-        if name_from_info:
+        if not is_missing_new_high_name(name_from_info, code):
             patched["name"] = name_from_info
+    if is_missing_new_high_sector(
+        patched.get("sector") or patched.get("industry") or patched.get("所属行业") or patched.get("所属板块")
+    ):
+        for key in ("sector", "industry", "所属行业", "所属板块", "sector_name"):
+            sector = str(info.get(key) or "").strip()
+            if not is_missing_new_high_sector(sector):
+                patched["sector"] = sector
+                break
     for target_key, source_key in (
         ("change_pct", "change_pct"),
         ("high", "high"),
@@ -1442,6 +1978,108 @@ def _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=None):
         rejected_codes=rejected_codes,
     )
     _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
+def _reconcile_replay_new_high_feedback(snapshot_data, target_date, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    helpers = helpers or {}
+    normalized_target = _normalize_replay_quote_trade_date(target_date)
+    feedback, identity = reconcile_new_high_feedback_identity(
+        snapshot_data.get("new_high_feedback"),
+        snapshot_data.get("stock_full_info") or {},
+        target_date=target_date,
+    )
+    if not isinstance(feedback, dict):
+        return snapshot_data
+    issue_count_before_backfill = len(identity.get("issues") or [])
+    identity_backfilled = False
+    issue_codes = [
+        str(issue.get("code") or "").strip()
+        for issue in identity.get("issues") or []
+        if str(issue.get("code") or "").strip().isdigit()
+    ]
+    identity_loader = helpers.get("load_replay_stock_identity_facts") or _load_replay_stock_identity_facts
+    if issue_codes and callable(identity_loader):
+        try:
+            local_info = identity_loader(target_date)
+        except Exception:
+            local_info = {}
+        valid_local_info = {
+            code: info
+            for code, info in _normalize_replay_stock_info_map(local_info).items()
+            if (
+                code in issue_codes
+                and _normalize_replay_quote_trade_date(info.get("trade_date")) == normalized_target
+                and _normalize_replay_quote_trade_date(info.get("identity_source_date"))
+                and _normalize_replay_quote_trade_date(info.get("identity_source_date")) <= normalized_target
+                and str(info.get("identity_source") or "").strip()
+            )
+        }
+        if valid_local_info:
+            local_feedback, local_identity = reconcile_new_high_feedback_identity(
+                feedback,
+                valid_local_info,
+                target_date=target_date,
+            )
+            if len(local_identity.get("issues") or []) < len(identity.get("issues") or []):
+                feedback, identity = local_feedback, local_identity
+                identity_backfilled = True
+                issue_codes = [
+                    str(issue.get("code") or "").strip()
+                    for issue in identity.get("issues") or []
+                    if str(issue.get("code") or "").strip().isdigit()
+                ]
+    fetcher = helpers.get("fetch_new_high_stock_batch_info")
+    if issue_codes and callable(fetcher):
+        try:
+            try:
+                fetched = fetcher(issue_codes, target_date=target_date)
+            except TypeError as error:
+                if "target_date" not in str(error):
+                    raise
+                fetched = fetcher(issue_codes, target_date)
+        except Exception:
+            fetched = {}
+        fetched_info = _normalize_replay_stock_info_map(fetched)
+        valid_info = {
+            code: info
+            for code, info in fetched_info.items()
+            if code in issue_codes and _replay_quote_info_complete(info, target_date=target_date)
+        }
+        if valid_info:
+            stock_full_info = _normalize_replay_stock_info_map(snapshot_data.get("stock_full_info") or {})
+            stock_full_info.update(valid_info)
+            snapshot_data["stock_full_info"] = stock_full_info
+            feedback, identity = reconcile_new_high_feedback_identity(
+                feedback,
+                stock_full_info,
+                target_date=target_date,
+            )
+            identity_backfilled = len(identity.get("issues") or []) < issue_count_before_backfill
+    snapshot_data["new_high_feedback"] = feedback
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    complete = bool(feedback.get("available") and identity.get("complete"))
+    if complete and identity_backfilled:
+        data_status["创新高趋势反馈"] = True
+        step_status["创新高趋势反馈获取"] = step_status.get("创新高趋势反馈获取") is not False
+    else:
+        data_status["创新高趋势反馈"] = complete and data_status.get("创新高趋势反馈") is not False
+        step_status["创新高趋势反馈获取"] = complete and step_status.get("创新高趋势反馈获取") is not False
+    if identity.get("issues"):
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.new_high_feedback_identity",
+            status="degraded",
+            message="创新高样本名称或所属板块事实不完整",
+            provider=identity.get("source") or "new_high_feedback.top_stocks",
+            target_keys=["new_high_feedback"],
+            issues=identity.get("issues") or [],
+        )
+        _refresh_request_diagnostics(snapshot_data)
     return snapshot_data
 
 
@@ -2281,6 +2919,81 @@ def _derive_volume_anomalies_from_history(snapshot_data):
     return rows[:10]
 
 
+def _replay_lhb_row_code(row):
+    if not isinstance(row, dict):
+        return ""
+    return _normalize_replay_stock_code(
+        row.get("code") or row.get("代码") or row.get("stock_code") or row.get("ts_code")
+    )
+
+
+def _replay_lhb_row_name(row):
+    if not isinstance(row, dict):
+        return ""
+    return str(row.get("name") or row.get("名称") or row.get("stock_name") or "").strip()
+
+
+def _replay_lhb_name_rows(snapshot_data):
+    stock_full_info = snapshot_data.get("stock_full_info") or {}
+    rows = [
+        {"code": code, **(info if isinstance(info, dict) else {})}
+        for code, info in stock_full_info.items()
+    ]
+    for key in ("lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis", "lhb_inst_detail"):
+        rows.extend(item for item in (snapshot_data.get(key) or []) if isinstance(item, dict))
+    return rows
+
+
+def _missing_replay_lhb_inst_name_codes(snapshot_data):
+    known_names = {
+        _replay_lhb_row_code(row): _replay_lhb_row_name(row)
+        for row in _replay_lhb_name_rows(snapshot_data)
+        if _replay_lhb_row_code(row) and _replay_lhb_row_name(row)
+    }
+    return {
+        code
+        for row in (snapshot_data.get("lhb_inst_detail") or [])
+        if (code := _replay_lhb_row_code(row)) and not known_names.get(code)
+    }
+
+
+def _backfill_replay_lhb_inst_names(snapshot_data, refreshed_snapshot, target_date, *, requested_codes=None):
+    requested_codes = set(requested_codes or [])
+    refreshed_names = {}
+    provider = str((refreshed_snapshot or {}).get("provider") or "tushare.top_list")
+    for row in _replay_lhb_name_rows(refreshed_snapshot or {}):
+        code = _replay_lhb_row_code(row)
+        name = _replay_lhb_row_name(row)
+        if not code or not name:
+            continue
+        refreshed_names[code] = {
+            "name": name,
+            "name_source": str(row.get("name_source") or row.get("data_source") or provider),
+            "source_date": str(row.get("source_date") or row.get("trade_date") or target_date),
+            "query_date": str(row.get("query_date") or target_date),
+        }
+    if not refreshed_names:
+        return 0
+
+    resolved_codes = set()
+    resolved_rows = []
+    for row in snapshot_data.get("lhb_inst_detail") or []:
+        if not isinstance(row, dict):
+            resolved_rows.append(row)
+            continue
+        code = _replay_lhb_row_code(row)
+        if _replay_lhb_row_name(row) or code not in refreshed_names or (requested_codes and code not in requested_codes):
+            resolved_rows.append(row)
+            continue
+        resolved = dict(row)
+        resolved.update(refreshed_names[code])
+        resolved_rows.append(resolved)
+        resolved_codes.add(code)
+    if resolved_codes:
+        snapshot_data["lhb_inst_detail"] = resolved_rows
+    return len(resolved_codes)
+
+
 def _is_renderable_lhb_analysis(rows):
     for item in rows or []:
         if isinstance(item, dict) and item.get("stock_name") not in (None, "") and item.get("net_buy") not in (None, ""):
@@ -2714,11 +3427,13 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
     lhb_sell = snapshot_data.get("lhb_net_sell_top10") or []
     lhb_analysis = snapshot_data.get("lhb_analysis") or []
     lhb_provider = str(_provider_from_snapshot_log(snapshot_data, "request.lhb_snapshot") or "")
-    if (
+    lhb_requires_data_refresh = (
         snapshot_data.get("step_status", {}).get("龙虎榜数据获取") is False
         or not (lhb_buy or lhb_sell or lhb_analysis)
         or (lhb_provider.startswith("legacy.") and not (lhb_buy or lhb_sell))
-    ):
+    )
+    missing_lhb_inst_name_codes = _missing_replay_lhb_inst_name_codes(snapshot_data)
+    if lhb_requires_data_refresh or missing_lhb_inst_name_codes:
         try:
             lhb_snapshot = _fetch_replay_lhb_snapshot(target_date, helpers)
         except Exception:
@@ -2726,10 +3441,14 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
         refreshed_buy = list((lhb_snapshot or {}).get("lhb_net_buy_top10") or [])
         refreshed_sell = list((lhb_snapshot or {}).get("lhb_net_sell_top10") or [])
         refreshed_analysis = list((lhb_snapshot or {}).get("lhb_analysis") or [])
-        if refreshed_buy or refreshed_sell or refreshed_analysis:
+        refreshed_inst_detail = list((lhb_snapshot or {}).get("lhb_inst_detail") or [])
+        if lhb_requires_data_refresh and (refreshed_buy or refreshed_sell or refreshed_analysis):
             snapshot_data["lhb_net_buy_top10"] = refreshed_buy
             snapshot_data["lhb_net_sell_top10"] = refreshed_sell
             snapshot_data["lhb_analysis"] = refreshed_analysis
+            if refreshed_inst_detail:
+                snapshot_data["lhb_inst_detail"] = refreshed_inst_detail
+                snapshot_data["lhb_inst_detail_status"] = (lhb_snapshot or {}).get("lhb_inst_detail_status", "available")
             snapshot_data.setdefault("step_status", {})["龙虎榜数据获取"] = True
             _mark_replayed_step_success(snapshot_data, "龙虎榜数据获取", safe_float)
             _replace_request_module_log(
@@ -2739,14 +3458,15 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 status="success",
                 message="已从Tushare回补龙虎榜数据",
                 provider=(lhb_snapshot or {}).get("provider", "tushare.top_list"),
-                target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+                target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis", "lhb_inst_detail"],
                 lhb_count=len(refreshed_analysis),
                 buy_count=len(refreshed_buy),
                 sell_count=len(refreshed_sell),
+                inst_detail_count=len(refreshed_inst_detail),
                 fallback_used=bool((lhb_snapshot or {}).get("fallback_used")),
             )
             changed = True
-        else:
+        elif lhb_requires_data_refresh:
             snapshot_data.setdefault("step_status", {})["龙虎榜数据获取"] = False
             _replace_request_module_log(
                 snapshot_data,
@@ -2760,6 +3480,33 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 buy_count=0,
                 sell_count=0,
                 fallback_used=bool((lhb_snapshot or {}).get("fallback_used")),
+            )
+            changed = True
+        elif missing_lhb_inst_name_codes:
+            resolved_name_count = _backfill_replay_lhb_inst_names(
+                snapshot_data,
+                lhb_snapshot,
+                target_date,
+                requested_codes=missing_lhb_inst_name_codes,
+            )
+            unresolved_codes = _missing_replay_lhb_inst_name_codes(snapshot_data)
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.replay",
+                step="repair.lhb_inst_names",
+                status="success" if resolved_name_count and not unresolved_codes else "degraded",
+                message=(
+                    "已按目标日期补齐龙虎榜席位股票名称"
+                    if resolved_name_count and not unresolved_codes
+                    else "目标日期龙虎榜仍有席位股票名称缺失"
+                ),
+                provider=(lhb_snapshot or {}).get("provider", "tushare.top_list"),
+                target_keys=["lhb_inst_detail"],
+                requested_codes=sorted(missing_lhb_inst_name_codes),
+                resolved_name_count=resolved_name_count,
+                unresolved_codes=sorted(unresolved_codes),
+                source_date=target_date,
+                query_date=target_date,
             )
             changed = True
 
@@ -2838,9 +3585,24 @@ def _fetch_calendar_events_compat(tencent, target_date):
     try:
         return tencent.get_calendar_events(target_date=target_date)
     except TypeError as error:
-        if "target_date" not in str(error):
+        error_text = str(error)
+        if "target_date" not in error_text or "unexpected keyword argument" not in error_text:
             raise
-        return tencent.get_calendar_events()
+        events = tencent.get_calendar_events()
+        target = str(target_date or "")
+        return [
+            event
+            for event in (events or [])
+            if isinstance(event, dict)
+            and str(
+                event.get("source_date")
+                or event.get("trade_date")
+                or event.get("date")
+                or event.get("calendar_day")
+                or ""
+            )
+            == target
+        ]
 
 
 def _attach_replay_llm_wiki_context(snapshot_data, target_date):
@@ -2878,7 +3640,25 @@ def build_replay_snapshot_contract(
     print_fn(f"   刷新数据源: {', '.join(refresh_sources)}")
     print_fn(f"{'=' * 60}")
 
-    snapshot_data, supplementary = load_data_snapshot(target_date)
+    try:
+        snapshot_data, supplementary = load_data_snapshot(target_date)
+    except Exception as exc:
+        print_fn(f"❌ 快照日期或格式不一致: {target_date}，无法复盘")
+        _append_log(
+            logs,
+            "load.snapshot",
+            "error",
+            "快照日期或格式不一致，无法进入复盘流程",
+            target_date=target_date,
+            error=str(exc),
+        )
+        return {
+            "found": False,
+            "data": None,
+            "target_date": target_date,
+            "supplementary_perspective": "",
+            "module_logs": logs,
+        }
     if not snapshot_data:
         print_fn(f"❌ 快照不存在: {target_date}，无法复盘")
         _append_log(logs, "load.snapshot", "error", "快照不存在，无法进入复盘流程", target_date=target_date)
@@ -2907,6 +3687,31 @@ def build_replay_snapshot_contract(
         }
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
+    freeze_review = _prepare_replay_decision_product_freeze(
+        snapshot_data,
+        target_date,
+    )
+    if freeze_review.get("valid"):
+        _append_log(
+            logs,
+            "load.decision_product_freeze",
+            "success",
+            "已复用目标日冻结决定",
+            freeze_hash=freeze_review.get("freeze_hash", ""),
+        )
+    else:
+        _append_log(
+            logs,
+            "load.decision_product_freeze",
+            "warning",
+            "目标日冻结决定不完整，保留事实不足且不使用当前事实替代",
+            availability=freeze_review.get("availability", ""),
+            errors=freeze_review.get("errors", []),
+        )
+    snapshot_data = _isolate_replay_future_role_facts(
+        snapshot_data,
+        target_date,
+    )
     snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
     replay_llm_wiki = _attach_replay_llm_wiki_context(snapshot_data, target_date)
     if replay_llm_wiki.get("artifact_origin") == "frozen_trace":
@@ -2973,6 +3778,12 @@ def build_replay_snapshot_contract(
         helpers=runtime_helpers,
     )
     snapshot_data = _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=runtime_helpers)
+    snapshot_data = _reconcile_replay_new_high_feedback(
+        snapshot_data,
+        target_date,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_replay_metric_history(snapshot_data, target_date, helpers=runtime_helpers)
     snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=runtime_helpers)
     snapshot_data = _ensure_replay_capital_intent_atoms(snapshot_data)
 
@@ -3063,6 +3874,7 @@ def build_replay_report_outputs_contract(
     print_fn=print,
     helpers=None,
     prepare_market_language_translation_fn=None,
+    prepare_cffex_evidence_fn=None,
     write_replay_market_language_translation_fn=None,
     market_language_root_dir=None,
 ):
@@ -3102,6 +3914,39 @@ def build_replay_report_outputs_contract(
         root_dir=artifact_root,
     )
     replay_contract["market_language_translation"] = market_language_translation
+    if prepare_cffex_evidence_fn is None:
+        from report.cffex_index_futures_position_evidence import (
+            build_unavailable_cffex_evidence,
+            load_cffex_index_futures_position_evidence,
+        )
+        from storage.database_service import DatabaseService
+
+        def prepare_cffex_evidence_fn(data, date):
+            try:
+                service = DatabaseService.postgres_from_environment_or_local_default()
+                return load_cffex_index_futures_position_evidence(
+                    date,
+                    service=service,
+                    replay=True,
+                    frozen_payload=(data or {}).get(
+                        "cffex_index_futures_position_evidence"
+                    ),
+                    query_date=datetime.datetime.now(
+                        datetime.timezone(datetime.timedelta(hours=8))
+                    ).date().isoformat(),
+                    allow_fresh_write=False,
+                )
+            except Exception as error:
+                return build_unavailable_cffex_evidence(
+                    date,
+                    reason=f"replay 中金所股指期货持仓事实读取失败：{error}",
+                )
+
+    cffex_evidence = prepare_cffex_evidence_fn(
+        replay_data,
+        resolved_target_date,
+    )
+    replay_contract["cffex_index_futures_position_evidence"] = cffex_evidence
 
     try:
         report_outputs = build_report_outputs(
@@ -3113,6 +3958,7 @@ def build_replay_report_outputs_contract(
             position_report_text=position_report_text,
             persist_runtime_artifacts=False,
             market_language_translation=market_language_translation,
+            cffex_index_futures_position_evidence=cffex_evidence,
         )
         from daily_report_render import (
             assert_report_required_facts_complete,

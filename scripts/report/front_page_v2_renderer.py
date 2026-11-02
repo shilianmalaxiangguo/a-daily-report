@@ -34,6 +34,7 @@ from report.mainline_turnover_summary_support import (
     resolve_mainline_capacity_regime_summary,
     resolve_overtake_opening_tone_text,
     resolve_overtake_window_summary,
+    resolve_unconfirmed_mainline_summary,
     resolve_turnover_share_trend_rows,
 )
 from report.cycle_sector_style import cycle_sector_color_map_from_calendar_rows, cycle_sector_label
@@ -463,7 +464,11 @@ def _key_direction_names(snapshot, primary_line, capacity, overtake):
             if name and name not in names:
                 names.append(name)
 
-    append(primary_line)
+    competition = resolve_unconfirmed_mainline_summary(snapshot)
+    if competition:
+        append(competition.get("candidate_lines"))
+    else:
+        append(primary_line)
     append(capacity.get("other_lines"))
     append(overtake.get("rival_line"))
     for item in _sector_internal_sectors(snapshot):
@@ -475,22 +480,29 @@ def _key_direction_names(snapshot, primary_line, capacity, overtake):
 
 def _sector_relationship_rows(snapshot, primary_line, capacity, overtake, judgement, mainline_summary):
     directions = _key_direction_names(snapshot, primary_line, capacity, overtake)
-    roles = ("主攻线", "竞争线", "潜在超车线")
-    relationship_state = _spine_meaningful_text(
-        capacity.get("sector_relationship_state"),
-        judgement.get("rotation_nature"),
-        missing="待验证",
-    )
-    process = _spine_meaningful_text(
-        capacity.get("mainline_process"),
-        mainline_summary.get("cycle_stage"),
-        missing="待验证",
-    )
-    action = _spine_meaningful_text(
-        capacity.get("tomorrow_action"),
-        judgement.get("candidate_policy"),
-        missing="待验证",
-    )
+    competition = resolve_unconfirmed_mainline_summary(snapshot)
+    if competition:
+        roles = ("候选方向", "候选方向", "候选方向")
+        relationship_state = competition.get("evidence") or "资金未形成明确进攻方向"
+        process = competition.get("cycle_label") or "未形成跨日胜出方向"
+        action = "比较跨日资金反馈、核心承接和内部扩散；未胜出前不新增参与"
+    else:
+        roles = ("主攻线", "竞争线", "潜在超车线")
+        relationship_state = _spine_meaningful_text(
+            capacity.get("sector_relationship_state"),
+            judgement.get("rotation_nature"),
+            missing="待验证",
+        )
+        process = _spine_meaningful_text(
+            capacity.get("mainline_process"),
+            mainline_summary.get("cycle_stage"),
+            missing="待验证",
+        )
+        action = _spine_meaningful_text(
+            capacity.get("tomorrow_action"),
+            judgement.get("candidate_policy"),
+            missing="待验证",
+        )
     rows = []
     for index, direction in enumerate(directions):
         peer = _spine_meaningful_text(
@@ -595,7 +607,7 @@ def _workflow_candidates_for_direction(snapshot, direction, primary_line=""):
         item for item in rows
         if isinstance(item, dict) and _candidate_matches_direction(item, direction, primary_line)
     ]
-    return matched or [item for item in rows if isinstance(item, dict)][:3]
+    return matched
 
 
 def _candidate_role_text(candidate):
@@ -664,6 +676,21 @@ def _fallback_core_verification(snapshot, direction, primary_line):
     )
 
 
+def _attack_evidence_for_direction(snapshot, direction):
+    direction = _text_value(direction)
+    if not direction or direction == "待补事实":
+        return {}
+    rows = resolve_mainline_attack_evidence_rows(snapshot, limit=50)
+    for row in rows:
+        if _text_value(row.get("sector_name")) == direction:
+            return row
+    for row in rows:
+        sector_name = _text_value(row.get("sector_name"))
+        if sector_name and (direction in sector_name or sector_name in direction):
+            return row
+    return {}
+
+
 def _dragon_pullback_result_text(snapshot):
     if not _dragon_pullback_review_active(snapshot):
         return ""
@@ -682,6 +709,7 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
     rows = []
     for direction in directions:
         sector_analysis = _sector_analysis_for_direction(snapshot, direction)
+        attack_evidence = _attack_evidence_for_direction(snapshot, direction)
         is_primary = direction != "待补事实" and (
             direction == primary_line or direction in str(primary_line or "") or str(primary_line or "") in direction
         )
@@ -691,6 +719,8 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
             _stock_text_from_value(sector_analysis.get("leader")),
             dragon_leader if is_primary else "",
             _fallback_core_anchor(snapshot, direction, primary_line),
+            _stock_text_from_value(attack_evidence.get("high_anchor_name")),
+            missing="目标日未识别核心锚",
         )
         elastic_vehicle = _spine_meaningful_text(
             _stock_text_from_value(sector_analysis.get("elastic_vehicle")),
@@ -699,6 +729,7 @@ def _leader_core_validation_rows(snapshot, directions, primary_line):
             _stock_text_from_value(sector_analysis.get("rear_acceptance")),
             dragon_laggards if is_primary else "",
             _fallback_elastic_vehicle(snapshot, direction, primary_line, core_anchor=core_anchor),
+            missing="目标日未识别独立弹性载体",
         )
         core_verification = _spine_meaningful_text(
             dragon_result if is_primary else "",
@@ -717,9 +748,33 @@ def _market_sector_spine_lines(snapshot):
     judgement = _market_structure_judgement(snapshot)
     mainline_summary = snapshot.get("mainline_turnover_summary") or {}
     capacity = resolve_mainline_capacity_regime_summary(snapshot)
-    overtake = resolve_overtake_window_summary(snapshot)
+    overtake = dict(resolve_overtake_window_summary(snapshot))
+    competition = resolve_unconfirmed_mainline_summary(snapshot)
+    if competition:
+        if _topic_window_text(overtake.get("own_line")) in {
+            "待补事实",
+            "候选方向",
+            "当前方向",
+        }:
+            overtake["own_line"] = competition.get("candidate_text") or competition.get(
+                "daily_label"
+            )
+        if overtake.get("observation_maturity") in {
+            "样本不足，继续跑圈观察",
+            "事实不足",
+            "",
+            None,
+        }:
+            overtake["observation_maturity"] = competition.get(
+                "competition_summary"
+            )
     primary_line = _spine_meaningful_text(capacity.get("primary_line"), mainline_summary.get("current_mainline"))
     directions = _key_direction_names(snapshot, primary_line, capacity, overtake)
+    relationship_header = (
+        "| 身份 | 方向 | 对照方向 | 资金结论 | 进程 | 明日验证 |"
+        if competition
+        else "| 关系 | 主攻线 | 竞争/背景线 | 关系状态 | 进程 | 明日验证 |"
+    )
     return [
         "### 市场阶段",
         "| 项目 | 结论 |",
@@ -735,7 +790,7 @@ def _market_sector_spine_lines(snapshot):
         f"| 板块迁移 | {_spine_text(mainline_summary.get('turnover_share_trend_summary'), mainline_summary.get('conclusion'), judgement.get('rotation_nature'))} |",
         "",
         "### 板块关系",
-        "| 关系 | 主攻线 | 竞争/背景线 | 关系状态 | 进程 | 明日验证 |",
+        relationship_header,
         "|------|--------|-------------|----------|------|----------|",
         *_sector_relationship_rows(snapshot, primary_line, capacity, overtake, judgement, mainline_summary),
         "",
@@ -3402,7 +3457,7 @@ def _unique_action_target_lines(snapshot, final_gate=None):
     else:
         label = "暂无"
         participation_window = SECOND_CONFIRM_WINDOW
-        condition = f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}未同时满足"
+        condition = f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}"
         participation_window_type = "structure_confirm"
         fallback_state = "不满足回到0%"
     if is_zero_participation:
@@ -3618,7 +3673,7 @@ def _next_day_action_checklist_lines(snapshot=None, final_gate=None):
         "### 明日行动清单",
         "| 项目 | 明日动作 |",
         "|------|----------|",
-        f"| 仓位 | {PREMARKET_50_EXECUTION_TEXT if _two_layer_execution_active(snapshot) else _account_new_entry_text(snapshot, position_state)} |",
+        f"| 明日新仓 | {PREMARKET_50_EXECUTION_TEXT if _two_layer_execution_active(snapshot) else _account_new_entry_text(snapshot, position_state)} |",
         f"| 最终对象 | {target_label} |",
         f"| 执行/观察条件 | {_next_day_action_condition(snapshot, target, position_state)} |",
         f"| 不参与条件 | {_next_day_action_no_participation_condition(snapshot, target, position_state)} |",
@@ -3631,8 +3686,9 @@ def _next_day_action_checklist_lines(snapshot=None, final_gate=None):
 def _final_summary_lines(report_lines, snapshot, final_gate=None):
     final_gate = final_gate or {}
     if _has_unconfirmed_attack_evidence(snapshot):
-        cycle = "暂无确认主线"
-        daily = "暂无确认主攻线"
+        competition = resolve_unconfirmed_mainline_summary(snapshot)
+        cycle = competition.get("cycle_label") or "未形成跨日胜出方向"
+        daily = competition.get("daily_label") or "当日资金未形成明确进攻方向"
     else:
         cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
         daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
@@ -3776,11 +3832,6 @@ def _market_language_translation_lines(artifact):
         "balanced": "多空接近平衡",
         "unclear": "方向不清楚",
     }
-    status_labels = {
-        "sufficient": "当前范围内事实充分",
-        "partial": "事实不足",
-        "insufficient": "事实不足",
-    }
     missing_labels = {
         "one_minute_price_path": "一分钟价格路径",
         "market_breadth": "全市场宽度",
@@ -3820,7 +3871,7 @@ def _market_language_translation_lines(artifact):
         if str(item or "").strip()
     ]
     counter_text = counter_rows[0] if counter_rows else "暂无新增反证"
-    if missing:
+    if missing and event_text:
         counter_text = f"{counter_text}；待补：{'、'.join(missing)}"
     counter_text = counter_text.replace("|", "／")
     attention_task = (
@@ -3842,7 +3893,7 @@ def _market_language_translation_lines(artifact):
     if not next_task or any(marker in next_task for marker in legacy_task_markers):
         next_task = attention_task
     next_task = next_task.replace("|", "／")
-    phase_label = str(artifact.get("phase_label") or "事实不足，阶段不清楚").strip()
+    phase_label = str(artifact.get("phase_label") or "阶段暂不判断").strip()
     lines = [
         "## 市场语言翻译（研究证据）",
         f"- **范围与方向**: {scope_labels.get(artifact.get('force_scope'), '范围不清楚')}；{direction_labels.get(artifact.get('pressure_direction'), '方向不清楚')}",
@@ -3851,7 +3902,11 @@ def _market_language_translation_lines(artifact):
     if event_text:
         lines.append(f"- **事件时钟**: {event_text}")
     else:
-        lines.append(f"- **事实状态**: {status_labels.get(artifact.get('evidence_status'), '事实不足')}；未形成可追溯事件时点")
+        missing_text = "、".join(missing)
+        lines.append(
+            "- **事实状态**: 未形成可追溯事件时点"
+            + (f"；缺少{missing_text}" if missing_text else "")
+        )
     lines.extend(
         [
             f"- **三层对照**: {three_layers}",

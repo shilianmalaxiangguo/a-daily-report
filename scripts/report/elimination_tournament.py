@@ -5,11 +5,24 @@ import json
 import re
 import datetime as _dt
 from pathlib import Path
+from knowledge.llm_wiki_manifest import stable_json_hash
 from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, PREMARKET_FULL_TRIGGER_TEXT
 from report.position_tier_contract import (
     POSITION_TIER_B1_B2_PCT,
     POSITION_TIER_B1_PCT,
     normalize_planned_position_tier_pct,
+)
+from report.candidate_decision_evidence import (
+    SECTOR_DIFFUSION_STAGE_SCHEMA_VERSION,
+    SECTOR_TOURNAMENT_THREE_AXIS_SCHEMA_VERSION,
+    canonical_sector_diffusion_stage_evidence_hash,
+    validate_sector_tournament_three_axis,
+)
+from report.dual_cluster_projection import (
+    SECTOR_SCHEMA_VERSION as SECTOR_DUAL_CLUSTER_SCHEMA_VERSION,
+    build_sector_tournament_dual_cluster,
+    normalize_dual_cluster_projection,
+    sector_dual_cluster_display,
 )
 from report.selection_workflow import candidate_limit_down_risk_review_reason
 
@@ -30,7 +43,12 @@ LAYER_DEFS = (
 
 SECTOR_CAPITAL_PREFLIGHT_MERMAID = """flowchart TD
   A["第一性原理: 短期价格=资金流+筹码结构+流动性+情绪预期"] --> B["市场资金结构"]
-  B --> C["板块资金扩散"]
+  B --> B1["空间坐标: 局部秩序传播到哪里"]
+  B --> B2["时间坐标: 趋势处于什么阶段"]
+  B --> B3["认知坐标: 假设获得哪些验证"]
+  B1 --> C["板块资金扩散"]
+  B2 --> C
+  B3 --> C
   C --> D["板块内资金载体候选"]
   D --> E{"资金载体角色"}
   E --> E1["涨停高标: 只作证据"]
@@ -154,6 +172,9 @@ LOCAL_MERMAID_RENDERER_SCRIPT = """
 
 REQUIRED_SECTOR_CAPITAL_PREFLIGHT_MERMAID_LABELS = (
     "市场资金结构",
+    "空间坐标",
+    "时间坐标",
+    "认知坐标",
     "板块资金扩散",
     "量化参与痕迹",
     "价格行为确认",
@@ -383,6 +404,443 @@ def _normalize_preflight_date_text(value):
     if len(digits) >= 8:
         return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
     return text
+
+
+def _normalize_sector_diffusion_stage_evidence(value, *, trade_date=""):
+    evidence = _as_dict(value)
+    if not evidence:
+        return {}
+    target_date = _normalize_preflight_date_text(evidence.get("target_date"))
+    normalized_trade_date = _normalize_preflight_date_text(trade_date)
+    if (
+        clean_text(evidence.get("schema_version"))
+        != SECTOR_DIFFUSION_STAGE_SCHEMA_VERSION
+        or clean_text(evidence.get("decision_scope")) != "explanation_only"
+        or clean_text(evidence.get("formal_effect")) != "none"
+        or not target_date
+        or (normalized_trade_date and target_date != normalized_trade_date)
+        or clean_text(evidence.get("stage"))
+        not in {"未确认", "早期确认候选", "健康扩散候选"}
+    ):
+        return {}
+    source_dates = [
+        _normalize_preflight_date_text(item)
+        for item in _as_list(evidence.get("source_dates"))
+    ]
+    if not source_dates or any(
+        not item or item > target_date for item in source_dates
+    ):
+        return {}
+    if source_dates != sorted(set(source_dates)):
+        return {}
+    input_hash = clean_text(evidence.get("input_hash"))
+    artifact_hash = clean_text(evidence.get("artifact_hash"))
+    input_payload = _as_dict(evidence.get("input_payload"))
+    input_proof = _as_dict(input_payload.get("local_trend_sector_proof"))
+    direction_source_date = _normalize_preflight_date_text(
+        evidence.get("direction_source_date")
+    )
+    if (
+        not input_payload
+        or clean_text(evidence.get("direction")) != clean_text(input_proof.get("direction"))
+        or direction_source_date
+        != _normalize_preflight_date_text(input_proof.get("direction_source_date"))
+        or (clean_text(evidence.get("direction")) and not direction_source_date)
+        or (direction_source_date and direction_source_date > target_date)
+        or not re.fullmatch(r"[0-9a-f]{64}", input_hash)
+        or not re.fullmatch(r"[0-9a-f]{64}", artifact_hash)
+        or stable_json_hash(input_payload) != input_hash
+        or canonical_sector_diffusion_stage_evidence_hash(evidence) != artifact_hash
+    ):
+        return {}
+    return dict(evidence)
+
+
+def _normalize_sector_tournament_three_axis(value, *, trade_date=""):
+    evidence = _as_dict(value)
+    if not evidence:
+        return {}
+    target_date = _normalize_preflight_date_text(evidence.get("target_date"))
+    normalized_trade_date = _normalize_preflight_date_text(trade_date)
+    if (
+        clean_text(evidence.get("schema_version"))
+        != SECTOR_TOURNAMENT_THREE_AXIS_SCHEMA_VERSION
+        or clean_text(evidence.get("decision_scope")) != "explanation_only"
+        or clean_text(evidence.get("formal_effect")) != "none"
+        or not target_date
+        or (normalized_trade_date and target_date != normalized_trade_date)
+        or not _as_dict(evidence.get("space_axis"))
+        or not _as_dict(evidence.get("time_axis"))
+        or not _as_dict(evidence.get("cognition_axis"))
+        or len(_as_list(evidence.get("ten_questions"))) != 10
+    ):
+        return {}
+    if not validate_sector_tournament_three_axis(
+        evidence,
+        target_date=normalized_trade_date or target_date,
+    ):
+        return {}
+    return dict(evidence)
+
+
+def _payload_date_matches(value, expected_date, *keys):
+    payload = _as_dict(value)
+    normalized_expected = _normalize_preflight_date_text(expected_date)
+    if not payload or not normalized_expected:
+        return True
+    payload_date = next(
+        (
+            _normalize_preflight_date_text(payload.get(key))
+            for key in keys
+            if _normalize_preflight_date_text(payload.get(key))
+        ),
+        "",
+    )
+    return not payload_date or payload_date == normalized_expected
+
+
+def _empty_elimination_tournament_payload(*, trade_date="", variant="", reason=""):
+    normalized_reason = clean_text(reason, "目标日淘汰赛事实不足")
+    final_action = {
+        "label": "0%不参与",
+        "position_pct": 0,
+        "target": {},
+        "source": "selection_workflow.final",
+        "reason": normalized_reason,
+    }
+    final_entries, final_note, final_input_entries = _final_layer(final_action, [])
+    final_layer = _layer_payload(
+        "final_resolution",
+        "最终收口层",
+        final_entries,
+        note=final_note,
+    )
+    final_layer["input_count"] = 0
+    final_layer["input_entries"] = final_input_entries
+    final_layer["eliminated_count"] = 0
+    final_layer["survivor_count"] = 0
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "trade_date": clean_text(trade_date),
+        "variant": clean_text(variant),
+        "final_action": final_action,
+        "candidate_count": 0,
+        "sector_diffusion_stage_evidence": {},
+        "sector_tournament_three_axis": {},
+        "dual_cluster_projection": {},
+        "layers": [final_layer],
+        "elimination_summary": [
+            {
+                "layer_id": final_layer["id"],
+                "layer_title": final_layer["title"],
+                "eliminated": [],
+                "survivors": [],
+            }
+        ],
+    }
+
+
+def sector_diffusion_stage_display(value, *, trade_date=""):
+    evidence = _normalize_sector_diffusion_stage_evidence(
+        value,
+        trade_date=trade_date,
+    )
+    if not evidence:
+        return {
+            "available": False,
+            "stage": "未确认",
+            "direction": "待确认",
+            "target_date": _normalize_preflight_date_text(trade_date),
+            "source_dates_text": "无可证明来源日",
+            "next_link": "补齐目标日板块、跨日延续、核心承接与价格接受事实",
+            "remaining_text": "目标日传导事实",
+            "missing_text": "目标日板块传导阶段证据",
+            "counter_text": "无",
+            "stage_evidence_text": "事实不足",
+            "scope_text": "只解释局部秩序的传导位置，不改变明日对象、仓位或B1/B2。",
+        }
+    field_labels = {
+        "direction": "资金方向",
+        "sector_source_date": "目标日板块事实",
+        "cross_day_continuity": "跨日延续",
+        "core_acceptance": "核心承接",
+        "target_day_price_acceptance": "目标日价格接受",
+        "internal_expansion": "内部扩散",
+        "competition_comparison": "竞争方向对照",
+    }
+    source_dates = [
+        _normalize_preflight_date_text(item)
+        for item in _as_list(evidence.get("source_dates"))
+        if _normalize_preflight_date_text(item)
+    ]
+    remaining = [
+        field_labels.get(clean_text(item), clean_text(item))
+        for item in _as_list(evidence.get("remaining_diffusion_evidence"))
+        if clean_text(item)
+    ]
+    missing = [
+        field_labels.get(clean_text(item), clean_text(item))
+        for item in _as_list(evidence.get("missing_fields"))
+        if clean_text(item)
+    ]
+    counter = [
+        clean_text(item)
+        for item in _as_list(evidence.get("counter_evidence"))
+        if clean_text(item)
+    ]
+    stage_evidence = [
+        clean_text(item)
+        for item in _as_list(evidence.get("stage_evidence"))
+        if clean_text(item)
+    ]
+    return {
+        "available": True,
+        "stage": clean_text(evidence.get("stage"), "未确认"),
+        "direction": clean_text(evidence.get("direction"), "待确认"),
+        "target_date": _normalize_preflight_date_text(evidence.get("target_date")),
+        "source_dates_text": "、".join(source_dates) or "无可证明来源日",
+        "next_link": clean_text(evidence.get("next_link"), "继续补齐传导事实"),
+        "remaining_text": "、".join(remaining) or "当前三态范围内无待补传播证据",
+        "missing_text": "、".join(missing) or "无",
+        "counter_text": "；".join(counter) or "无",
+        "stage_evidence_text": "；".join(stage_evidence) or "尚无方向完成目标日价格接受",
+        "scope_text": "只解释局部秩序的传导位置，不改变明日对象、仓位或B1/B2。",
+    }
+
+
+def sector_tournament_three_axis_display(value, *, trade_date=""):
+    evidence = _normalize_sector_tournament_three_axis(
+        value,
+        trade_date=trade_date,
+    )
+    if not evidence:
+        return {
+            "available": False,
+            "direction": "待确认",
+            "space_stage": "三坐标产物未通过目标日校验",
+            "time_stage": "三坐标产物未通过目标日校验",
+            "cognition_stage": "三坐标产物未通过目标日校验",
+            "counterfactual": "尚待验证",
+            "edge_source": "暂无可确认优势",
+            "story_price_relation": "三坐标产物未通过目标日校验",
+            "remaining_consensus_space": "三坐标产物未通过目标日校验",
+            "actual_response": "三坐标产物未通过目标日校验",
+            "stage_mainline_status": "未取得可用阶段记录",
+            "stage_mainline_context": "未取得可用阶段记录",
+            "stage_mainline_evidence": "未取得可用阶段记录",
+            "confirmed_directions_text": "无已确认方向",
+            "candidate_directions_text": "无候选方向",
+            "stage_date_text": "未取得可用阶段记录",
+            "stage_span_text": "未取得可用阶段记录",
+            "reflow_text": "未取得可用阶段记录",
+            "relative_strength_text": "未取得可用阶段记录",
+            "relative_path_text": "未取得可用阶段记录",
+            "liquidity_allocation_text": "未取得可用量能与市场宽度记录",
+            "trend_density_text": "未取得可用阶段记录",
+            "divergence_test_text": "未取得可用阶段记录",
+            "cross_day_competition_text": "未取得成对确认与反证记录",
+            "stage_gap_text": "三坐标产物未通过目标日校验",
+            "source_dates_text": "无可证明来源日",
+            "artifact_hash": "",
+            "ten_questions": [],
+            "scope_text": "只解释空间、时间与认知验证，不改变明日对象、仓位或B1/B2。",
+        }
+    cognition = _as_dict(evidence.get("cognition_axis"))
+    stage_mainline = _as_dict(evidence.get("stage_mainline"))
+    cross_day = _as_dict(evidence.get("cross_day_competition"))
+    comparison_universe = _as_list(stage_mainline.get("comparison_universe"))
+    comparison_rank = stage_mainline.get("relative_strength_rank")
+    comparison_coverage = stage_mainline.get("comparison_coverage")
+    relative_path = _as_dict(stage_mainline.get("relative_path_profile"))
+    liquidity = _as_dict(evidence.get("liquidity_allocation_context"))
+    turnover = _as_dict(liquidity.get("turnover"))
+    market_breadth = _as_dict(liquidity.get("market_breadth"))
+    unconfirmed_stage = clean_text(stage_mainline.get("status")) in {
+        "事实不足",
+        "未形成阶段主线",
+    }
+
+    def decimal_text(number, suffix="", missing="未取得数值"):
+        if not isinstance(number, (int, float)) or isinstance(number, bool):
+            return missing
+        return f"{number:.2f}{suffix}"
+
+    if relative_path.get("evidence_status") == "完整":
+        relative_path_text = "；".join(
+            [
+                clean_text(relative_path.get("position_label"), "事实不足"),
+                f"区间收益={decimal_text(relative_path.get('interval_return_pct'), '%')}",
+                f"相对起点最低位置={decimal_text(relative_path.get('low_vs_start_pct'), '%')}",
+                f"低点后修复={decimal_text(relative_path.get('recovery_from_low_pct'), '%')}",
+                "收复起点=" + ("是" if relative_path.get("recovered_start") is True else "否"),
+                "目标日区间新高="
+                + ("是" if relative_path.get("made_window_new_high") is True else "否"),
+            ]
+        )
+    else:
+        relative_path_text = "尚无达到阶段窗口要求的同起点价格路径"
+
+    liquidity_missing = set(_as_list(liquidity.get("missing_fields")))
+    expansion_text = {
+        "confirmed": "已确认",
+        "failed": "失败",
+    }.get(
+        clean_text(liquidity.get("sector_internal_expansion_status")),
+        "缺少目标日板块内部扩散记录",
+    )
+    allocation_pattern = clean_text(liquidity.get("allocation_pattern"))
+    if allocation_pattern == "事实不足":
+        allocation_pattern = (
+            "量能与市场宽度已记录，板块内部扩散未记录"
+            if liquidity_missing == {"sector_internal_expansion"}
+            else "量能、市场宽度或板块内部扩散记录不完整"
+        )
+    turnover_status = clean_text(turnover.get("status"))
+    if turnover_status == "事实不足":
+        turnover_status = "成交额对比不完整"
+    breadth_status = clean_text(market_breadth.get("status"))
+    if breadth_status == "事实不足":
+        breadth_status = "涨跌家数记录不完整"
+    liquidity_allocation_text = "；".join(
+        [
+            allocation_pattern or "量能、市场宽度或板块内部扩散记录不完整",
+            (
+                f"成交额={turnover_status or '成交额对比不完整'}"
+                f"（前值={decimal_text(turnover.get('previous_value'), '亿', '缺少前一交易日成交额')}，"
+                f"当前={decimal_text(turnover.get('current_value'), '亿', '缺少目标日成交额')}，"
+                f"变化={decimal_text(turnover.get('change_pct'), '%', '无法计算')}）"
+            ),
+            (
+                f"市场宽度={breadth_status or '涨跌家数记录不完整'}"
+                f"（上涨={market_breadth.get('up_count') if isinstance(market_breadth.get('up_count'), int) else '未取得'}，"
+                f"下跌={market_breadth.get('down_count') if isinstance(market_breadth.get('down_count'), int) else '未取得'}）"
+            ),
+            f"板块内部扩散={expansion_text}",
+        ]
+    )
+    divergence_names = [
+        clean_text(_as_dict(row).get("direction"))
+        for row in _as_list(cross_day.get("possible_divergence_directions"))
+        if clean_text(_as_dict(row).get("direction"))
+    ]
+    beneficiary_names = [
+        clean_text(_as_dict(row).get("direction"))
+        for row in _as_list(cross_day.get("possible_beneficiary_directions"))
+        if clean_text(_as_dict(row).get("direction"))
+    ]
+    cross_day_parts = []
+    if divergence_names:
+        cross_day_parts.append("可能分歧=" + "、".join(divergence_names))
+    if beneficiary_names:
+        cross_day_parts.append("可能受益=" + "、".join(beneficiary_names))
+    if cross_day.get("evidence_status") != "完整":
+        cross_day_parts.append("尚无成对的T+1/T+2确认与反证记录")
+    stage_gap_text = (
+        "尚缺连续阶段日期、可比板块指数路径、内部趋势密度与分歧修复序列"
+        if unconfirmed_stage
+        else "、".join(_as_list(stage_mainline.get("missing_fields")))
+        or "无"
+    )
+    return {
+        "available": True,
+        "direction": clean_text(evidence.get("direction"), "待确认"),
+        "space_stage": clean_text(
+            _as_dict(evidence.get("space_axis")).get("stage"),
+            "事实不足",
+        ),
+        "time_stage": clean_text(
+            _as_dict(evidence.get("time_axis")).get("stage"),
+            "事实不足",
+        ),
+        "cognition_stage": clean_text(cognition.get("stage"), "事实不足"),
+        "counterfactual": clean_text(
+            _as_dict(evidence.get("counterfactual_review")).get("conclusion"),
+            "尚待验证",
+        ),
+        "edge_source": clean_text(
+            _as_dict(evidence.get("edge_source")).get("type"),
+            "暂无可确认优势",
+        ),
+        "story_price_relation": clean_text(
+            evidence.get("story_price_relation"),
+            "事实不足",
+        ),
+        "remaining_consensus_space": clean_text(
+            evidence.get("remaining_consensus_space"),
+            "事实不足",
+        ),
+        "actual_response": clean_text(
+            cognition.get("actual_response"),
+            "事实不足",
+        ),
+        "stage_mainline_status": clean_text(
+            stage_mainline.get("status"),
+            "事实不足",
+        ),
+        "stage_mainline_context": clean_text(
+            stage_mainline.get("operation_context"),
+            "事实不足",
+        ),
+        "stage_mainline_evidence": "；".join(
+            _as_list(stage_mainline.get("evidence"))
+        )
+        or "事实不足",
+        "confirmed_directions_text": "、".join(
+            _as_list(stage_mainline.get("confirmed_directions"))
+        )
+        or "无已确认方向",
+        "candidate_directions_text": "、".join(
+            _as_list(stage_mainline.get("candidate_directions"))
+        )
+        or "无候选方向",
+        "stage_date_text": (
+            f"启动={clean_text(stage_mainline.get('stage_start_date')) or '未形成阶段窗口'}；"
+            f"确认={clean_text(stage_mainline.get('recognition_date')) or '尚未确认'}；"
+            f"最近完整续证={clean_text(stage_mainline.get('last_confirmed_date')) or '尚未确认'}；"
+            f"截至={clean_text(stage_mainline.get('as_of_date')) or clean_text(evidence.get('target_date')) or '未取得日期'}"
+        ),
+        "stage_span_text": (
+            f"{stage_mainline.get('stage_span_trading_days')}个交易日（含首尾）"
+            if stage_mainline.get("stage_span_trading_days") is not None
+            else "尚无连续阶段窗口"
+        ),
+        "reflow_text": (
+            "活跃日="
+            + str(stage_mainline.get("active_trade_day_count") or 0)
+            + "；冷却后回流="
+            + (" -> ".join(_as_list(stage_mainline.get("reflow_dates"))) or "尚未形成冷却后回流序列")
+        ),
+        "relative_strength_text": (
+            f"名次={comparison_rank}/{len(comparison_universe)}；覆盖率="
+            f"{comparison_coverage:.0%}"
+            if isinstance(comparison_rank, int)
+            and isinstance(comparison_coverage, (int, float))
+            else "尚无统一窗口可比较"
+        ),
+        "relative_path_text": relative_path_text,
+        "liquidity_allocation_text": liquidity_allocation_text,
+        "trend_density_text": (
+            f"{stage_mainline.get('trend_stock_count')}/"
+            f"{stage_mainline.get('comparable_stock_count')}；"
+            f"定义={clean_text(stage_mainline.get('trend_definition_version'))}"
+            if stage_mainline.get("trend_stock_count") is not None
+            and stage_mainline.get("comparable_stock_count") is not None
+            and clean_text(stage_mainline.get("trend_definition_version"))
+            else "尚无同口径内部趋势密度"
+        ),
+        "divergence_test_text": clean_text(
+            stage_mainline.get("divergence_test_status"),
+            "尚未进入阶段分歧检验",
+        ),
+        "cross_day_competition_text": "；".join(cross_day_parts)
+        or "尚无成对的T+1/T+2确认与反证记录",
+        "stage_gap_text": stage_gap_text,
+        "source_dates_text": "、".join(_as_list(evidence.get("source_dates")))
+        or "无可证明来源日",
+        "artifact_hash": clean_text(evidence.get("artifact_hash")),
+        "ten_questions": [dict(row) for row in _as_list(evidence.get("ten_questions"))],
+        "scope_text": "只解释空间、时间与认知验证，不改变明日对象、仓位或B1/B2。",
+    }
 
 
 def _preflight_row_source_date(row):
@@ -782,6 +1240,22 @@ def _candidate_layer_entry(candidate, *, status, reason, next_basis="", eliminat
         "sector_role": clean_text(_as_dict(candidate).get("sector_role")),
         "reversal_decision": clean_text(_as_dict(candidate).get("reversal_decision")),
     }
+    observable_quant_trace = [
+        clean_text(item)
+        for item in _as_list(_as_dict(candidate).get("quant_participation_trace"))
+        if clean_text(item)
+    ]
+    for key, label in (
+        ("volume_summary", "量能"),
+        ("pattern", "价格结构"),
+    ):
+        text = clean_text(_as_dict(candidate).get(key))
+        if text:
+            observable_quant_trace.append(f"{label}={text}")
+    if observable_quant_trace:
+        payload["quant_participation_trace"] = list(
+            dict.fromkeys(observable_quant_trace)
+        )
     brooks_price_action_judge = _as_dict(_as_dict(candidate).get("brooks_price_action_judge"))
     if brooks_price_action_judge:
         payload["brooks_price_action_judge"] = dict(brooks_price_action_judge)
@@ -894,6 +1368,18 @@ def _first_entry_reason(layer, status):
     return ""
 
 
+def _observable_quant_traces(layer):
+    return list(
+        dict.fromkeys(
+            clean_text(trace)
+            for entry in _as_list(_as_dict(layer).get("entries"))
+            if isinstance(entry, dict)
+            for trace in _as_list(entry.get("quant_participation_trace"))
+            if clean_text(trace)
+        )
+    )
+
+
 def _preflight_decision_row(*, item, conclusion, evidence, counter_evidence, tomorrow_check, action):
     return {
         "item": clean_text(item),
@@ -915,6 +1401,7 @@ def _build_preflight_decision_list(layers, final_action):
     sector_layer = by_id.get("sector_capital_diffusion") or by_id.get("sector") or {}
     carrier_layer = by_id.get("capital_carrier") or by_id.get("sector_role") or {}
     role_layer = by_id.get("carrier_role") or by_id.get("leader_reverse") or {}
+    quant_layer = by_id.get("quant_trace") or {}
     price_layer = by_id.get("price_action") or {}
     account_layer = by_id.get("account_execution") or {}
 
@@ -923,6 +1410,7 @@ def _build_preflight_decision_list(layers, final_action):
     role_survivors = _labels_for_status(role_layer, "survived")
     price_survivors = _labels_for_status(price_layer, "survived")
     account_survivors = _labels_for_status(account_layer, "survived")
+    quant_traces = _observable_quant_traces(quant_layer)
 
     if final_position > 0:
         market_action = "允许进入执行窗口"
@@ -960,8 +1448,12 @@ def _build_preflight_decision_list(layers, final_action):
         ),
         _preflight_decision_row(
             item="是否有量化参与痕迹",
-            conclusion="待价格行为验证" if price_layer else "证据不足",
-            evidence=f"可观察重心抬高、回踩承接和放量换手；价格层剩余：{price_survivors}",
+            conclusion="已观察到可见痕迹" if quant_traces else "未观察到可归因痕迹",
+            evidence=(
+                "可观察痕迹=" + "；".join(quant_traces)
+                if quant_traces
+                else "未观察到有来源的可归因痕迹"
+            ),
             counter_evidence=_first_entry_reason(price_layer, "eliminated") or "一日脉冲、尾盘抢筹失败或跌回关键线时不新增参与",
             tomorrow_check="是否继续被买回，分歧后是否仍能横住",
             action="进入账户复核" if price_survivors != "无" else "观察",
@@ -993,18 +1485,49 @@ def _build_preflight_decision_list(layers, final_action):
     ]
 
 
-def _normalize_decision_list(rows, *, layers=None, final_action=None):
+def _three_axis_decision_list(three_axis):
+    normalized = []
+    for row in _as_list(_as_dict(three_axis).get("ten_questions")):
+        if not isinstance(row, dict):
+            continue
+        normalized.append(
+            _preflight_decision_row(
+                item=row.get("question"),
+                conclusion=row.get("conclusion"),
+                evidence=row.get("evidence"),
+                counter_evidence=row.get("counter_evidence"),
+                tomorrow_check=row.get("next_check"),
+                action="观察并验证",
+            )
+        )
+    return normalized if len(normalized) == 10 else []
+
+
+def _normalize_decision_list(rows, *, layers=None, final_action=None, three_axis=None):
+    three_axis_rows = _three_axis_decision_list(three_axis)
+    if three_axis_rows:
+        return three_axis_rows
+    by_id = {
+        clean_text(layer.get("id")): _as_dict(layer)
+        for layer in _as_list(layers)
+    }
+    quant_traces = _observable_quant_traces(by_id.get("quant_trace"))
     normalized = []
     for row in _as_list(rows):
         if not isinstance(row, dict):
             continue
         item = clean_text(row.get("item") or row.get("decision_item") or row.get("决策项"))
         item = item.replace("周期概率窗口", "周期窗口").replace("概率窗口", "周期窗口")
+        conclusion = row.get("conclusion") or row.get("current_conclusion") or row.get("当前结论")
+        evidence = row.get("evidence") or row.get("facts") or row.get("事实依据")
+        if item == "是否有量化参与痕迹" and not quant_traces:
+            conclusion = "未观察到可归因痕迹"
+            evidence = "未观察到有来源的可归因痕迹"
         normalized.append(
             _preflight_decision_row(
                 item=item,
-                conclusion=row.get("conclusion") or row.get("current_conclusion") or row.get("当前结论"),
-                evidence=row.get("evidence") or row.get("facts") or row.get("事实依据"),
+                conclusion=conclusion,
+                evidence=evidence,
                 counter_evidence=(
                     clean_text(row.get("counter_evidence") or row.get("反方证据"))
                     .replace("周期概率窗口", "周期窗口")
@@ -1820,6 +2343,32 @@ def build_elimination_tournament_payload(
     risk_groups=None,
 ):
     workflow = _as_dict(selection_workflow)
+    normalized_trade_date = _normalize_preflight_date_text(
+        trade_date or workflow.get("target_date")
+    )
+    if not _payload_date_matches(
+        workflow,
+        normalized_trade_date,
+        "target_date",
+        "trade_date",
+    ):
+        return _empty_elimination_tournament_payload(
+            trade_date=normalized_trade_date,
+            variant=variant,
+            reason="淘汰赛来源日期不属于目标日，保持0%不参与",
+        )
+    stage_evidence = _normalize_sector_diffusion_stage_evidence(
+        workflow.get("sector_diffusion_stage_evidence"),
+        trade_date=normalized_trade_date,
+    )
+    three_axis = _normalize_sector_tournament_three_axis(
+        workflow.get("sector_tournament_three_axis"),
+        trade_date=normalized_trade_date,
+    )
+    dual_cluster_projection = build_sector_tournament_dual_cluster(
+        three_axis,
+        target_date=normalized_trade_date,
+    )
     final_action = _final_action(workflow, final_target_resolution, position_decision)
     indexes = _build_candidate_indexes(
         candidate_traces=candidate_traces,
@@ -1860,7 +2409,7 @@ def build_elimination_tournament_payload(
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "trade_date": clean_text(trade_date or workflow.get("target_date")),
+        "trade_date": normalized_trade_date,
         "variant": clean_text(variant),
         "final_action": {
             "label": clean_text(final_action.get("label"), "0%不参与"),
@@ -1870,6 +2419,9 @@ def build_elimination_tournament_payload(
             "reason": clean_text(final_action.get("reason")),
         },
         "candidate_count": len(candidates),
+        "sector_diffusion_stage_evidence": stage_evidence,
+        "sector_tournament_three_axis": three_axis,
+        "dual_cluster_projection": dual_cluster_projection,
         "layers": layers,
         "elimination_summary": [
             {
@@ -2589,7 +3141,22 @@ def _build_quant_trace_layer(role_layer, price_layer):
         key = stock_key(entry.get("stock"))
         price_entry = price_by_key.get(key, {})
         status = "survived"
-        reason = "重心抬高、回踩承接和放量不崩进入价格行为复核"
+        traces = [
+            clean_text(item)
+            for item in _as_list(entry.get("quant_participation_trace"))
+            if clean_text(item)
+        ]
+        if not traces:
+            traces = [
+                clean_text(item)
+                for item in _as_list(price_entry.get("quant_participation_trace"))
+                if clean_text(item)
+            ]
+        reason = (
+            "可观察痕迹=" + "；".join(traces)
+            if traces
+            else "未观察到有来源的可归因痕迹，只保留既有价格行为复核路径"
+        )
         next_basis = "进入价格行为确认层"
         elimination_basis = ""
         copied = dict(entry)
@@ -2601,16 +3168,26 @@ def _build_quant_trace_layer(role_layer, price_layer):
                 "elimination_basis": elimination_basis,
             }
         )
+        if traces:
+            copied["quant_participation_trace"] = traces
         if price_entry.get("risk_evidence"):
             copied["risk_evidence"] = price_entry.get("risk_evidence")
         entries.append(copied)
+    evidence_available = any(
+        _as_list(entry.get("quant_participation_trace"))
+        for entry in entries
+    )
     return _normalize_preflight_layer(
         {
             "id": "quant_trace",
             "title": "量化参与痕迹",
             "entries": entries,
             "source_layer_id": clean_text(_as_dict(role_layer).get("source_layer_id") or _as_dict(role_layer).get("id")),
-            "note": "只记录可见行为：重心抬高、回踩承接、放量不崩、缩量不死；不写成确定是哪类资金介入。",
+            "note": (
+                "只记录有来源的可见量价行为，不写成确定是哪类资金介入。"
+                if evidence_available
+                else "未观察到有来源的可归因痕迹；本层不制造默认量价结论，也不改变既有正式动作。"
+            ),
         }
     )
 
@@ -2967,6 +3544,55 @@ def _normalize_preflight_payload(payload):
         mermaid = SECTOR_CAPITAL_PREFLIGHT_MERMAID
     normalized["mermaid"] = mermaid
     normalized["source_payloads"] = _normalize_source_payloads(normalized, elimination_tournament_payload=normalized.get("elimination_tournament_payload"))
+    stage_evidence = _normalize_sector_diffusion_stage_evidence(
+        normalized.get("sector_diffusion_stage_evidence"),
+        trade_date=normalized.get("trade_date"),
+    )
+    if not stage_evidence:
+        stage_evidence = _normalize_sector_diffusion_stage_evidence(
+            _as_dict(normalized["source_payloads"].get("selection_workflow")).get(
+                "sector_diffusion_stage_evidence"
+            ),
+            trade_date=normalized.get("trade_date"),
+        )
+    if not stage_evidence:
+        stage_evidence = _normalize_sector_diffusion_stage_evidence(
+            _as_dict(
+                normalized["source_payloads"].get("elimination_tournament_payload")
+            ).get("sector_diffusion_stage_evidence"),
+            trade_date=normalized.get("trade_date"),
+        )
+    normalized["sector_diffusion_stage_evidence"] = stage_evidence
+    three_axis = _normalize_sector_tournament_three_axis(
+        normalized.get("sector_tournament_three_axis"),
+        trade_date=normalized.get("trade_date"),
+    )
+    if not three_axis:
+        three_axis = _normalize_sector_tournament_three_axis(
+            _as_dict(normalized["source_payloads"].get("selection_workflow")).get(
+                "sector_tournament_three_axis"
+            ),
+            trade_date=normalized.get("trade_date"),
+        )
+    if not three_axis:
+        three_axis = _normalize_sector_tournament_three_axis(
+            _as_dict(
+                normalized["source_payloads"].get("elimination_tournament_payload")
+            ).get("sector_tournament_three_axis"),
+            trade_date=normalized.get("trade_date"),
+        )
+    normalized["sector_tournament_three_axis"] = three_axis
+    dual_cluster_projection = normalize_dual_cluster_projection(
+        normalized.get("dual_cluster_projection"),
+        target_date=normalized.get("trade_date"),
+        expected_schema=SECTOR_DUAL_CLUSTER_SCHEMA_VERSION,
+    )
+    if not dual_cluster_projection:
+        dual_cluster_projection = build_sector_tournament_dual_cluster(
+            three_axis,
+            target_date=normalized.get("trade_date"),
+        )
+    normalized["dual_cluster_projection"] = dual_cluster_projection
     normalized.pop("source", None)
     normalized["sector_capital_carrier_strategy"] = _as_dict(
         normalized.get("sector_capital_carrier_strategy")
@@ -3027,6 +3653,7 @@ def _normalize_preflight_payload(payload):
         normalized.get("decision_list"),
         layers=normalized.get("layers"),
         final_action=normalized.get("final_action"),
+        three_axis=normalized.get("sector_tournament_three_axis"),
     )
     normalized["idiot_index_review"] = _normalize_idiot_index_review(normalized.get("idiot_index_review"))
     normalized["tplus_rehearsal"] = _normalize_tplus_rehearsal(
@@ -3056,16 +3683,42 @@ def build_sector_capital_preflight_payload(
     elimination_tournament_payload=None,
 ):
     """Build the observational companion payload from existing final-action truth."""
+    normalized_trade_date = _normalize_preflight_date_text(trade_date)
     elimination = _as_dict(elimination_tournament_payload)
+    if elimination and not _payload_date_matches(
+        elimination,
+        normalized_trade_date,
+        "trade_date",
+        "target_date",
+    ):
+        return {}
+    raw_existing = _as_dict(sector_capital_preflight)
+    if raw_existing and not _payload_date_matches(
+        raw_existing,
+        normalized_trade_date,
+        "trade_date",
+        "target_date",
+    ):
+        return {}
     final_action = dict(_as_dict(elimination.get("final_action")))
     source_payloads = _normalize_source_payloads(source_payloads, elimination_tournament_payload=elimination)
-    existing = _normalize_preflight_payload(sector_capital_preflight)
+    for key, date_keys in (
+        ("selection_workflow", ("target_date", "trade_date")),
+        ("elimination_tournament_payload", ("trade_date", "target_date")),
+    ):
+        if not _payload_date_matches(
+            source_payloads.get(key),
+            normalized_trade_date,
+            *date_keys,
+        ):
+            source_payloads[key] = {}
+    existing = _normalize_preflight_payload(raw_existing)
     if elimination:
         base_payload = dict(existing) if existing else {}
         base_payload.update(
             {
                 "schema_version": SECTOR_CAPITAL_PREFLIGHT_SCHEMA_VERSION,
-                "trade_date": clean_text(trade_date or base_payload.get("trade_date") or elimination.get("trade_date")),
+                "trade_date": clean_text(normalized_trade_date or base_payload.get("trade_date") or elimination.get("trade_date")),
                 "variant": clean_text(variant or base_payload.get("variant") or elimination.get("variant") or "默认"),
                 "derivation_contract": clean_text(
                     base_payload.get("derivation_contract"),
@@ -3073,6 +3726,19 @@ def build_sector_capital_preflight_payload(
                 ),
                 "source_artifact": clean_text(elimination.get("schema_version"), SCHEMA_VERSION),
                 "source_payloads": source_payloads,
+                "sector_diffusion_stage_evidence": _normalize_sector_diffusion_stage_evidence(
+                    elimination.get("sector_diffusion_stage_evidence"),
+                    trade_date=normalized_trade_date or elimination.get("trade_date"),
+                ),
+                "sector_tournament_three_axis": _normalize_sector_tournament_three_axis(
+                    elimination.get("sector_tournament_three_axis"),
+                    trade_date=normalized_trade_date or elimination.get("trade_date"),
+                ),
+                "dual_cluster_projection": normalize_dual_cluster_projection(
+                    elimination.get("dual_cluster_projection"),
+                    target_date=normalized_trade_date or elimination.get("trade_date"),
+                    expected_schema=SECTOR_DUAL_CLUSTER_SCHEMA_VERSION,
+                ),
                 "mermaid": clean_block_text(base_payload.get("mermaid")) or SECTOR_CAPITAL_PREFLIGHT_MERMAID,
                 "final_action": final_action or _as_dict(base_payload.get("final_action")),
                 "layers": _as_list(elimination.get("layers")),
@@ -3080,7 +3746,7 @@ def build_sector_capital_preflight_payload(
         )
         return _normalize_preflight_payload(base_payload)
     if existing:
-        existing["trade_date"] = clean_text(existing.get("trade_date") or trade_date)
+        existing["trade_date"] = clean_text(normalized_trade_date or existing.get("trade_date"))
         existing["variant"] = clean_text(existing.get("variant") or variant or "默认")
         if source_payloads:
             existing["source_payloads"] = source_payloads
@@ -3093,11 +3759,24 @@ def build_sector_capital_preflight_payload(
         return {}
     payload = {
         "schema_version": SECTOR_CAPITAL_PREFLIGHT_SCHEMA_VERSION,
-        "trade_date": clean_text(trade_date or elimination.get("trade_date")),
+        "trade_date": clean_text(normalized_trade_date or elimination.get("trade_date")),
         "variant": clean_text(variant or elimination.get("variant") or "默认"),
         "derivation_contract": SECTOR_CAPITAL_PREFLIGHT_DERIVATION_CONTRACT,
         "source_artifact": clean_text(elimination.get("schema_version"), SCHEMA_VERSION),
         "source_payloads": source_payloads,
+        "sector_diffusion_stage_evidence": _normalize_sector_diffusion_stage_evidence(
+            elimination.get("sector_diffusion_stage_evidence"),
+            trade_date=normalized_trade_date or elimination.get("trade_date"),
+        ),
+        "sector_tournament_three_axis": _normalize_sector_tournament_three_axis(
+            elimination.get("sector_tournament_three_axis"),
+            trade_date=normalized_trade_date or elimination.get("trade_date"),
+        ),
+        "dual_cluster_projection": normalize_dual_cluster_projection(
+            elimination.get("dual_cluster_projection"),
+            target_date=normalized_trade_date or elimination.get("trade_date"),
+            expected_schema=SECTOR_DUAL_CLUSTER_SCHEMA_VERSION,
+        ),
         "mermaid": SECTOR_CAPITAL_PREFLIGHT_MERMAID,
         "final_action": final_action,
         "layers": _as_list(elimination.get("layers")),
@@ -3448,6 +4127,7 @@ def render_elimination_tournament_html(payload):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="elimination-tournament">
   <title>{_html(payload.get("trade_date"))} 过程候选淘汰赛</title>
   <style>
@@ -3955,6 +4635,17 @@ def render_elimination_tournament_html(payload):
 	      color: var(--muted);
 	      background: #f8fafc;
 	    }}
+			    @media (max-width: 760px) {{
+			      main {{ padding: 20px 12px 32px; }}
+			      .final-summary {{ grid-template-columns: 1fr 1fr; }}
+			      .flowchart-head {{ display: block; }}
+			      .flowchart-head strong {{ display: inline-block; margin-top: 10px; }}
+			      .flow-node {{ flex-basis: 232px; min-height: 240px; }}
+			      .key-paths-head {{ display: block; }}
+			      .round-head {{ display: block; }}
+		      .round-counts {{ grid-template-columns: repeat(3, 1fr); margin-top: 12px; }}
+		      .round-lanes {{ grid-template-columns: 1fr; }}
+	    }}
   </style>
 </head>
 <body>
@@ -4037,6 +4728,142 @@ def _render_preflight_layer(layer, *, round_index=1):
     """
 
 
+def _render_sector_diffusion_stage_panel(payload):
+    payload = _as_dict(payload)
+    display = sector_diffusion_stage_display(
+        payload.get("sector_diffusion_stage_evidence"),
+        trade_date=payload.get("trade_date"),
+    )
+    availability_class = "is-confirmed" if display["available"] else "is-unconfirmed"
+    return f"""
+    <section class="stage-evidence {availability_class}" aria-label="板块传导阶段证据">
+      <div class="stage-evidence-head">
+        <div>
+          <p>板块传导阶段证据</p>
+          <h2>{_html(display["stage"])}</h2>
+        </div>
+        <strong>{_html(display["direction"])}</strong>
+      </div>
+      <dl class="stage-evidence-grid">
+        <div><dt>下一环</dt><dd>{_html(display["next_link"])}</dd></div>
+        <div><dt>剩余传播证据</dt><dd>{_html(display["remaining_text"])}</dd></div>
+        <div><dt>事实缺口</dt><dd>{_html(display["missing_text"])}</dd></div>
+        <div><dt>来源日期</dt><dd>{_html(display["source_dates_text"])}</dd></div>
+      </dl>
+      <p><strong>成立证据：</strong>{_html(display["stage_evidence_text"])}</p>
+      <p><strong>反方证据：</strong>{_html(display["counter_text"])}</p>
+      <p class="stage-evidence-scope">{_html(display["scope_text"])}</p>
+    </section>
+    """
+
+
+def _render_sector_dual_cluster_panel(payload):
+    payload = _as_dict(payload)
+    display = sector_dual_cluster_display(
+        payload.get("dual_cluster_projection"),
+        target_date=payload.get("trade_date"),
+    )
+    availability_class = "is-confirmed" if display["available"] else "is-unconfirmed"
+    return f"""
+    <section class="dual-cluster-evidence {availability_class}" aria-label="板块持续核心与动态冲击投影" data-artifact-hash="{_html(display.get("artifact_hash"))}">
+      <div class="dual-cluster-evidence-head">
+        <div>
+          <p>板块资金扩散双群聚</p>
+          <h2>持续核心、动态冲击、迁移带分开比较</h2>
+        </div>
+        <strong>{_html(display.get("transition"))}</strong>
+      </div>
+      <div class="dual-cluster-evidence-grid">
+        <article class="dual-cluster-card persistent-core">
+          <span>持续核心端</span>
+          <h3>{_html(display.get("persistent_core"))}</h3>
+          <p>{_html(display.get("persistent_core_evidence"))}</p>
+        </article>
+        <article class="dual-cluster-card dynamic-impact">
+          <span>动态冲击端</span>
+          <h3>{_html(display.get("dynamic_impact"))}</h3>
+          <p>{_html(display.get("dynamic_impact_evidence"))}</p>
+        </article>
+        <article class="dual-cluster-card transition-band">
+          <span>中间迁移带</span>
+          <h3>{_html(display.get("transition"))}</h3>
+          <p>{_html(display.get("transition_evidence"))}</p>
+        </article>
+      </div>
+      <dl class="dual-cluster-evidence-notes">
+        <div><dt>事实缺口</dt><dd>{_html(display.get("gaps"))}</dd></div>
+        <div><dt>反方证据</dt><dd>{_html(display.get("counter_evidence"))}</dd></div>
+      </dl>
+      <p class="dual-cluster-evidence-scope">{_html(display.get("scope_text"))} 产物哈希：{_html(display.get("artifact_hash"))}</p>
+    </section>
+    """
+
+
+def _render_sector_tournament_three_axis_panel(payload):
+    payload = _as_dict(payload)
+    evidence = _normalize_sector_tournament_three_axis(
+        payload.get("sector_tournament_three_axis"),
+        trade_date=payload.get("trade_date"),
+    )
+    if not evidence:
+        return """
+    <section class="stage-evidence is-unconfirmed" aria-label="板块资金扩散淘汰赛三坐标">
+      <div class="stage-evidence-head">
+        <div><p>板块资金扩散淘汰赛三坐标</p><h2>事实不足</h2></div>
+        <strong>未形成可复核判断</strong>
+      </div>
+      <p class="stage-evidence-scope">只解释空间、时间与认知验证，不改变明日对象、仓位或B1/B2。</p>
+    </section>
+    """
+    space = _as_dict(evidence.get("space_axis"))
+    time_axis = _as_dict(evidence.get("time_axis"))
+    cognition = _as_dict(evidence.get("cognition_axis"))
+    stage_mainline = _as_dict(evidence.get("stage_mainline"))
+    edge = _as_dict(evidence.get("edge_source"))
+    counterfactual = _as_dict(evidence.get("counterfactual_review"))
+    display = sector_tournament_three_axis_display(
+        evidence,
+        trade_date=payload.get("trade_date"),
+    )
+    return f"""
+    <section class="stage-evidence is-confirmed" aria-label="板块资金扩散淘汰赛三坐标">
+      <div class="stage-evidence-head">
+        <div>
+          <p>板块资金扩散淘汰赛三坐标</p>
+          <h2>{_html(evidence.get("direction") or "待确认")}</h2>
+        </div>
+        <strong>{_html(edge.get("type") or "暂无可确认优势")}</strong>
+      </div>
+      <dl class="stage-evidence-grid">
+        <div><dt>空间坐标</dt><dd>{_html(space.get("stage"))}</dd></div>
+        <div><dt>时间坐标</dt><dd>{_html(time_axis.get("stage"))}</dd></div>
+        <div><dt>认知坐标</dt><dd>{_html(cognition.get("stage"))}</dd></div>
+        <div><dt>阶段主线</dt><dd>{_html(stage_mainline.get("status") or "事实不足")}</dd></div>
+        <div><dt>已确认方向</dt><dd>{_html(display.get("confirmed_directions_text"))}</dd></div>
+        <div><dt>候选方向</dt><dd>{_html(display.get("candidate_directions_text"))}</dd></div>
+        <div><dt>当日主攻线</dt><dd>{_html(stage_mainline.get("daily_attack_line") or "事实不足")}</dd></div>
+        <div><dt>阶段日期</dt><dd>{_html(display.get("stage_date_text"))}</dd></div>
+        <div><dt>证据跨度</dt><dd>{_html(display.get("stage_span_text"))}</dd></div>
+        <div><dt>活跃与回流</dt><dd>{_html(display.get("reflow_text"))}</dd></div>
+        <div><dt>相对强度</dt><dd>{_html(display.get("relative_strength_text"))}</dd></div>
+        <div><dt>同起点价格路径</dt><dd>{_html(display.get("relative_path_text"))}</dd></div>
+        <div><dt>量能与市场宽度</dt><dd>{_html(display.get("liquidity_allocation_text"))}</dd></div>
+        <div><dt>内部趋势股</dt><dd>{_html(display.get("trend_density_text"))}</dd></div>
+        <div><dt>分歧检验</dt><dd>{_html(display.get("divergence_test_text"))}</dd></div>
+        <div><dt>反事实</dt><dd>{_html(counterfactual.get("conclusion"))}</dd></div>
+        <div><dt>下一环</dt><dd>{_html(space.get("next_link"))}</dd></div>
+        <div><dt>剩余传播空间</dt><dd>{_html(evidence.get("remaining_consensus_space"))}</dd></div>
+      </dl>
+      <p><strong>故事与价格：</strong>{_html(evidence.get("story_price_relation"))}</p>
+      <p><strong>阶段主线证据：</strong>{_html("；".join(_as_list(stage_mainline.get("evidence"))) or "事实不足")}；{_html(stage_mainline.get("operation_context") or "事实不足")}</p>
+      <p><strong>T+1/T+2 板块竞争假设：</strong>{_html(display.get("cross_day_competition_text"))}</p>
+      <p><strong>实际表现：</strong>{_html(cognition.get("actual_response"))}</p>
+      <p><strong>反方证据：</strong>{_html("、".join(_as_list(evidence.get("counter_evidence"))) or "暂无明确反方证据")}</p>
+      <p class="stage-evidence-scope">只解释空间、时间与认知验证，不改变明日对象、仓位或B1/B2。产物哈希：{_html(evidence.get("artifact_hash"))}</p>
+    </section>
+    """
+
+
 def _render_preflight_table(*, title, summary, columns, rows, row_class=""):
     header = "".join(f"<th>{_html(label)}</th>" for _, label in columns)
     body_rows = []
@@ -4068,7 +4895,37 @@ def _render_preflight_table(*, title, summary, columns, rows, row_class=""):
     """
 
 
+def _preflight_visible_status_text(value):
+    text = clean_text(value)
+    for raw, label in (
+        ("confirmed", "已确认"),
+        ("failed", "未成立"),
+        ("unresolved", "待确认"),
+    ):
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_]){raw}(?![A-Za-z0-9_])",
+            label,
+            text,
+        )
+    return text
+
+
 def _render_preflight_decision_list(rows):
+    visible_rows = [
+        {
+            key: _preflight_visible_status_text(row.get(key))
+            for key in (
+                "item",
+                "conclusion",
+                "evidence",
+                "counter_evidence",
+                "tomorrow_check",
+                "action",
+            )
+        }
+        for row in _as_list(rows)
+        if isinstance(row, dict)
+    ]
     return _render_preflight_table(
         title="相关决策列表",
         summary="每个关键结论来自哪一层事实",
@@ -4081,7 +4938,7 @@ def _render_preflight_decision_list(rows):
             ("tomorrow_check", "明日验证"),
             ("action", "动作"),
         ),
-        rows=rows,
+        rows=visible_rows,
     )
 
 
@@ -4394,6 +5251,7 @@ def render_sector_capital_preflight_html(payload):
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="sector-capital-preflight">
   <title>{_html(payload.get("trade_date"))} 板块资金扩散生成前复核</title>
   <style>
@@ -4463,6 +5321,104 @@ def render_sector_capital_preflight_html(payload):
       font-size: 16px;
       overflow-wrap: anywhere;
     }}
+    .stage-evidence {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 18px;
+      background: var(--panel);
+      overflow-wrap: anywhere;
+    }}
+    .stage-evidence.is-confirmed {{ border-color: #99d6ce; }}
+    .stage-evidence.is-unconfirmed {{ border-color: #f5b5ae; }}
+    .stage-evidence-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }}
+    .stage-evidence-head p {{
+      margin: 0 0 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    .stage-evidence-head h2 {{ margin: 0; }}
+    .stage-evidence-head > strong {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 9px;
+      background: #f8fafc;
+    }}
+    .stage-evidence-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }}
+    .stage-evidence-grid div {{
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+      min-width: 0;
+    }}
+    .stage-evidence-grid dt {{ color: var(--muted); font-size: 12px; }}
+    .stage-evidence-grid dd {{ margin: 2px 0 0; font-weight: 700; }}
+    .stage-evidence > p {{ margin: 6px 0 0; }}
+    .stage-evidence-scope {{ color: var(--muted); font-size: 13px; }}
+    .dual-cluster-evidence {{
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 16px;
+    }}
+    .dual-cluster-evidence.is-confirmed {{ border-color: #99d6ce; }}
+    .dual-cluster-evidence.is-unconfirmed {{ border-color: #f5b5ae; }}
+    .dual-cluster-evidence-head {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }}
+    .dual-cluster-evidence-head p {{ margin: 0; color: var(--muted); font-size: 12px; }}
+    .dual-cluster-evidence-head h2 {{ margin: 2px 0 0; }}
+    .dual-cluster-evidence-head > strong {{
+      max-width: 360px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #3448a3;
+      padding: 6px 10px;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }}
+    .dual-cluster-evidence-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }}
+    .dual-cluster-card {{
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 12px;
+    }}
+    .dual-cluster-card.persistent-core {{ background: #eef9f6; }}
+    .dual-cluster-card.dynamic-impact {{ background: #fff7ed; }}
+    .dual-cluster-card.transition-band {{ background: #f5f3ff; }}
+    .dual-cluster-card span {{ color: var(--muted); font-size: 12px; font-weight: 700; }}
+    .dual-cluster-card h3 {{ margin: 5px 0 7px; font-size: 16px; overflow-wrap: anywhere; }}
+    .dual-cluster-card p {{ margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }}
+    .dual-cluster-evidence-notes {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin: 12px 0 0;
+    }}
+    .dual-cluster-evidence-notes div {{ border-top: 1px solid var(--line); padding-top: 8px; }}
+    .dual-cluster-evidence-notes dt {{ color: var(--muted); font-size: 12px; }}
+    .dual-cluster-evidence-notes dd {{ margin: 3px 0 0; overflow-wrap: anywhere; }}
+    .dual-cluster-evidence-scope {{ color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }}
     .flowchart-mermaid {{
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -4935,6 +5891,25 @@ def render_sector_capital_preflight_html(payload):
       color: var(--muted);
       background: #f8fafc;
     }}
+    @media (max-width: 760px) {{
+	      main {{ padding: 20px 12px 32px; }}
+	      .final-summary {{ grid-template-columns: 1fr 1fr; }}
+	      .flowchart-head {{ display: block; }}
+	      .flowchart-head strong {{ display: inline-block; margin-top: 10px; }}
+	      .flow-node {{ flex-basis: 232px; min-height: 240px; }}
+	      .audit-table-block summary {{ display: block; }}
+	      .audit-table-block summary strong {{ display: block; margin-top: 4px; text-align: left; }}
+	      .round-head {{ display: block; }}
+      .stage-evidence-head {{ display: block; }}
+      .stage-evidence-head > strong {{ display: inline-block; margin-top: 10px; }}
+      .stage-evidence-grid {{ grid-template-columns: 1fr; }}
+      .dual-cluster-evidence-head {{ display: block; }}
+      .dual-cluster-evidence-head > strong {{ display: inline-block; margin-top: 10px; }}
+      .dual-cluster-evidence-grid,
+      .dual-cluster-evidence-notes {{ grid-template-columns: 1fr; }}
+      .round-counts {{ grid-template-columns: repeat(3, 1fr); margin-top: 12px; }}
+      .round-lanes {{ grid-template-columns: 1fr; }}
+    }}
   </style>
 </head>
 <body>
@@ -4949,6 +5924,9 @@ def render_sector_capital_preflight_html(payload):
       <div class="summary-cell"><span>最终对象</span><strong>{_html(final_stock)}</strong></div>
       <div class="summary-cell"><span>最终动作</span><strong>{_html(final_label)}</strong></div>
     </section>
+	    {_render_sector_dual_cluster_panel(payload)}
+	    {_render_sector_tournament_three_axis_panel(payload)}
+	    {_render_sector_diffusion_stage_panel(payload)}
 	    {_render_preflight_flowchart(payload)}
 	    <div class="flowchart-mermaid">
 	      <div class="flowchart-mermaid-head">

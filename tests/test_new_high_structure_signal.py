@@ -130,11 +130,33 @@ class NewHighStructureSignalTest(unittest.TestCase):
 
         self.assertFalse(signal["history_comparable"])
         self.assertEqual(signal["change_count"], -12)
-        self.assertIn("窗口来源事实不足", signal["summary"])
-        self.assertIn("逐日来源或来源日期事实不足", signal["summary"])
-        self.assertIn("跨日速度和峰值保留率只作结构观察", signal["summary"])
+        self.assertIsNone(signal["change_ratio_pct"])
+        self.assertIsNone(signal["peak_retention_pct"])
+        self.assertFalse(signal["rapid_contraction"])
+        self.assertEqual(signal["breadth_direction"], "待累计")
+        self.assertIn("窗口逐日来源未形成同口径，峰值保留率不计算", signal["summary"])
+        self.assertIn("逐日采集来源或来源日期未统一", signal["summary"])
+        self.assertIn("跨日速度和峰值保留率不计算", signal["summary"])
+        self.assertNotIn("事实不足", signal["summary"])
         self.assertNotIn("-66.67%", signal["summary"])
         self.assertNotIn("窗口峰值保留率33.33%", signal["summary"])
+
+    def test_does_not_mark_low_repair_when_adjacent_sources_are_not_comparable(self):
+        signal = build_new_high_structure_signal(
+            {
+                "available": True,
+                "trend_rows": [
+                    _row("2026-07-10", 20, 0.40, source="tushare"),
+                    _row("2026-07-13", 30, 0.60, source="akshare"),
+                ],
+            },
+            "2026-07-13",
+        )
+
+        self.assertFalse(signal["history_comparable"])
+        self.assertEqual(signal["breadth_direction"], "待累计")
+        self.assertEqual(signal["state"], "扩散震荡")
+        self.assertIsNone(signal["breadth_level_change_steps"])
 
     def test_classifies_sustained_low_level_recovery_as_repair(self):
         signal = build_new_high_structure_signal(
@@ -188,6 +210,76 @@ class NewHighStructureSignalTest(unittest.TestCase):
         self.assertEqual(signal["top_sector"], "")
         self.assertIn("缺少前序创新高趋势行", signal["summary"])
         self.assertNotIn("半导体", signal["summary"])
+
+    def test_top_level_sector_distribution_without_date_is_not_used(self):
+        signal = build_new_high_structure_signal(
+            {
+                "available": True,
+                "sector_distribution": [{"sector": "过期板块", "new_high_count": 6}],
+                "trend_rows": [
+                    _row("2026-07-16", 11, 0.22),
+                    {
+                        "trade_date": "2026-07-17",
+                        "source_date": "2026-07-17",
+                        "source": "same-source",
+                        "new_high_count": 6,
+                        "all_a_share_pct": 0.12,
+                    },
+                ],
+            },
+            "2026-07-17",
+        )
+
+        self.assertFalse(signal["sector_data_available"])
+        self.assertEqual(signal["top_sector"], "")
+
+    def test_top_level_sector_distribution_with_other_date_is_not_used(self):
+        signal = build_new_high_structure_signal(
+            {
+                "available": True,
+                "trade_date": "2026-07-16",
+                "source_date": "2026-07-16",
+                "sector_distribution": [{"sector": "过期板块", "new_high_count": 6}],
+                "trend_rows": [
+                    _row("2026-07-16", 11, 0.22),
+                    {
+                        "trade_date": "2026-07-17",
+                        "source_date": "2026-07-17",
+                        "source": "same-source",
+                        "new_high_count": 6,
+                        "all_a_share_pct": 0.12,
+                    },
+                ],
+            },
+            "2026-07-17",
+        )
+
+        self.assertFalse(signal["sector_data_available"])
+        self.assertEqual(signal["top_sector"], "")
+
+    def test_top_level_sector_distribution_with_target_date_is_used(self):
+        signal = build_new_high_structure_signal(
+            {
+                "available": True,
+                "trade_date": "2026-07-17",
+                "source_date": "2026-07-17",
+                "sector_distribution": [{"sector": "半导体", "new_high_count": 6}],
+                "trend_rows": [
+                    _row("2026-07-16", 11, 0.22),
+                    {
+                        "trade_date": "2026-07-17",
+                        "source_date": "2026-07-17",
+                        "source": "same-source",
+                        "new_high_count": 6,
+                        "all_a_share_pct": 0.12,
+                    },
+                ],
+            },
+            "2026-07-17",
+        )
+
+        self.assertTrue(signal["sector_data_available"])
+        self.assertEqual(signal["top_sector"], "半导体")
 
     def test_unknown_sector_rows_do_not_become_a_false_cluster(self):
         signal = build_new_high_structure_signal(

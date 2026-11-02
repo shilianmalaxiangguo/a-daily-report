@@ -104,6 +104,52 @@ class LlmServiceEnvTest(unittest.TestCase):
                     timeout=3,
                 )
 
+    def test_deepseek_structured_response_preserves_request_id_and_omits_seed(self):
+        module = self._load_llm_service_module("llm_service_deepseek_metadata_test")
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "id": "deepseek-request-123",
+                    "choices": [
+                        {
+                            "message": {"content": "OK"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+
+        with patch("requests.post", return_value=FakeResponse()) as post:
+            provider = module.DeepSeekHTTPProvider(
+                api_key="key",
+                base_url="https://api.deepseek.com",
+            )
+            structured = provider.chat_with_metadata(
+                messages=[{"role": "user", "content": "只返回 OK"}],
+                model="deepseek-v4-flash",
+                temperature=0.7,
+                max_tokens=500,
+                timeout=3,
+                seed=123,
+            )
+            legacy = provider.chat(
+                messages=[{"role": "user", "content": "只返回 OK"}],
+                model="deepseek-v4-flash",
+                temperature=0.7,
+                max_tokens=500,
+                timeout=3,
+            )
+
+        self.assertEqual(structured["content"], "OK")
+        self.assertEqual(structured["provider_request_id"], "deepseek-request-123")
+        self.assertFalse(structured["seed_supported"])
+        self.assertIsNone(structured["seed"])
+        self.assertEqual(legacy, "OK")
+        self.assertTrue(all("seed" not in call.kwargs["json"] for call in post.call_args_list))
+
     def test_llm_service_raises_deepseek_min_tokens_to_avoid_reasoning_only_response(self):
         module = self._load_llm_service_module("llm_service_deepseek_min_tokens_test")
 
@@ -124,6 +170,61 @@ class LlmServiceEnvTest(unittest.TestCase):
 
         self.assertEqual(result, "OK")
         self.assertEqual(provider.calls, [64])
+
+    def test_llm_service_preserves_provider_metadata(self):
+        module = self._load_llm_service_module("llm_service_metadata_test")
+
+        class MetadataProvider(module.BaseLLMProvider):
+            seed_supported = True
+
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, model, temperature, max_tokens, timeout):
+                raise AssertionError("structured path must be used")
+
+            def chat_with_metadata(
+                self,
+                messages,
+                model,
+                temperature,
+                max_tokens,
+                timeout,
+                seed=None,
+            ):
+                self.calls.append(seed)
+                return {
+                    "content": "OK",
+                    "provider_request_id": "provider-request-456",
+                    "seed_supported": True,
+                    "seed": seed,
+                    "effective_config": {
+                        "model": model,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "timeout": timeout,
+                    },
+                }
+
+        module.reset_llm_service()
+        service = module.LLMService(timeout=3)
+        provider = MetadataProvider()
+        service.provider = provider
+
+        result = service.chat_with_metadata(
+            "只返回 OK",
+            temperature=0.7,
+            max_tokens=500,
+            max_retries=0,
+            seed=123,
+        )
+
+        self.assertEqual(provider.calls, [123])
+        self.assertEqual(result["content"], "OK")
+        self.assertEqual(result["provider_request_id"], "provider-request-456")
+        self.assertTrue(result["seed_supported"])
+        self.assertEqual(result["seed"], 123)
+        self.assertEqual(result["effective_config"]["max_tokens"], 500)
 
     def test_llm_service_retries_reasoning_only_length_response_with_higher_tokens(self):
         module = self._load_llm_service_module("llm_service_reasoning_retry_test")
@@ -290,6 +391,150 @@ class LlmServiceEnvTest(unittest.TestCase):
         self.assertEqual(service.saved[0][1], cache._make_key("重大事件"))
         self.assertEqual(service.saved[0][3]["result"], {"main_direction": "半导体", "confidence": "高"})
         self.assertEqual(list(Path(tmp_dir).glob("*.json")), [])
+
+    def test_event_analysis_cache_uses_local_default_postgres_without_url(self):
+        module = self._load_llm_service_module("llm_service_event_cache_local_postgres_test")
+
+        class StubService:
+            def __init__(self):
+                self.entries = {}
+
+            def is_postgres_backed(self):
+                return True
+
+            def get_runtime_cache_entry(self, namespace, cache_key, target_date):
+                return self.entries.get((namespace, cache_key, target_date))
+
+            def set_runtime_cache_entry(self, namespace, cache_key, target_date, payload, *, source="", ttl_seconds=None):
+                self.entries[(namespace, cache_key, target_date)] = {"payload": dict(payload), "source": source}
+                return True
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        with patch.object(module, "DatabaseService", StubDatabaseService, create=True), patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            cache = module.EventAnalysisCache()
+            cache.set("重大事件", {"main_direction": "半导体"}, "行业政策摘要")
+
+        self.assertEqual(cache.get("重大事件", "行业政策摘要"), {"main_direction": "半导体"})
+        self.assertTrue(service.entries)
+
+    def test_event_analysis_cache_key_includes_summary(self):
+        module = self._load_llm_service_module("llm_service_event_cache_summary_test")
+
+        with patch.object(module, "DatabaseService", None, create=True):
+            cache = module.EventAnalysisCache()
+            cache.set("同名大会", {"main_direction": "储能"}, "储能产业链会议")
+
+        self.assertEqual(cache.get("同名大会", "储能产业链会议"), {"main_direction": "储能"})
+        self.assertIsNone(cache.get("同名大会", "医药产业链会议"))
+        self.assertNotEqual(
+            cache._make_key("同名大会", "储能产业链会议"),
+            cache._make_key("同名大会", "医药产业链会议"),
+        )
+
+    def test_event_analysis_cache_key_includes_analysis_contract_version(self):
+        module = self._load_llm_service_module("llm_service_event_cache_contract_test")
+
+        with patch.object(module, "DatabaseService", None, create=True):
+            cache = module.EventAnalysisCache()
+            current_key = cache._make_key("重大事件", "行业摘要")
+            with patch.object(
+                module.EventAnalysisCache,
+                "ANALYSIS_CONTRACT_VERSION",
+                "llm_event_analysis.v3",
+            ):
+                next_key = cache._make_key("重大事件", "行业摘要")
+
+        self.assertNotEqual(current_key, next_key)
+        self.assertEqual(
+            current_key,
+            cache._make_key("重大事件", "行业摘要"),
+        )
+
+    def test_event_analysis_cache_read_failure_continues_remote_analysis(self):
+        module = self._load_llm_service_module("llm_service_event_cache_read_failure_test")
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def get_runtime_cache_entry(self, namespace, cache_key, target_date):
+                raise RuntimeError("postgres unavailable")
+
+            def set_runtime_cache_entry(self, *args, **kwargs):
+                return True
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with patch.object(module, "DatabaseService", StubDatabaseService, create=True):
+            llm_service = module.LLMService(timeout=1)
+            llm_service._analyze_events_single_batch = lambda events: [
+                {"main_direction": "半导体", "confidence": "高"}
+                for _ in events
+            ]
+            actual = llm_service.analyze_events_batch(
+                [{"title": "重大事件", "summary": "行业摘要"}],
+                batch_size=1,
+            )
+
+        self.assertEqual(actual, [{"main_direction": "半导体", "confidence": "高"}])
+
+    def test_analyze_events_batch_skips_remote_call_when_all_events_are_cached(self):
+        module = self._load_llm_service_module("llm_service_event_batch_cache_test")
+
+        class StubService:
+            def __init__(self):
+                self.entries = {}
+
+            def is_postgres_backed(self):
+                return True
+
+            def get_runtime_cache_entry(self, namespace, cache_key, target_date):
+                return self.entries.get((namespace, cache_key, target_date))
+
+            def set_runtime_cache_entry(self, namespace, cache_key, target_date, payload, *, source="", ttl_seconds=None):
+                self.entries[(namespace, cache_key, target_date)] = {"payload": dict(payload), "source": source}
+                return True
+
+        database = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return database
+
+        events = [{"title": f"事件{index:02d}", "summary": f"摘要{index:02d}"} for index in range(22)]
+        expected = [
+            {"main_direction": f"方向{index:02d}", "confidence": "高"}
+            for index in range(22)
+        ]
+        with patch.object(module, "DatabaseService", StubDatabaseService, create=True), patch.dict(
+            os.environ,
+            {},
+            clear=True,
+        ):
+            seed_cache = module.EventAnalysisCache()
+            for event, result in zip(events, expected):
+                seed_cache.set(event["title"], result, event["summary"])
+            llm_service = module.LLMService(timeout=1)
+            llm_service._analyze_events_single_batch = lambda batch: (_ for _ in ()).throw(
+                AssertionError("全部命中缓存时不应调用远程分析")
+            )
+            actual = llm_service.analyze_events_batch(events, batch_size=8)
+
+        self.assertEqual(actual, expected)
 
     def test_event_analysis_cache_in_postgres_only_mode_does_not_write_local_json(self):
         module = self._load_llm_service_module("llm_service_event_cache_postgres_only_test")

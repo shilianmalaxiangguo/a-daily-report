@@ -6,6 +6,7 @@ from report.mainline_turnover_summary_support import (
     resolve_display_mainline_name,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
+    resolve_unconfirmed_mainline_summary,
 )
 
 
@@ -83,9 +84,12 @@ def build_market_analysis_mainline_node(context, node_meta=None, node_lookup=Non
         or capacity_summary.get("mainline_regime") in {"无主线", "混沌轮动", "混沌接力"}
     )
     if unconfirmed_mainline:
-        lines.append("**当前主线**: 暂无确认主线")
+        competition = resolve_unconfirmed_mainline_summary(data)
         lines.append(
-            f"> {attack_summary.get('confirmation_evidence') or capacity_summary.get('confirmation_evidence') or '板块攻击证据不足'}"
+            f"**当前主线**: {competition.get('headline') or '未形成跨日胜出方向'}"
+        )
+        lines.append(
+            f"> {competition.get('competition_summary') or attack_summary.get('confirmation_evidence') or capacity_summary.get('confirmation_evidence') or '资金未形成明确进攻方向'}"
         )
         if main_sectors_info:
             lines.append("")

@@ -189,7 +189,18 @@ def _sector_rows(snapshot: Mapping[str, Any], current_row: Mapping[str, Any]) ->
     if isinstance(row_sectors, list):
         return [dict(item) for item in row_sectors if isinstance(item, Mapping)]
     top_level_sectors = snapshot.get("sector_distribution")
-    if isinstance(top_level_sectors, list):
+    current_date = _normalize_date(current_row.get("trade_date") or current_row.get("date"))
+    top_level_dates = [
+        _normalize_date(snapshot.get(field))
+        for field in ("trade_date", "source_date")
+        if str(snapshot.get(field) or "").strip()
+    ]
+    if (
+        isinstance(top_level_sectors, list)
+        and current_date
+        and top_level_dates
+        and all(source_date == current_date for source_date in top_level_dates)
+    ):
         return [dict(item) for item in top_level_sectors if isinstance(item, Mapping)]
     return []
 
@@ -339,11 +350,6 @@ def build_new_high_structure_signal(
     previous_count = _safe_int(previous_row.get("new_high_count")) if previous_row else None
     previous_pct = round(_safe_float(previous_row.get("all_a_share_pct")), 2) if previous_row else None
     change_count = current_count - previous_count if previous_row else None
-    change_ratio = (
-        round(change_count / previous_count * 100.0, 2)
-        if previous_row and previous_count > 0
-        else None
-    )
     comparable_rows = [current_row, previous_row] if previous_row else []
     sources = {str(row.get("source") or "").strip() for row in comparable_rows if row}
     history_comparable = bool(
@@ -351,15 +357,29 @@ def build_new_high_structure_signal(
         and all(_source_is_comparable(row) for row in comparable_rows if row)
         and len(sources) == 1
     )
+    change_ratio = (
+        round(change_count / previous_count * 100.0, 2)
+        if history_comparable and previous_count > 0
+        else None
+    )
     if previous_row and not history_comparable:
         result["warnings"].append("逐日来源或来源日期不足，跨日速度只作结构观察")
 
     window_counts = [max(0, _safe_int(row.get("new_high_count"))) for row in rows[: current_index + 1]]
     window_peak = max(window_counts) if window_counts else current_count
-    peak_retention = round(current_count / window_peak * 100.0, 2) if window_peak > 0 else None
+    peak_retention = (
+        round(current_count / window_peak * 100.0, 2)
+        if history_comparable and window_peak > 0
+        else None
+    )
     single_digit = current_count < _SINGLE_DIGIT_LIMIT
     first_single_digit = bool(single_digit and not any(count < _SINGLE_DIGIT_LIMIT for count in window_counts[:-1]))
-    rapid_contraction = bool(previous_count and previous_count > 0 and current_count <= previous_count * 0.5)
+    rapid_contraction = bool(
+        history_comparable
+        and previous_count
+        and previous_count > 0
+        and current_count <= previous_count * 0.5
+    )
     current_level = classify_new_high_breadth_level(current_pct, current_count)
     previous_level = (
         classify_new_high_breadth_level(previous_pct, previous_count)
@@ -368,12 +388,12 @@ def build_new_high_structure_signal(
     )
     level_change_steps = (
         current_level["breadth_level_rank"] - previous_level["breadth_level_rank"]
-        if previous_row
+        if history_comparable
         else None
     )
     low_level_codes = {"cold_diffusion", "very_low_diffusion", "diffusion_fracture"}
     low_repair = bool(
-        previous_row
+        history_comparable
         and previous_count is not None
         and previous_pct is not None
         and current_count > previous_count
@@ -384,7 +404,7 @@ def build_new_high_structure_signal(
     )
     if low_repair:
         breadth_direction = "低位修复"
-    elif previous_row and previous_count is not None and previous_pct is not None:
+    elif history_comparable and previous_count is not None and previous_pct is not None:
         if current_count < previous_count and current_pct < previous_pct:
             breadth_direction = "扩散收缩"
         elif current_count > previous_count and current_pct > previous_pct:
@@ -472,7 +492,7 @@ def build_new_high_structure_signal(
         change_text = "可见序列较前一行收缩" if change_count < 0 else "可见序列较前一行回升" if change_count > 0 else "可见序列较前一行持平"
     else:
         change_text = "较前一可见行待累计"
-    peak_text = f"窗口峰值保留率{peak_retention:.2f}%" if history_comparable and peak_retention is not None else "窗口来源事实不足，峰值保留率只作结构观察"
+    peak_text = f"窗口峰值保留率{peak_retention:.2f}%" if history_comparable and peak_retention is not None else "窗口逐日来源未形成同口径，峰值保留率不计算"
     single_text = "首次进入个位数" if first_single_digit else ("处于个位数" if single_digit else "尚未进入个位数")
     sector_text = ""
     if sector_info["sector_data_available"]:
@@ -491,7 +511,7 @@ def build_new_high_structure_signal(
         sector_text = "板块归属不足，不能判断板块成群或主导"
     source_text = ""
     if not history_comparable and previous_row:
-        source_text = "逐日来源或来源日期事实不足，跨日速度和峰值保留率只作结构观察"
+        source_text = "逐日采集来源或来源日期未统一，跨日速度和峰值保留率不计算"
     result["summary"] = (
         f"{state}：当前{current_count}只、全A占比{current_pct:.2f}%，"
         f"绝对水位为{current_level['breadth_level_label']}；{single_text}；"

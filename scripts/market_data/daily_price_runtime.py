@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 import os
 import signal
 import threading
@@ -27,6 +28,7 @@ __all__ = [
     "is_one_word_limit_bar",
     "merge_daily_price_bars",
     "resolve_big_yang_confluence_anchor",
+    "reset_daily_price_runtime_query_cache",
     "run_with_wall_clock_timeout",
     "to_bs_code",
 ]
@@ -34,6 +36,9 @@ __all__ = [
 _MISSING = object()
 STOP_PRIOR_LOW_TRADING_DAYS = 5
 _daily_price_bar_cache = {}
+_postgres_recent_price_bar_cache = {}
+_daily_price_database_service = None
+_daily_price_database_service_initialized = False
 _baostock_runtime_state = {
     "logged_in": False,
     "logout_registered": False,
@@ -89,6 +94,87 @@ def _ensure_baostock_login():
     except Exception:
         _baostock_runtime_state["logged_in"] = False
         return False
+
+
+def _get_daily_price_database_service():
+    global _daily_price_database_service, _daily_price_database_service_initialized
+    if not _daily_price_database_service_initialized:
+        from storage.database_service import DatabaseService
+
+        _daily_price_database_service = DatabaseService.from_environment()
+        _daily_price_database_service_initialized = True
+    return _daily_price_database_service
+
+
+def reset_daily_price_runtime_query_cache():
+    global _daily_price_database_service, _daily_price_database_service_initialized
+    _daily_price_bar_cache.clear()
+    _postgres_recent_price_bar_cache.clear()
+    _daily_price_database_service = None
+    _daily_price_database_service_initialized = False
+
+
+def _fetch_postgres_recent_price_bars(security_code, target_date, lookback_days):
+    code_digits = "".join(ch for ch in str(security_code or "") if ch.isdigit())
+    code = code_digits[-6:].zfill(6) if code_digits else ""
+    target_date = _normalize_kline_date_str(target_date)
+    lookback_days = int(_safe_float(lookback_days, 10))
+    if not code or not target_date or lookback_days <= 0:
+        return []
+
+    cache_key = (code, target_date, lookback_days)
+    if cache_key in _postgres_recent_price_bar_cache:
+        return [dict(item) for item in _postgres_recent_price_bar_cache[cache_key]]
+
+    try:
+        service = _get_daily_price_database_service()
+        rows = service.query_stock_daily_quote_history(
+            code,
+            target_date,
+            limit=lookback_days,
+        )
+    except Exception:
+        return []
+
+    bars_by_date = {}
+    for row in rows or []:
+        date_text = _normalize_kline_date_str(
+            (row or {}).get("date") or (row or {}).get("trade_date")
+        )
+        if not date_text or date_text > target_date:
+            continue
+        normalized = {
+            "date": date_text,
+            "trade_date": date_text,
+            "source_date": _normalize_kline_date_str(
+                (row or {}).get("source_date") or date_text
+            ),
+            "open": _safe_float((row or {}).get("open")),
+            "high": _safe_float((row or {}).get("high")),
+            "low": _safe_float((row or {}).get("low")),
+            "close": _safe_float((row or {}).get("close")),
+            "volume": _safe_float((row or {}).get("volume") or (row or {}).get("vol")),
+            "amount": _safe_float((row or {}).get("amount")),
+            "data_source": "postgresql.stock_daily_quotes_recent",
+            "source": "postgresql.stock_daily_quotes_recent",
+        }
+        prices = [normalized[key] for key in ("open", "high", "low", "close")]
+        if (
+            not all(math.isfinite(value) and value > 0 for value in prices)
+            or not math.isfinite(normalized["volume"])
+            or normalized["volume"] <= 0
+            or normalized["low"] > min(normalized["open"], normalized["close"])
+            or normalized["high"] < max(normalized["open"], normalized["close"])
+        ):
+            return []
+        bars_by_date[date_text] = normalized
+
+    bars = [bars_by_date[key] for key in sorted(bars_by_date)]
+    if len(bars) < lookback_days or bars[-1].get("date") != target_date:
+        return []
+    accepted = bars[-lookback_days:]
+    _postgres_recent_price_bar_cache[cache_key] = [dict(item) for item in accepted]
+    return [dict(item) for item in accepted]
 
 
 def _install_runtime_bindings(bindings):
@@ -862,6 +948,14 @@ def _fetch_recent_price_bars_legacy_body(security_code, target_date, lookback_da
         return []
 
     lookback_days = int(_safe_float(lookback_days, 10))
+    postgres_bars = _fetch_postgres_recent_price_bars(
+        code,
+        normalized_target_date,
+        lookback_days,
+    )
+    if postgres_bars:
+        return postgres_bars
+
     history_span = max(lookback_days * 2, 10)
     start_date = (target_dt - datetime.timedelta(days=history_span)).strftime("%Y-%m-%d")
 

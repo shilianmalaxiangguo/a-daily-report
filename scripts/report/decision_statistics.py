@@ -488,6 +488,10 @@ def _fallback_reviews_from_existing_ledger_fields(record):
 
 
 def _iter_review_rows(index):
+    for item in list((index or {}).get("daily_judgment_reviews") or []):
+        review = _normalize_judgment_review(item)
+        if review:
+            yield review
     for records in (index or {}).get("by_stock_code", {}).values():
         for record in list(records or []):
             explicit = _record_judgment_reviews(record)
@@ -527,6 +531,10 @@ def _all_trade_dates(index):
             text = _clean_text(snapshot.get("trade_date") or snapshot.get("date"))
         else:
             text = _clean_text(snapshot)
+        if text and text not in dates:
+            dates.append(text)
+    for review in list((index or {}).get("daily_judgment_reviews") or []):
+        text = _clean_text((review or {}).get("report_date") or (review or {}).get("date"))
         if text and text not in dates:
             dates.append(text)
     for records in (index or {}).get("by_stock_code", {}).values():
@@ -690,7 +698,7 @@ def _summarize_rows(rows, *, judgment_type=""):
         "end_date": dates[-1] if dates else None,
         "latest_mistake": latest_mistake,
         "missing_fields": missing_fields,
-        "latest_result": latest_detail.get("result", "待补事实"),
+        "latest_result": latest_detail.get("result", "未结算"),
         "latest_expected": latest_detail.get("expected", "-"),
         "latest_actual": latest_detail.get("actual", "-"),
         "latest_reason": latest_detail.get("reason", latest_mistake or "-"),
@@ -817,6 +825,11 @@ def _planned_payloads(index, target_date, current_context):
 
 
 def _current_participation_text(index, target_date, current_context):
+    if (current_context or {}).get("suppress_participation_fallback"):
+        return _clean_text(
+            (current_context or {}).get("no_trade_participation_text"),
+            "明日新仓0%不参与，不进入B1/B2窗口",
+        )
     text = _clean_text((current_context or {}).get("participation_rehearsal"))
     if text:
         return text
@@ -831,6 +844,11 @@ def _current_participation_text(index, target_date, current_context):
 
 
 def _current_cancellation_text(index, target_date, current_context):
+    if (current_context or {}).get("suppress_participation_fallback"):
+        return _clean_text(
+            (current_context or {}).get("no_trade_cancellation_text"),
+            "0%计划无需取消；没有合格对象就继续不参与",
+        )
     text = _clean_text((current_context or {}).get("cancellation_condition"))
     if text:
         return text
@@ -853,10 +871,21 @@ def _today_judgment_rows(index, target_date, current_context=None):
         current_context.get("current_mainline"),
         current_context.get("mainline_name"),
     )
-    if mainline in {"暂无", "无", "暂无明确主线", "无确认主线"}:
-        mainline = "无确认主线"
+    if mainline in {
+        "暂无",
+        "无",
+        "暂无明确主线",
+        "无确认主线",
+        "暂无确认主线",
+        "主线待确认",
+    }:
+        mainline = "未形成跨日胜出方向"
     if not market_state:
-        market_state = "混沌" if mainline == "无确认主线" else "待补事实"
+        market_state = (
+            "混沌"
+            if mainline == "未形成跨日胜出方向"
+            else "未形成可复核市场结论"
+        )
     else:
         market_state = _normalize_market_state_bucket(market_state)
     core_candidates = _current_core_candidates(index, target_date, current_context)
@@ -872,7 +901,14 @@ def _today_judgment_rows(index, target_date, current_context=None):
             "next_verify": "下一交易日验证资金是否继续选择这条线",
         },
         "core_candidate": {
-            "today_judgment": "、".join(core_candidates) if core_candidates else "待补事实",
+            "today_judgment": (
+                "、".join(core_candidates)
+                if core_candidates
+                else _clean_text(
+                    current_context.get("no_trade_core_candidate_text"),
+                    "无明日执行对象；当前没有取得买入资格的候选",
+                )
+            ),
             "next_verify": "下一交易日验证是否进入资金视野",
         },
         "participation_rehearsal": {
@@ -937,7 +973,7 @@ def build_five_judgment_statistics(index, target_date=None):
 
 def _format_accuracy(value):
     if value is None:
-        return "待补事实"
+        return "暂无已结算样本"
     return f"{float(value):.2f}%"
 
 
@@ -946,7 +982,34 @@ def _format_settlement_result(row):
         return "错误"
     if int(row.get("correct_count") or 0) > 0:
         return "正确"
-    return "待补事实"
+    return "未结算"
+
+
+def _normalized_settlement_result(value, row=None):
+    text = _clean_text(value)
+    if text in _WAITING_REVIEW_STATUSES or text in {"事实不足", "暂无已结算样本"}:
+        return "未结算"
+    return text or _format_settlement_result(row or {})
+
+
+_JUDGMENT_MISSING_LABELS = {
+    "market_state_review": "市场状态复盘",
+    "mainline_review": "主线延续复盘",
+    "core_candidate_review": "核心候选次日反馈",
+    "participation_review": "参与预演复盘",
+    "cancellation_review": "取消条件复盘",
+    "review_fact": "复盘记录",
+}
+
+
+def _judgment_missing_text(rows):
+    missing = []
+    for row in rows or []:
+        for field in row.get("missing_fields") or []:
+            label = _JUDGMENT_MISSING_LABELS.get(_clean_text(field), "其他复盘记录")
+            if label not in missing:
+                missing.append(label)
+    return "、".join(missing) or "复盘记录"
 
 
 def _strip_stock_code_suffix(text):
@@ -1032,7 +1095,11 @@ def render_daily_judgment_review_panel_lines(panel):
         )
     previous_date = _clean_text(panel.get("previous_trade_date"))
     lines.append("")
-    lines.append(f"**结算上一交易日：{previous_date or '待补事实'}**")
+    lines.append(
+        f"**结算上一交易日：{previous_date}**"
+        if previous_date
+        else "**未找到可结算的上一交易日记录**"
+    )
     resolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if _has_settlement(row)]
     unresolved_previous_rows = [
         row for row in list(panel.get("previous_rows") or []) if int(row.get("missing_fact_count") or 0) > 0
@@ -1057,27 +1124,25 @@ def render_daily_judgment_review_panel_lines(panel):
     if unresolved_previous_rows:
         lines.append("")
         lines.append("**上一交易日未完成结算**")
-        lines.append("| 判断项 | 状态 | 缺少事实 |")
-        lines.append("|--------|------|----------|")
-        for row in unresolved_previous_rows:
-            missing_fields = "、".join(row.get("missing_fields") or []) or "review_fact"
-            lines.append(
-                "| {label} | 待补事实 | {missing_fields} |".format(
-                    label=_clean_markdown_cell(row.get("label")),
-                    missing_fields=_clean_markdown_cell(missing_fields),
-                )
-            )
+        unresolved_labels = "、".join(
+            _clean_markdown_cell(row.get("label"))
+            for row in unresolved_previous_rows
+            if _clean_markdown_cell(row.get("label"))
+        )
+        lines.append(
+            f"- 未完成项目：{unresolved_labels or '上一交易日判断'}；尚缺：{_judgment_missing_text(unresolved_previous_rows)}。"
+        )
     target_date = _clean_text(panel.get("target_date"))
     lines.append("")
-    lines.append(f"**今日判断（{target_date or '待补事实'}，等待下一交易日验证）**")
+    lines.append(f"**今日判断（{target_date or '日期未提供'}，等待下一交易日验证）**")
     lines.append("| 判断项 | 今日结论 | 下一交易日验证点 |")
     lines.append("|--------|----------|------------------|")
     for row in list(panel.get("today_rows") or []):
         lines.append(
             "| {label} | {today_judgment} | {next_verify} |".format(
                 label=_clean_markdown_cell(row.get("label")),
-                today_judgment=_clean_markdown_cell(row.get("today_judgment"), "待补事实"),
-                next_verify=_clean_markdown_cell(row.get("next_verify"), "待补事实"),
+                today_judgment=_clean_markdown_cell(row.get("today_judgment"), "未形成可复核结论"),
+                next_verify=_clean_markdown_cell(row.get("next_verify"), "下一交易日继续验证"),
             )
         )
     lines.append("")
@@ -1093,7 +1158,7 @@ def render_five_judgment_statistics_lines(stats):
     if start_date and end_date:
         lines.append(f"- 统计范围：{start_date}至{end_date}。")
     else:
-        lines.append("- 统计范围：待补事实。")
+        lines.append("- 统计范围：暂无已结算日期。")
     lines.append("> 历史复盘只统计过去判断，不作为明日新增参与依据。")
     lines.append("")
     lines.append("| 判断项 | 统计口径 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |")
@@ -1101,11 +1166,27 @@ def render_five_judgment_statistics_lines(stats):
     if not rows:
         rows = [{**item, **_summarize_rows([])} for item in JUDGMENT_TYPES]
     for row in rows:
-        result = _clean_text(row.get("latest_result")) or _format_settlement_result(row)
+        result = _normalized_settlement_result(row.get("latest_result"), row)
         missing_fields = "、".join(row.get("missing_fields") or [])
+        latest_reason = _first_text(row.get("latest_reason"), row.get("latest_mistake"))
+        if latest_reason in {
+            "-",
+            "待补事实",
+            "事实不足",
+            "等待复盘",
+            "等待事实",
+        }:
+            latest_reason = ""
+        unresolved_reason = ""
+        if result == "未结算":
+            unresolved_reason = (
+                f"尚缺：{_judgment_missing_text([row])}"
+                if missing_fields
+                else "当前覆盖范围内没有这类已结算记录"
+            )
         reason = _first_text(
-            row.get("latest_reason"),
-            row.get("latest_mistake"),
+            unresolved_reason,
+            latest_reason,
             f"缺少事实：{missing_fields}" if missing_fields else "",
             "符合预期" if result == "正确" else "",
             "-",
@@ -1115,7 +1196,7 @@ def render_five_judgment_statistics_lines(stats):
                 label=_clean_markdown_cell(row.get("label")),
                 metric_definition=_clean_markdown_cell(row.get("metric_definition")),
                 accuracy_pct=_clean_markdown_cell(_format_accuracy(row.get("accuracy_pct"))),
-                latest_result=_clean_markdown_cell(result, "待补事实"),
+                latest_result=_clean_markdown_cell(result, "未结算"),
                 expected=_clean_markdown_cell(row.get("latest_expected"), "-"),
                 actual=_clean_markdown_cell(
                     _compact_review_actual(row.get("judgment_type"), row.get("latest_actual")),

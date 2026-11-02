@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import sys
 import unittest
@@ -11,6 +12,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from storage.postgres_daily_fact_db import (
     POSTGRES_SCHEMA_STATEMENTS,
     PostgresDailyFactDb,
+    _compact_execution_context,
     _compact_margin_pressure,
     _recent_replay_min_trade_date,
 )
@@ -21,6 +23,12 @@ from domains.market_state.market_language_translation import (
     build_market_language_source_projection,
     build_market_language_translation,
     canonical_market_language_hash,
+)
+from report.daily_report_consensus import (
+    build_frozen_batch,
+    build_funnel_records,
+    calculate_consensus,
+    run_consensus_reviews,
 )
 
 
@@ -89,12 +97,16 @@ class _FakeConnection:
     def __init__(self):
         self.cursor_obj = _FakeCursor()
         self.commit_count = 0
+        self.rollback_count = 0
 
     def cursor(self, *args, **kwargs):
         return self.cursor_obj
 
     def commit(self):
         self.commit_count += 1
+
+    def rollback(self):
+        self.rollback_count += 1
 
     def close(self):
         pass
@@ -104,6 +116,93 @@ class _FakeConnection:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+def _consensus_bundle(run_id="postgres-consensus-run"):
+    fixture_path = (
+        ROOT / "tests" / "fixtures" / "daily_report_consensus" / "stable_7_of_10.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    batch = build_frozen_batch(
+        target_date=fixture["target_date"],
+        query_date=fixture["query_date"],
+        formal_input=fixture["formal_input"],
+        selection_workflow=fixture["selection_workflow"],
+        facts=fixture["facts"],
+        required_fact_ids=fixture.get("required_fact_ids", ["market_width"]),
+        decision_cutoff_at=fixture["decision_cutoff_at"],
+        collected_at=fixture["decision_cutoff_at"],
+        run_id=run_id,
+        model_version="fixture-model-v1",
+        review_context={"frozen_sample": fixture["name"]},
+    )
+    reviews = run_consensus_reviews(
+        batch,
+        lambda request: copy.deepcopy(
+            fixture["review_results"][request["sequence"] - 1]
+        ),
+    )
+    consensus = calculate_consensus(batch, reviews)
+    batch["consensus"] = consensus
+    batch["periods"] = {}
+    funnel_records = build_funnel_records(batch, reviews, consensus)
+    return batch, reviews, funnel_records
+
+
+def _cffex_contract_record(product="IF", *, content_hash=None):
+    return {
+        "trade_date": "2026-08-19",
+        "source_date": "2026-08-19",
+        "query_date": "2026-08-19",
+        "product_code": product,
+        "contract_code": f"{product}2608",
+        "close_price": 4587.8,
+        "settlement_price": 4576.6,
+        "previous_settlement_price": 4701.2,
+        "volume": 24035,
+        "open_interest": 26606,
+        "previous_open_interest": 27638,
+        "contract_multiplier": 300 if product in {"IF", "IH"} else 200,
+        "source_url": "http://www.cffex.com.cn/sj/hqsj/rtj/202608/19/index.xml",
+        "content_hash": content_hash or "a" * 64,
+        "source_policy": "cffex.official.index-futures-position.v1",
+    }
+
+
+def _cffex_rank_records(product="IF", *, content_hash=None):
+    common = {
+        "trade_date": "2026-08-19",
+        "source_date": "2026-08-19",
+        "query_date": "2026-08-19",
+        "product_code": product,
+        "contract_code": f"{product}2608",
+        "source_url": f"http://www.cffex.com.cn/sj/ccpm/202608/19/{product}.xml",
+        "content_hash": content_hash or "b" * 64,
+        "source_policy": "cffex.official.index-futures-position.v1",
+    }
+    rows = []
+    values = {
+        "volume": (10978, 1030),
+        "long": (4670, -232),
+        "short": (4747, -66),
+    }
+    for rank_no in range(1, 21):
+        for rank_type in ("volume", "long", "short"):
+            quantity, daily_change = values[rank_type]
+            rows.append(
+                {
+                    **common,
+                    "rank_type": rank_type,
+                    "rank_no": rank_no,
+                    "member_id": f"{rank_no:04d}",
+                    "member_name": (
+                        "中信期货(代客)" if rank_no == 1 else f"会员{rank_no}"
+                    ),
+                    "quantity": quantity if rank_no == 1 else 0,
+                    "daily_change": daily_change if rank_no == 1 else 0,
+                }
+            )
+    return rows
 
 
 class _MemoryDailyFactCursor:
@@ -289,15 +388,21 @@ class _MemoryDailyFactCursor:
                     )
                 }
             ]
-        elif "SELECT stock_code, MAX(high) AS previous_high FROM stock_daily_quotes_recent" in normalized_sql:
+        elif "SELECT stock_code, MAX(high) AS previous_high" in normalized_sql and "FROM stock_daily_quotes_recent" in normalized_sql:
             trade_date = params[0]
             stock_codes = set(params[1:])
             by_code = {}
+            history_days_by_code = {}
             for row in self.state["quotes"].values():
                 if row["trade_date"] < trade_date and row["stock_code"] in stock_codes and float(row["high"]) > 0:
                     by_code[row["stock_code"]] = max(float(row["high"]), by_code.get(row["stock_code"], 0.0))
+                    history_days_by_code.setdefault(row["stock_code"], set()).add(row["trade_date"])
             self.last_rows = [
-                {"stock_code": stock_code, "previous_high": previous_high}
+                {
+                    "stock_code": stock_code,
+                    "previous_high": previous_high,
+                    "history_trade_days": len(history_days_by_code.get(stock_code, set())),
+                }
                 for stock_code, previous_high in by_code.items()
             ]
         elif "SELECT COUNT(*) AS total_count FROM stock_daily_quotes_recent WHERE trade_date = %s" in normalized_sql:
@@ -372,6 +477,99 @@ class _MemoryDailyFactConnection:
 
 
 class PostgresDailyFactDbTest(unittest.TestCase):
+    def test_full_metric_windows_keep_missing_prior_report_day(self):
+        db = PostgresDailyFactDb("postgresql://unit-test", ensure_schema=False)
+        dates = [f"2026-09-{day:02d}" for day in range(1, 25)] + ["2026-10-08"]
+        for key, rows_key, query_name, structured_name, fields in (
+            ("top50_turnover_share_series", "rows", "query_top_turnover_share_series",
+             "_query_structured_top_turnover_share_series",
+             {"top_amount_yi": 2466.677339, "market_amount_yi": 14500.774119, "share_pct": 17.010659698284485}),
+            ("new_high_feedback", "trend_rows", "query_new_high_feedback_series",
+             "_query_structured_new_high_feedback_series", {"new_high_count": 29, "all_a_share_pct": 0.58}),
+        ):
+            with self.subTest(key=key):
+                rows = [{"trade_date": day, **fields} for day in dates]
+                prior = {rows_key: [
+                    {"trade_date": "2026-09-30", "source_date": "2026-09-30", **fields},
+                    {"trade_date": "2026-10-09", **fields},
+                    {"trade_date": "2026-09-29", "source_date": "2026-10-08", **fields},
+                ]}
+                current = {rows_key: copy.deepcopy(rows)}
+                structured = {"source": "storage.turnover_rank_daily", "rows": rows} if rows_key == "rows" else rows
+                before = copy.deepcopy((prior, current, structured))
+                history = [("2026-10-07", prior)]
+                with patch.object(db, structured_name, return_value=structured), patch.object(
+                    db, "_load_daily_report_fact_values_before", return_value=history,
+                ) as previous, patch.object(db, "_load_daily_report_fact_value", return_value=current):
+                    result = getattr(db, query_name)("2026-10-08", window_days=25)
+                merged = result["rows"] if isinstance(result, dict) else result
+                self.assertEqual(len(merged), 25)
+                self.assertEqual([row["trade_date"] for row in merged][-2:], ["2026-09-30", "2026-10-08"])
+                self.assertNotIn("2026-09-29", [row["trade_date"] for row in merged])
+                self.assertEqual(merged[-1], rows[-1])
+                previous.assert_called_once_with("2026-10-08", key, limit=100)
+                self.assertEqual((prior, current, structured), before)
+
+    def test_metric_history_reaches_past_a_hole_in_the_nearest_report(self):
+        """One unpersisted session must not poison every later rolling window."""
+        db = PostgresDailyFactDb("postgresql://unit-test", ensure_schema=False)
+        fields = {"top_amount_yi": 2466.677339, "market_amount_yi": 14500.774119, "share_pct": 17.01}
+        # The nearest report looks complete but skipped 2026-09-30; an older
+        # report still holds that day, so the merged window must recover it.
+        nearest_dates = [f"2026-09-{day:02d}" for day in range(1, 25)]
+        nearest_dates = [day for day in nearest_dates if day != "2026-09-30"] + ["2026-10-08"]
+        nearest = {"rows": [{"trade_date": day, **fields} for day in sorted(nearest_dates)]}
+        older = {"rows": [{"trade_date": "2026-09-30", **fields}]}
+        structured = {"source": "storage.turnover_rank_daily", "rows": [
+            {"trade_date": "2026-10-08", **fields},
+        ]}
+        history = [("2026-10-07", nearest), ("2026-09-30", older)]
+
+        with patch.object(db, "_query_structured_top_turnover_share_series", return_value=structured), patch.object(
+            db, "_load_daily_report_fact_values_before", return_value=history,
+        ), patch.object(db, "_load_daily_report_fact_value", return_value=None):
+            result = db.query_top_turnover_share_series("2026-10-08", window_days=25)
+
+        dates = [row["trade_date"] for row in result["rows"]]
+        self.assertIn("2026-09-30", dates, "the skipped session must be recovered from an older report")
+        self.assertEqual(len(dates), 25)
+        self.assertEqual(dates[-1], "2026-10-08")
+
+    def test_metric_history_reports_a_window_it_cannot_fill(self):
+        db = PostgresDailyFactDb("postgresql://unit-test", ensure_schema=False)
+        fields = {"top_amount_yi": 2466.677339, "market_amount_yi": 14500.774119, "share_pct": 17.01}
+        sparse = {"rows": [{"trade_date": "2026-10-08", **fields}]}
+
+        with patch.object(db, "_query_structured_top_turnover_share_series", return_value={
+            "source": "storage.turnover_rank_daily", "rows": [{"trade_date": "2026-10-08", **fields}],
+        }), patch.object(db, "_load_daily_report_fact_values_before", return_value=[("2026-10-07", sparse)]), patch.object(
+            db, "_load_daily_report_fact_value", return_value=None,
+        ):
+            result = db.query_top_turnover_share_series("2026-10-08", window_days=25)
+
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertTrue(
+            any("window_incomplete" in part for part in result["source"].split("+")),
+            result["source"],
+        )
+
+    def test_metric_history_uses_structured_same_day_and_handles_empty_structured(self):
+        db = PostgresDailyFactDb("postgresql://unit-test", ensure_schema=False)
+        prior = {"trend_rows": [{"trade_date": "2026-09-30", "new_high_count": 29, "all_a_share_pct": 0.58}]}
+        current = {"trend_rows": [{"trade_date": "2026-10-08", "new_high_count": 1, "all_a_share_pct": 0.02}]}
+        exact = {"trade_date": "2026-10-08", "new_high_count": 30, "all_a_share_pct": 0.54}
+        for structured in ([], [exact]):
+            with self.subTest(structured=bool(structured)), patch.object(
+                db, "_query_structured_new_high_feedback_series", return_value=structured,
+            ), patch.object(
+                db, "_load_daily_report_fact_values_before", return_value=[("2026-10-07", prior)],
+            ), patch.object(
+                db, "_load_daily_report_fact_value", return_value=current,
+            ):
+                result = db.query_new_high_feedback_series("2026-10-08")
+            self.assertEqual([row["trade_date"] for row in result], ["2026-09-30", "2026-10-08"])
+            self.assertEqual(result[-1]["new_high_count"], 30 if structured else 1)
+
     def test_schema_has_three_migration_batches_without_blob_primary_store(self):
         schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
 
@@ -407,6 +605,9 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "trend_fates",
             "cycle_acceptance_reviews",
             "runtime_cache_entries",
+            "daily_report_consensus_batches",
+            "daily_report_consensus_reviews",
+            "daily_report_consensus_funnel_records",
         ):
             self.assertIn(f"create table if not exists {table_name}", schema)
         for table_name in (
@@ -417,6 +618,234 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             self.assertIn(f"create table if not exists {table_name}", schema)
 
         self.assertNotIn("payload_json", schema)
+
+    def test_consensus_schema_is_append_only_and_keeps_time_roles(self):
+        schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
+
+        self.assertIn("primary key (run_id, sequence)", schema)
+        self.assertIn("check (sequence between 1 and 10)", schema)
+        self.assertIn("frozen_at timestamptz not null", schema)
+        self.assertIn("decision_cutoff_at timestamptz not null", schema)
+        self.assertIn("decision_at timestamptz", schema)
+        self.assertIn(
+            "idx_daily_report_consensus_batches_target_date",
+            schema,
+        )
+        self.assertIn(
+            "idx_daily_report_consensus_batches_input_hash",
+            schema,
+        )
+        self.assertIn(
+            "idx_daily_report_consensus_batches_proposal_hash",
+            schema,
+        )
+
+    def test_appends_consensus_batch_reviews_and_funnel_in_one_transaction(self):
+        batch, reviews, funnel_records = _consensus_bundle()
+        conn = _FakeConnection()
+        conn.cursor_obj.rows = [(batch["run_id"],)]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        file_hashes = {
+            "batch.json": "1" * 64,
+            "reviews.jsonl": "2" * 64,
+            "summary.txt": "3" * 64,
+            "run.jsonl": "4" * 64,
+            "funnel.jsonl": "5" * 64,
+        }
+
+        result = db.append_daily_report_consensus(
+            batch,
+            reviews,
+            funnel_records,
+            file_hashes=file_hashes,
+        )
+
+        self.assertEqual(result["status"], "inserted")
+        self.assertTrue(result["write_performed"])
+        self.assertEqual(result["review_count"], 10)
+        self.assertEqual(result["funnel_count"], len(funnel_records))
+        self.assertEqual(conn.commit_count, 1)
+        self.assertEqual(conn.rollback_count, 0)
+        calls = conn.cursor_obj.calls
+        batch_insert = next(
+            call for call in calls if "INSERT INTO daily_report_consensus_batches" in call[1]
+        )
+        self.assertIn("ON CONFLICT (run_id) DO NOTHING", batch_insert[1])
+        review_insert = next(
+            call
+            for call in calls
+            if call[0] == "executemany"
+            and "INSERT INTO daily_report_consensus_reviews" in call[1]
+        )
+        funnel_insert = next(
+            call
+            for call in calls
+            if call[0] == "executemany"
+            and "INSERT INTO daily_report_consensus_funnel_records" in call[1]
+        )
+        self.assertEqual(len(review_insert[2]), 10)
+        self.assertEqual(len(funnel_insert[2]), len(funnel_records))
+        self.assertNotIn("DO UPDATE", review_insert[1])
+        self.assertNotIn("DO UPDATE", funnel_insert[1])
+
+    def test_duplicate_consensus_run_is_rejected_without_touching_existing_rows(self):
+        batch, reviews, funnel_records = _consensus_bundle()
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.append_daily_report_consensus(batch, reviews, funnel_records)
+
+        self.assertEqual(result["status"], "conflict")
+        self.assertFalse(result["write_performed"])
+        self.assertEqual(result["reason"], "run_id_exists")
+        self.assertEqual(conn.commit_count, 0)
+        self.assertEqual(conn.rollback_count, 1)
+        self.assertFalse(
+            any(call[0] == "executemany" for call in conn.cursor_obj.calls)
+        )
+
+    def test_consensus_write_rolls_back_when_a_child_insert_fails(self):
+        class FailingCursor(_FakeCursor):
+            def executemany(self, sql, rows):
+                super().executemany(sql, rows)
+                if "daily_report_consensus_reviews" in str(sql):
+                    raise RuntimeError("review insert failed")
+                return self
+
+        batch, reviews, funnel_records = _consensus_bundle()
+        conn = _FakeConnection()
+        conn.cursor_obj = FailingCursor()
+        conn.cursor_obj.rows = [(batch["run_id"],)]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "review insert failed"):
+            db.append_daily_report_consensus(batch, reviews, funnel_records)
+
+        self.assertEqual(conn.commit_count, 0)
+        self.assertEqual(conn.rollback_count, 1)
+
+    def test_consensus_write_validates_all_ten_sequences_before_opening_connection(self):
+        batch, reviews, funnel_records = _consensus_bundle()
+        reviews.pop()
+        connection_count = 0
+
+        def connect():
+            nonlocal connection_count
+            connection_count += 1
+            return _FakeConnection()
+
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=connect,
+            ensure_schema=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "1 到 10"):
+            db.append_daily_report_consensus(batch, reviews, funnel_records)
+
+        self.assertEqual(connection_count, 0)
+
+    def test_queries_consensus_by_target_run_and_sequence(self):
+        batch, reviews, funnel_records = _consensus_bundle()
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "run_id": batch["run_id"],
+                    "target_date": batch["target_date"],
+                    "query_date": batch["query_date"],
+                    "input_hash": batch["input_hash"],
+                    "proposal_hash": batch["proposal_hash"],
+                    "record_hash": "6" * 64,
+                    "schema_version": batch["schema_version"],
+                    "contract_version": batch["contract_version"],
+                    "model_version": batch["model_version"],
+                    "prompt_version": batch["prompt_version"],
+                    "prompt_hash": batch["prompt_hash"],
+                    "proposal_kind": batch["proposal"]["kind"],
+                    "proposal_stock_code": "600001",
+                    "proposal_stock_name": "甲公司",
+                    "proposal_sector": "示例板块",
+                    "frozen_at": batch["frozen_at"],
+                    "decision_cutoff_at": batch["decision_cutoff_at"],
+                    "input_status": "ready",
+                    "consensus_status": "stable_object",
+                    "stable_consensus": True,
+                    "confirmation_count": 7,
+                    "denial_count": 3,
+                    "denominator": 10,
+                    "failure_count": 0,
+                    "reason_codes": "[]",
+                    "periods": '{"today":{"status":"complete"}}',
+                    "batch_file_sha256": "1" * 64,
+                }
+            ],
+            [
+                {
+                    **reviews[2],
+                    "run_id": batch["run_id"],
+                    "record_hash": "7" * 64,
+                    "missing_facts": "[]",
+                    "alternative_mentions": "[]",
+                    "reason_codes": "[]",
+                }
+            ],
+            [
+                {
+                    **funnel_records[0],
+                    "run_id": batch["run_id"],
+                    "record_hash": "8" * 64,
+                    "reason_codes": "[]",
+                    "payload": '{"fact_hash":"abc"}',
+                }
+            ],
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        batches = db.query_daily_report_consensus_batches(
+            batch["target_date"], run_id=batch["run_id"]
+        )
+        selected_review = db.query_daily_report_consensus_reviews(
+            batch["run_id"], sequence=3
+        )
+        funnel = db.query_daily_report_consensus_funnel_records(
+            run_id=batch["run_id"], target_date=batch["target_date"]
+        )
+
+        self.assertEqual(batches[0]["consensus"]["confirmation_count"], 7)
+        self.assertEqual(batches[0]["periods"]["today"]["status"], "complete")
+        self.assertEqual(selected_review[0]["sequence"], 3)
+        self.assertEqual(selected_review[0]["missing_facts"], [])
+        self.assertEqual(funnel[0]["run_id"], batch["run_id"])
+        self.assertEqual(funnel[0]["payload"], {"fact_hash": "abc"})
+        execute_calls = [
+            call for call in conn.cursor_obj.calls if call[0] == "execute"
+        ]
+        self.assertEqual(
+            execute_calls[0][2],
+            (batch["target_date"], batch["run_id"], 100),
+        )
+        self.assertEqual(execute_calls[1][2], (batch["run_id"], 3))
+        self.assertEqual(
+            execute_calls[2][2],
+            (batch["run_id"], batch["target_date"]),
+        )
 
     def test_stock_daily_quotes_rebuild_top50_share_series(self):
         conn = _MemoryDailyFactConnection()
@@ -458,7 +887,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(inserted, 2)
         self.assertEqual(total["total_amount_yi"], 600.0)
         self.assertEqual([row["stock_code"] for row in ranks], ["601138", "601991"])
-        self.assertEqual(series["source"], "storage.turnover_rank_daily")
+        self.assertTrue(series["source"].startswith("storage.turnover_rank_daily+"))
+        self.assertTrue(
+            any("window_incomplete" in part for part in series["source"].split("+")),
+            "a one-day window must advertise itself as incomplete",
+        )
         self.assertEqual(series["rows"][0]["trade_date"], "2026-06-08")
         self.assertEqual(series["rows"][0]["top_amount_yi"], 600.0)
         self.assertEqual(series["rows"][0]["market_amount_yi"], 600.0)
@@ -567,10 +1000,14 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         db.rebuild_market_daily_total("2026-06-08", source_run_id=11)
         db.rebuild_turnover_rank_daily("2026-06-08", rank_limit=100, source_run_id=11)
 
+        history = [("2026-06-05", {
+            "source": "postgres.daily_report_facts.top50_turnover_share_series",
+            "rows": previous_rows,
+        })]
         with patch.object(
             PostgresDailyFactDb,
-            "_load_daily_report_fact_value",
-            return_value={"source": "postgres.daily_report_facts.top50_turnover_share_series", "rows": previous_rows},
+            "_load_daily_report_fact_values_before",
+            return_value=history,
         ):
             series = db.query_top_turnover_share_series("2026-06-08", window_days=25, limit=50)
 
@@ -598,16 +1035,6 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             }
             for index, trade_date in enumerate(_RECENT_25_TRADING_DATES_THROUGH_2026_05_29)
         ]
-        encoded_rows = []
-        for index, row in enumerate(previous_rows):
-            for key, value in row.items():
-                encoded_rows.append((
-                    f"k:27:top50_turnover_share_series/k:4:rows/#{index}/k:{len(key)}:{key}",
-                    value if isinstance(value, str) else "",
-                    None if isinstance(value, str) else value,
-                    None,
-                    "text" if isinstance(value, str) else "number",
-                ))
         db.upsert_stock_daily_quotes_recent(
             [
                 {
@@ -625,28 +1052,16 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         )
         db.rebuild_market_daily_total("2026-06-08", source_run_id=11)
         db.rebuild_turnover_rank_daily("2026-06-08", rank_limit=100, source_run_id=11)
-        original_execute = _MemoryDailyFactCursor.execute
+        history = [("2026-06-05", {
+            "source": "postgres.daily_report_facts.top50_turnover_share_series",
+            "rows": previous_rows,
+        })]
 
-        def execute_with_previous_report_window(cursor, sql, params=None):
-            normalized_sql = " ".join(str(sql).split())
-            if "SELECT max(trade_date) AS trade_date FROM daily_report_fact_fields" in normalized_sql:
-                cursor.last_rows = [{"trade_date": "2026-06-05"}]
-                return cursor
-            if "FROM daily_report_fact_fields" in normalized_sql and "field_path LIKE" in normalized_sql:
-                cursor.last_rows = [
-                    {
-                        "field_path": field_path,
-                        "value_text": value_text,
-                        "value_number": value_number,
-                        "value_bool": value_bool,
-                        "value_kind": value_kind,
-                    }
-                    for field_path, value_text, value_number, value_bool, value_kind in encoded_rows
-                ]
-                return cursor
-            return original_execute(cursor, sql, params)
-
-        with patch.object(_MemoryDailyFactCursor, "execute", execute_with_previous_report_window):
+        with patch.object(
+            PostgresDailyFactDb,
+            "_load_daily_report_fact_values_before",
+            return_value=history,
+        ):
             series = db.query_top_turnover_share_series("2026-06-08", window_days=25, limit=50)
 
         self.assertEqual(series["source"], "storage.turnover_rank_daily+postgres.daily_report_facts.top50_turnover_share_series")
@@ -694,6 +1109,16 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         quote_rows.extend(
             [
                 {
+                    "trade_date": "2026-05-29",
+                    "ts_code": "300001.SZ",
+                    "stock_code": "300001",
+                    "name": "短历史样本",
+                    "high": 10.0,
+                    "close": 9.8,
+                    "pct_chg": 1.0,
+                    "amount_yi": 10.0,
+                },
+                {
                     "trade_date": "2026-06-08",
                     "ts_code": "601138.SH",
                     "stock_code": "601138",
@@ -712,6 +1137,16 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     "close": 8.2,
                     "pct_chg": -1.0,
                     "amount_yi": 80.0,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "300001.SZ",
+                    "stock_code": "300001",
+                    "name": "短历史样本",
+                    "high": 11.0,
+                    "close": 10.8,
+                    "pct_chg": 10.0,
+                    "amount_yi": 10.0,
                 },
             ]
         )
@@ -733,6 +1168,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertTrue(feedback["available"])
         self.assertEqual(feedback["source"], "storage.stock_daily_quotes_recent.high_break")
         self.assertEqual(feedback["new_high_count"], 1)
+        self.assertEqual(feedback["excluded_counts"]["insufficient_stock_history"], 1)
+        self.assertNotIn("300001", [row["code"] for row in feedback["top_stocks"]])
         self.assertEqual(feedback["leading_sectors"], "AI算力基础设施")
         self.assertEqual(feedback["trend_rows"][-1]["trade_date"], "2026-06-08")
         self.assertEqual(stored["trade_date"], "2026-06-08")
@@ -1094,6 +1531,282 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertNotIn("index_daily_bars(\n        payload", schema)
         self.assertNotIn("index_minute_bars(\n        payload", schema)
 
+    def test_cffex_tables_are_structured_with_provenance_and_natural_keys(self):
+        schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
+
+        self.assertIn("create table if not exists cffex_index_futures_contract_daily", schema)
+        self.assertIn("primary key (trade_date, product_code, contract_code)", schema)
+        self.assertIn("create table if not exists cffex_index_futures_member_rank_daily", schema)
+        self.assertIn(
+            "primary key (trade_date, product_code, contract_code, rank_type, rank_no)",
+            schema,
+        )
+        for column in ("source_url", "source_date", "query_date", "content_hash", "source_policy"):
+            self.assertIn(column, schema)
+        self.assertIn("member_id text not null", schema)
+
+    def test_replace_cffex_day_atomically_replaces_changed_product(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [[], []]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.replace_cffex_index_futures_day(
+            "2026-08-19",
+            [_cffex_contract_record()],
+            _cffex_rank_records(),
+        )
+
+        self.assertEqual(result["replaced_products"], ["IF"])
+        self.assertEqual(result["contract_row_count"], 1)
+        self.assertEqual(result["member_rank_row_count"], 60)
+        self.assertEqual(conn.commit_count, 1)
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("DELETE FROM cffex_index_futures_member_rank_daily", sql)
+        self.assertIn("DELETE FROM cffex_index_futures_contract_daily", sql)
+        self.assertIn("INSERT INTO cffex_index_futures_contract_daily", sql)
+        self.assertIn("INSERT INTO cffex_index_futures_member_rank_daily", sql)
+
+    def test_replace_cffex_day_same_hash_and_counts_keeps_existing_rows_untouched(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [
+            [_cffex_contract_record()],
+            _cffex_rank_records(),
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.replace_cffex_index_futures_day(
+            "2026-08-19",
+            [_cffex_contract_record()],
+            _cffex_rank_records(),
+        )
+
+        self.assertEqual(result["replaced_products"], [])
+        self.assertEqual(result["unchanged_products"], ["IF"])
+        mutation_sql = "\n".join(
+            call[1]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" or "DELETE FROM" in call[1]
+        )
+        self.assertEqual(mutation_sql, "")
+        self.assertEqual(conn.commit_count, 1)
+
+    def test_replace_cffex_day_same_hash_and_count_but_changed_key_replaces_product(self):
+        conn = _FakeConnection()
+        existing_contract = _cffex_contract_record()
+        existing_contract["contract_code"] = "IF2609"
+        existing_ranks = _cffex_rank_records()
+        for row in existing_ranks:
+            row["contract_code"] = "IF2609"
+        conn.cursor_obj.row_batches = [[existing_contract], existing_ranks]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.replace_cffex_index_futures_day(
+            "2026-08-19",
+            [_cffex_contract_record()],
+            _cffex_rank_records(),
+        )
+
+        self.assertEqual(result["replaced_products"], ["IF"])
+        self.assertEqual(result["unchanged_products"], [])
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("DELETE FROM cffex_index_futures_member_rank_daily", sql)
+
+    def test_replace_cffex_day_rejects_incomplete_rank_scope_before_transaction(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "排名不是1-20连续名次"):
+            db.replace_cffex_index_futures_day(
+                "2026-08-19",
+                [_cffex_contract_record()],
+                _cffex_rank_records()[:3],
+            )
+
+        self.assertEqual(conn.cursor_obj.calls, [])
+        self.assertEqual(conn.commit_count, 0)
+
+    def test_replace_cffex_day_rejects_invalid_row_before_opening_transaction(self):
+        conn = _FakeConnection()
+        invalid = _cffex_contract_record()
+        invalid["settlement_price"] = "not-a-number"
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "结算价"):
+            db.replace_cffex_index_futures_day(
+                "2026-08-19",
+                [invalid],
+                _cffex_rank_records(),
+            )
+
+        self.assertEqual(conn.cursor_obj.calls, [])
+        self.assertEqual(conn.commit_count, 0)
+
+    def test_query_cffex_history_limits_distinct_dates_before_loading_all_rows(self):
+        conn = _FakeConnection()
+        contract = _cffex_contract_record()
+        rank = _cffex_rank_records()[1]
+        conn.cursor_obj.row_batches = [
+            [{"trade_date": "2026-08-19"}, {"trade_date": "2026-08-18"}],
+            [contract],
+            [rank],
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.query_cffex_index_futures_history("2026-08-19", window_days=60)
+
+        self.assertEqual(result["trade_dates"], ["2026-08-18", "2026-08-19"])
+        self.assertEqual(result["contract_rows"][0]["contract_code"], "IF2608")
+        self.assertEqual(result["member_rank_rows"][0]["rank_type"], "long")
+        first_sql = conn.cursor_obj.calls[0]
+        self.assertIn("SELECT DISTINCT trade_date", first_sql[1])
+        self.assertIn("ORDER BY trade_date DESC LIMIT %s", first_sql[1])
+        self.assertEqual(first_sql[2], ("2026-08-19", 60))
+        self.assertIn("trade_date = ANY(%s)", conn.cursor_obj.calls[1][1])
+
+    def test_query_cffex_history_summaries_aggregates_sixty_days_in_postgres(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.rows = [
+            {
+                "trade_date": "2026-08-19",
+                "member_net_short_change": 3130,
+                "member_net_short_notional": 987654321.0,
+                "top20_cross_section_net_short": 119202,
+                "product_count": 4,
+                "contract_count": 15,
+                "complete_scope": True,
+            }
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.query_cffex_index_futures_history_summaries(
+            "2026-08-19", window_days=60
+        )
+
+        self.assertEqual(result["requested_window"], 60)
+        self.assertEqual(result["source"], "postgresql.cffex_index_futures.summary")
+        self.assertEqual(
+            result["summaries"],
+            [
+                {
+                    "trade_date": "2026-08-19",
+                    "member_net_short_change": 3130.0,
+                    "member_net_short_notional": 987654321.0,
+                    "top20_cross_section_net_short": 119202.0,
+                    "product_count": 4,
+                    "contract_count": 15,
+                    "complete_scope": True,
+                }
+            ],
+        )
+        sql_call = conn.cursor_obj.calls[-1]
+        self.assertIn("WITH recent_dates AS", sql_call[1])
+        self.assertIn("ORDER BY trade_date DESC LIMIT %s", sql_call[1])
+        self.assertIn("volume_count = 20", sql_call[1])
+        self.assertIn("volume_distinct_rank_count = 20", sql_call[1])
+        self.assertIn("volume_min_rank = 1", sql_call[1])
+        self.assertIn("volume_max_rank = 20", sql_call[1])
+        self.assertIn("long_count = 20", sql_call[1])
+        self.assertIn("long_distinct_rank_count = 20", sql_call[1])
+        self.assertIn("long_min_rank = 1", sql_call[1])
+        self.assertIn("long_max_rank = 20", sql_call[1])
+        self.assertIn("short_count = 20", sql_call[1])
+        self.assertIn("short_distinct_rank_count = 20", sql_call[1])
+        self.assertIn("short_min_rank = 1", sql_call[1])
+        self.assertIn("short_max_rank = 20", sql_call[1])
+        self.assertIn("product_count = 4", sql_call[1])
+        self.assertIn(
+            "THEN member_net_short_change END AS member_net_short_change",
+            sql_call[1],
+        )
+        self.assertIn(
+            "THEN member_net_short_notional END AS member_net_short_notional",
+            sql_call[1],
+        )
+        self.assertIn(
+            "THEN top20_cross_section_net_short END AS top20_cross_section_net_short",
+            sql_call[1],
+        )
+        self.assertEqual(sql_call[2], ("2026-08-19", 60))
+
+    def test_query_stock_daily_quote_history_returns_oldest_to_newest(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.rows = [
+            {
+                "trade_date": "2026-08-05",
+                "ts_code": "000001.SZ",
+                "stock_code": "000001",
+                "market": "SZ",
+                "name": "平安银行",
+                "open": 12.1,
+                "high": 12.5,
+                "low": 12.0,
+                "close": 12.4,
+                "pct_chg": 2.1,
+                "vol": 500.0,
+                "amount_yi": 9.5,
+                "source_run_id": 7,
+            },
+            {
+                "trade_date": "2026-08-04",
+                "ts_code": "000001.SZ",
+                "stock_code": "000001",
+                "market": "SZ",
+                "name": "平安银行",
+                "open": 12.0,
+                "high": 12.2,
+                "low": 11.9,
+                "close": 12.1,
+                "pct_chg": 0.8,
+                "vol": 450.0,
+                "amount_yi": 8.0,
+                "source_run_id": 7,
+            },
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        rows = db.query_stock_daily_quote_history("sz.000001", "2026-08-05", limit=2)
+
+        self.assertEqual([row["date"] for row in rows], ["2026-08-04", "2026-08-05"])
+        self.assertEqual(rows[-1]["source_date"], "2026-08-05")
+        self.assertEqual(rows[-1]["data_source"], "postgresql.stock_daily_quotes_recent")
+        self.assertEqual(rows[-1]["amount_yi"], 9.5)
+        self.assertEqual(rows[-1]["amount"], 950000000.0)
+        sql_call = conn.cursor_obj.calls[-1]
+        self.assertIn("ORDER BY trade_date DESC LIMIT %s", sql_call[1])
+        self.assertEqual(sql_call[2], ("000001", "2026-08-05", 2))
+
     def test_index_daily_bars_round_trip_as_structured_rows(self):
         conn = _FakeConnection()
         db = PostgresDailyFactDb(
@@ -1156,6 +1869,27 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual([row["date"] for row in rows], ["2026-05-28", "2026-05-29"])
         self.assertEqual(rows[0]["close"], 4060.0)
         self.assertEqual(rows[0]["data_source"], "postgresql.index_daily_bars")
+
+    def test_query_index_daily_bars_can_limit_after_filtering_invalid_closes(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.query_index_daily_bars(
+            "sz399006",
+            "2026-08-12",
+            window_days=25,
+            finite_positive_close_only=True,
+        )
+
+        sql_call = conn.cursor_obj.calls[-1]
+        self.assertIn("close > 0", sql_call[1])
+        self.assertIn("close < 'Infinity'::double precision", sql_call[1])
+        self.assertLess(sql_call[1].index("close > 0"), sql_call[1].index("LIMIT %s"))
+        self.assertEqual(sql_call[2], ("sz399006", "2026-08-12", 25))
 
     def test_import_daily_report_facts_writes_current_index_daily_bars(self):
         conn = _FakeConnection()
@@ -2704,6 +3438,58 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
         self.assertEqual(loaded["field_count"], 22)
 
+    def test_compact_execution_context_preserves_candidate_inputs(self):
+        candidates = [
+            {
+                "code": "000510",
+                "name": "新金路",
+                "sector": "化工原料",
+                "pattern": "放量大阳线",
+                "volume": 123456789,
+                "score": 72,
+                "source": "涨停池",
+                "change": 10.03,
+                "close": 16.12,
+                "raw_detail": {"skip": True},
+                "recent_bars": [{"close": 16.12}],
+            },
+            {
+                "code": "002428",
+                "name": "云南锗业",
+                "pattern": "T字板",
+                "volume": 2573391856,
+            },
+        ]
+        watchlist = [
+            {
+                "code": "603061",
+                "name": "金海通",
+                "pattern": "大阳线",
+                "volume": 424510032,
+                "debug_payload": {"skip": True},
+            }
+        ]
+
+        compact = _compact_execution_context(
+            {
+                "candidates": candidates,
+                "watchlist": watchlist,
+                "data": {"huge_cache": "skip"},
+            }
+        )
+
+        self.assertEqual([item["code"] for item in compact["candidates"]], ["000510", "002428"])
+        self.assertEqual(compact["candidates"][0]["pattern"], "放量大阳线")
+        self.assertEqual(compact["candidates"][0]["volume"], 123456789)
+        self.assertEqual(compact["candidates"][0]["score"], 72)
+        self.assertEqual(compact["candidates"][0]["source"], "涨停池")
+        self.assertEqual(compact["candidates"][0]["change"], 10.03)
+        self.assertEqual(compact["watchlist"][0]["code"], "603061")
+        self.assertNotIn("raw_detail", compact["candidates"][0])
+        self.assertNotIn("recent_bars", compact["candidates"][0])
+        self.assertNotIn("debug_payload", compact["watchlist"][0])
+        self.assertNotIn("data", compact)
+
     def test_index_validation_survives_fact_round_trip_and_preflight_rechecks_it(self):
         values = {
             "上证指数": ("000001", 3913.7940, 3996.1616, -2.0612),
@@ -3504,6 +4290,109 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertTrue(any("sniper_target_derivation" in path and "final_action" in path for path in field_paths))
         self.assertTrue(any("execution_stage_context" in path and "selection_workflow" in path for path in field_paths))
         self.assertTrue(any("market_research_snapshot" in path and "final_target_resolution" in path for path in field_paths))
+
+    def test_daily_report_fact_projection_round_trips_formal_decision_roots(self):
+        target_date = "2026-08-21"
+        candidate_facts = {
+            "schema_version": "candidate_decision_evidence_facts.v1",
+            "report_date": target_date,
+            "query_date": target_date,
+            "source_date": target_date,
+            "available_at": f"{target_date}T15:30:00+08:00",
+            "collected_at": f"{target_date}T17:55:00+08:00",
+            "decision_cutoff_at": f"{target_date}T18:00:00+08:00",
+            "artifact_hash": "a" * 64,
+            "candidates": [],
+        }
+        formal_input = {
+            "schema_version": "formal_decision_input.v1",
+            "report_date": target_date,
+            "source_valid": True,
+            "input_hash": "b" * 64,
+            "trade_dates": [target_date],
+        }
+        formal_account = {
+            "schema_version": "formal_account_decision.v1",
+            "report_date": target_date,
+            "decision_at": f"{target_date}T18:05:00+08:00",
+            "decision_hash": "c" * 64,
+        }
+        decision_freeze = {
+            "schema_version": "decision_product_freeze.v1",
+            "target_date": target_date,
+            "source_dates": {"formal_decision_input": target_date},
+            "decision_projection_hash": "e" * 64,
+            "freeze_hash": "d" * 64,
+        }
+        expected = {
+            "candidate_decision_evidence_facts": candidate_facts,
+            "formal_decision_input": formal_input,
+            "formal_account_decision": formal_account,
+            "decision_product_freeze": decision_freeze,
+        }
+        write_conn = _FakeConnection()
+        writer = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: write_conn,
+            ensure_schema=False,
+        )
+
+        writer.save_daily_report_snapshot(target_date, expected)
+
+        inserted = next(
+            call[2]
+            for call in write_conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        field_paths = {row[1] for row in inserted}
+        for root in expected:
+            self.assertTrue(any(root in path for path in field_paths), root)
+
+        read_conn = _FakeConnection()
+        read_conn.cursor_obj.rows = [
+            (row[1], row[2], row[3], row[4], row[5])
+            for row in inserted
+        ]
+        reader = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: read_conn,
+            ensure_schema=False,
+        )
+        with patch.object(
+            reader,
+            "_enrich_loaded_report_data_from_structured_tables",
+            side_effect=lambda cursor, trade_date, data: (data, {}),
+        ), patch.object(reader, "query_monthly_account_ledger", return_value=None):
+            loaded = reader.load_daily_report_snapshot(target_date)["data"]
+
+        self.assertEqual(
+            loaded["candidate_decision_evidence_facts"]["artifact_hash"],
+            candidate_facts["artifact_hash"],
+        )
+        self.assertEqual(
+            loaded["candidate_decision_evidence_facts"]["decision_cutoff_at"],
+            candidate_facts["decision_cutoff_at"],
+        )
+        self.assertEqual(
+            loaded["formal_decision_input"]["input_hash"],
+            formal_input["input_hash"],
+        )
+        self.assertEqual(
+            loaded["formal_account_decision"]["decision_hash"],
+            formal_account["decision_hash"],
+        )
+        self.assertEqual(
+            loaded["formal_account_decision"]["decision_at"],
+            formal_account["decision_at"],
+        )
+        self.assertEqual(
+            loaded["decision_product_freeze"]["freeze_hash"],
+            decision_freeze["freeze_hash"],
+        )
+        self.assertEqual(
+            loaded["decision_product_freeze"]["source_dates"],
+            decision_freeze["source_dates"],
+        )
 
     def test_market_language_writer_uses_exact_source_policy_and_round_trips_structure(self):
         projection = build_market_language_source_projection(

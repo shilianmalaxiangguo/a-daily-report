@@ -128,14 +128,16 @@ def _extract_extreme_conviction_list(data, source_report_markdown=""):
         if markdown_candidates:
             return markdown_candidates
     data = data or {}
-    contexts = [
-        data.get("execution_stage_context") or {},
-        data.get("step2_bundle") or {},
-    ]
-    for context in contexts:
-        rows = context.get("extreme_conviction_list") if isinstance(context, dict) else None
-        if rows:
-            return list(rows)
+    sources = (
+        data,
+        data.get("execution_stage_context"),
+        data.get("step2_bundle"),
+    )
+    for source in sources:
+        if not isinstance(source, dict) or "extreme_conviction_list" not in source:
+            continue
+        rows = source.get("extreme_conviction_list")
+        return list(rows) if isinstance(rows, list) else []
     artifacts = data.get("decision_ledger_artifacts") or {}
     snapshot = artifacts.get("snapshot") if isinstance(artifacts, dict) else {}
     cases = snapshot.get("cases") if isinstance(snapshot, dict) else None
@@ -983,10 +985,14 @@ def _account_state_from_report_data(data, source=""):
     summary = personal_context.get("existing_position_summary")
     if not isinstance(summary, dict):
         summary = data.get("existing_position_summary")
-    if data.get("position_context_provided") is True and not (
-        isinstance(summary, dict) and summary.get("has_position")
-    ):
+    fact_status = position_fact_status(
+        summary,
+        context_provided=data.get("position_context_provided") is True,
+    )
+    if fact_status == "none":
         return _account_state_empty(source, "postgres_position_context")
+    if fact_status in {"unknown", "pending_confirmation"}:
+        return _account_state_unknown(source, "postgres_position_context_unconfirmed")
     return _account_state_unknown(source, "postgres_position_context_missing")
 
 
@@ -1683,6 +1689,26 @@ def render_position_strategy_report(
 ):
     data = dict(data or {})
     effective_positions = list(positions or [])
+    if _current_report_blocks_new_entry(data):
+        inherited_summary = existing_position_summary_from_context(data)
+        has_inherited_position = any(
+            is_inferred_previous_report_position(position)
+            for position in effective_positions
+            if isinstance(position, dict)
+        )
+        if is_inferred_previous_report_position(inherited_summary) or has_inherited_position:
+            effective_positions = [
+                position
+                for position in effective_positions
+                if not is_inferred_previous_report_position(position)
+            ]
+            personal_context = data.get("personal_position_context")
+            if isinstance(personal_context, dict):
+                personal_context = dict(personal_context)
+                personal_context.pop("existing_position_summary", None)
+                data["personal_position_context"] = personal_context
+            data.pop("existing_position_summary", None)
+            data["position_context_provided"] = bool(effective_positions)
     if not effective_positions:
         effective_positions = _positions_from_existing_position_context(data)
     if source_report_markdown:

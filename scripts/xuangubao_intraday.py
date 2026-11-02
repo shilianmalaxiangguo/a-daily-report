@@ -4,6 +4,7 @@ import importlib.util
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 
 import requests
 
@@ -17,6 +18,12 @@ _MARKET_REAL_URL = "https://api-ddc-wscn.xuangubao.com.cn/market/real"
 _PLATES_URL = "https://flash-api.xuangubao.com.cn/api/surge_stock/plates"
 _LIMIT_UP_POOL_URL = "https://flash-api.xuangubao.com.cn/api/pool/detail"
 _MARKET_REAL_FIELDS = "prod_name,last_px,px_change,px_change_rate,symbol,trade_status,market_type"
+_NEWSFLASH_PAGE_SIZE = 100
+_DIRECT_FACT_DIAGNOSTIC_KEYS = {
+    "xuangubao_news": "newsflash",
+    "xuangubao_plates": "plates",
+    "xuangubao_limit_up_reasons": "limit_up_reasons",
+}
 
 
 def _load_local_env_file() -> None:
@@ -97,6 +104,8 @@ class XuangubaoIntradayAnalyzer:
         legacy_cls = _load_legacy_analyzer_class()
         self._legacy = None
         self._session = requests.Session()
+        self._request_counts = {}
+        self._request_timings_ms = {}
         self._session.headers.update(
             {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
@@ -119,7 +128,29 @@ class XuangubaoIntradayAnalyzer:
             except Exception:
                 self._legacy = None
 
-    def _fetch_news(self, pages=100, target_date=None):
+    def _request_json(self, label, url, **kwargs):
+        started_at = monotonic()
+        try:
+            return self._session.get(url, **kwargs).json()
+        finally:
+            elapsed_ms = (monotonic() - started_at) * 1000
+            self._request_counts[label] = self._request_counts.get(label, 0) + 1
+            self._request_timings_ms[label] = round(
+                self._request_timings_ms.get(label, 0.0) + elapsed_ms,
+                1,
+            )
+
+    def _reset_request_diagnostics(self):
+        self._request_counts = {}
+        self._request_timings_ms = {}
+
+    def _attach_request_diagnostics(self, result):
+        diagnostics = result.setdefault("diagnostics", {})
+        diagnostics["request_counts"] = dict(self._request_counts)
+        diagnostics["request_timings_ms"] = dict(self._request_timings_ms)
+        return result
+
+    def _fetch_news(self, pages=20, target_date=None):
         token = _get_ivanka_token()
         if not token:
             return [], "missing XUANGUBAO_IVANKA_TOKEN"
@@ -133,15 +164,14 @@ class XuangubaoIntradayAnalyzer:
         reached_older_than_target = False
         for _page in range(pages):
             params = {
-                "limit": 20,
+                "limit": _NEWSFLASH_PAGE_SIZE,
                 "subj_ids": "10,35",
                 "has_explain": "false",
                 "platform": "pcweb",
             }
             if cursor:
                 params["cursor"] = cursor
-            response = self._session.get(_NEWSFLASH_URL, params=params, timeout=10)
-            data = response.json()
+            data = self._request_json("newsflash", _NEWSFLASH_URL, params=params, timeout=10)
             if data.get("code") != 20000:
                 diagnostics.append(str(data.get("message") or data.get("code") or "newsflash failed"))
                 break
@@ -202,8 +232,7 @@ class XuangubaoIntradayAnalyzer:
                 "fields": _MARKET_REAL_FIELDS,
                 "prod_code": ",".join(batch),
             }
-            response = self._session.get(_MARKET_REAL_URL, params=params, timeout=10)
-            data = response.json()
+            data = self._request_json("market_real", _MARKET_REAL_URL, params=params, timeout=10)
             if data.get("code") != 20000:
                 return quote_map, str(data.get("message") or data.get("code") or "market real failed")
             payload = data.get("data") or {}
@@ -232,8 +261,7 @@ class XuangubaoIntradayAnalyzer:
             news["stocks"] = enriched
 
     def _fetch_plates(self):
-        response = self._session.get(_PLATES_URL, timeout=10)
-        data = response.json()
+        data = self._request_json("plates", _PLATES_URL, timeout=10)
         if data.get("code") != 20000:
             return [], str(data.get("message") or data.get("code") or "plates failed")
         payload = data.get("data") or {}
@@ -251,8 +279,12 @@ class XuangubaoIntradayAnalyzer:
         return plates, ""
 
     def _fetch_limit_up_reasons(self):
-        response = self._session.get(_LIMIT_UP_POOL_URL, params={"pool_name": "limit_up"}, timeout=10)
-        data = response.json()
+        data = self._request_json(
+            "limit_up_reasons",
+            _LIMIT_UP_POOL_URL,
+            params={"pool_name": "limit_up"},
+            timeout=10,
+        )
         if data.get("code") != 20000:
             return [], str(data.get("message") or data.get("code") or "limit up pool failed")
         items = data.get("data") or []
@@ -283,6 +315,7 @@ class XuangubaoIntradayAnalyzer:
         return reasons, ""
 
     def _fetch_direct_xuangubao_data(self, target_date=None):
+        self._reset_request_diagnostics()
         diagnostics = {}
         try:
             news, news_diag = self._fetch_news(target_date=target_date)
@@ -308,40 +341,56 @@ class XuangubaoIntradayAnalyzer:
         if limit_up_diag:
             diagnostics["limit_up_reasons"] = limit_up_diag
 
-        return {
+        return self._attach_request_diagnostics({
             "xuangubao_news": news,
             "xuangubao_plates": plates,
             "xuangubao_limit_up_reasons": limit_up_reasons,
             "diagnostics": diagnostics,
-        }
+        })
 
     def fetch_xuangubao_data(self, target_date=None):
+        direct_result = self._fetch_direct_xuangubao_data(target_date=target_date)
+        direct_diagnostics = direct_result.get("diagnostics") or {}
+        incomplete_direct_keys = {
+            fact_key
+            for fact_key, diagnostic_key in _DIRECT_FACT_DIAGNOSTIC_KEYS.items()
+            if direct_diagnostics.get(diagnostic_key) not in (None, "", {})
+        }
+        if all(direct_result.get(key) for key in _DIRECT_FACT_DIAGNOSTIC_KEYS) and not incomplete_direct_keys:
+            return direct_result
+
         legacy_result = {}
         if self._legacy is not None and hasattr(self._legacy, "fetch_xuangubao_data"):
+            legacy_started_at = monotonic()
             try:
                 try:
                     legacy_result = dict(self._legacy.fetch_xuangubao_data(target_date=target_date) or {})
                 except TypeError:
                     legacy_result = dict(self._legacy.fetch_xuangubao_data() or {})
-                if legacy_result.get("xuangubao_news"):
-                    return legacy_result
             except Exception:
                 legacy_result = {}
-        direct_result = self._fetch_direct_xuangubao_data(target_date=target_date)
+            finally:
+                legacy_elapsed_ms = (monotonic() - legacy_started_at) * 1000
+                self._request_counts["legacy"] = self._request_counts.get("legacy", 0) + 1
+                self._request_timings_ms["legacy"] = round(
+                    self._request_timings_ms.get("legacy", 0.0) + legacy_elapsed_ms,
+                    1,
+                )
+                self._attach_request_diagnostics(direct_result)
         if not legacy_result:
             return direct_result
-        return {
-            **legacy_result,
-            **{
-                key: value
-                for key, value in direct_result.items()
-                if key == "diagnostics" or value
-            },
-            "diagnostics": {
-                **(legacy_result.get("diagnostics") or {}),
-                **(direct_result.get("diagnostics") or {}),
-            },
+        merged_result = dict(legacy_result)
+        for key, value in direct_result.items():
+            if key == "diagnostics" or not value:
+                continue
+            if key in incomplete_direct_keys and legacy_result.get(key):
+                continue
+            merged_result[key] = value
+        merged_result["diagnostics"] = {
+            **(legacy_result.get("diagnostics") or {}),
+            **direct_diagnostics,
         }
+        return merged_result
 
     def __getattr__(self, name):
         if self._legacy is not None:

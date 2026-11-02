@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 
 import daily_report_analysis_utils as analysis_utils
-from daily_report_snapshot_io import load_data_snapshot
+from domains.market_activity.limit_pool_facts import format_limit_count, resolve_limit_down_count
 from domains.market_state.two_market_turnover.nodes import build_turnover_comparison
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
@@ -14,8 +14,6 @@ try:
     )
 except Exception:  # pragma: no cover - optional runtime dependency
     _default_load_compact_metric_history_snapshot = None
-
-_DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
 
 __all__ = [
     "build_market_style_switch_snapshot",
@@ -277,7 +275,18 @@ def _should_skip_fact_db(helpers):
         return False
     if helpers and "DatabaseService" in helpers:
         return helpers.get("DatabaseService") is None
-    return load_data_snapshot is not _DEFAULT_LOAD_DATA_SNAPSHOT
+    return False
+
+
+def _history_runtime_bindings(helpers):
+    bindings = dict(helpers or {})
+    if (
+        "history_snapshot_loader" not in bindings
+        and "load_compact_metric_history_snapshot" not in bindings
+        and callable(bindings.get("load_data_snapshot"))
+    ):
+        bindings["history_snapshot_loader"] = bindings["load_data_snapshot"]
+    return bindings
 
 
 def _safe_float(value, default=0.0):
@@ -489,9 +498,10 @@ def normalize_flow_to_yi(value, *, helpers=None):
 
 
 def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, max_scan_days=8, *, helpers=None):
-    postgres_only = _postgres_only_runtime(helpers)
-    skip_fact_db = _should_skip_fact_db(helpers)
-    previous = _install_runtime_bindings(helpers or {})
+    bindings = _history_runtime_bindings(helpers)
+    postgres_only = _postgres_only_runtime(bindings)
+    skip_fact_db = _should_skip_fact_db(bindings)
+    previous = _install_runtime_bindings(bindings)
     try:
         if not skip_fact_db:
             history = _load_recent_sector_flow_history_from_fact_db(
@@ -515,9 +525,10 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
 
 
 def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_days=8, *, helpers=None):
-    postgres_only = _postgres_only_runtime(helpers)
-    skip_fact_db = _should_skip_fact_db(helpers)
-    previous = _install_runtime_bindings(helpers or {})
+    bindings = _history_runtime_bindings(helpers)
+    postgres_only = _postgres_only_runtime(bindings)
+    skip_fact_db = _should_skip_fact_db(bindings)
+    previous = _install_runtime_bindings(bindings)
     try:
         if not skip_fact_db:
             history = _load_recent_market_turnover_history_from_fact_db(
@@ -802,10 +813,9 @@ def _load_compact_history_snapshot(cursor):
     cursor = str(cursor or "").strip()
     if not cursor:
         return {}
-    if load_data_snapshot is _DEFAULT_LOAD_DATA_SNAPSHOT:
+    snapshot_loader = globals().get("history_snapshot_loader")
+    if not callable(snapshot_loader):
         snapshot_loader = globals().get("load_compact_metric_history_snapshot")
-    else:
-        snapshot_loader = load_data_snapshot
     if not callable(snapshot_loader):
         return {}
     cache_key = (snapshot_loader, cursor)
@@ -1804,7 +1814,8 @@ def _build_market_state_machine_snapshot_legacy_body(
     rise_fall_ratio = breadth_snapshot.get("rise_fall_ratio")
     breadth_available = bool(breadth_snapshot.get("breadth_available"))
     zt_count = len(data.get("zt_pool", []) or [])
-    dt_count = len(data.get("dt_pool", []) or [])
+    resolved_dt_count = resolve_limit_down_count(data)
+    dt_count = resolved_dt_count if resolved_dt_count is not None else 0
     turnover = _safe_float(data.get("total_turnover", 0.0))
     sh_change = _safe_float(sh_index.get("涨跌幅", sh_index.get("change_pct", 0.0)))
     quadrant_data = data.get("sector_quadrant") or {}
@@ -1911,7 +1922,7 @@ def _build_market_state_machine_snapshot_legacy_body(
 
     market_performance_evidence = _build_market_performance_evidence(data, leading_line)
     observation_summary = (
-        f"上证{sh_change:+.2f}% / 涨停{zt_count} / 跌停{dt_count} / "
+        f"上证{sh_change:+.2f}% / 涨停{zt_count} / 跌停{format_limit_count(resolved_dt_count)} / "
         f"涨跌比{breadth_snapshot.get('rise_fall_ratio_text', '暂无')} / 有势板块{high_strong_sector_text}"
     )
     if densest_sector_name:
@@ -1941,7 +1952,8 @@ def _build_market_state_machine_snapshot_legacy_body(
         "mainline_candidates": mainline_candidates[:3],
         "secondary_candidates": secondary_candidates[:3],
         "zt_count": zt_count,
-        "dt_count": dt_count,
+        "dt_count": resolved_dt_count,
+        "dt_count_available": resolved_dt_count is not None,
         "up_count": up_count,
         "down_count": down_count,
         "breadth_available": breadth_available,

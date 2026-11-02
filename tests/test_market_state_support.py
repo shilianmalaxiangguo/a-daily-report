@@ -817,8 +817,9 @@ assert leader["name"] == "军工龙头"
              ) as previous_date_mock, \
              patch.object(
                  support,
-                 "load_data_snapshot",
+                 "history_snapshot_loader",
                  side_effect=lambda cursor: (snapshots.get(cursor, {}), None),
+                 create=True,
              ) as snapshot_mock, \
              patch.object(support, "sector_name_matches", side_effect=lambda left, right: left == right) as sector_match_mock, \
              patch.object(
@@ -866,12 +867,11 @@ assert leader["name"] == "军工龙头"
         )
         support._COMPACT_HISTORY_SNAPSHOT_CACHE.clear()
 
-        with patch.object(support, "load_data_snapshot", full_loader), \
-             patch.object(support, "_DEFAULT_LOAD_DATA_SNAPSHOT", full_loader), \
-             patch.object(support, "DatabaseService", None, create=True):
+        with patch.object(support, "DatabaseService", None, create=True):
             helpers = {
                 "_normalize_kline_date_str": lambda value: str(value),
                 "get_previous_date_str": lambda value: "2026-07-22" if value == "2026-07-23" else "",
+                "load_data_snapshot": full_loader,
                 "load_compact_metric_history_snapshot": compact_loader,
             }
             flow_result = support.load_recent_sector_flow_history(
@@ -890,6 +890,38 @@ assert leader["name"] == "军工龙头"
 
         self.assertEqual(flow_result, [{"date": "2026-07-22", "inflow": 18.5}])
         self.assertEqual(turnover_result, [{"date": "2026-07-22", "turnover": 12345.0}])
+        compact_loader.assert_called_once_with("2026-07-22")
+        full_loader.assert_not_called()
+
+    def test_nested_market_style_history_fallback_ignores_outer_full_snapshot_loader(self):
+        support = self._load_module()
+        full_loader = unittest.mock.Mock(side_effect=AssertionError("完整快照 loader 不应被调用"))
+        compact_loader = unittest.mock.Mock(
+            return_value=({"total_turnover": 12345.0}, "")
+        )
+        support._COMPACT_HISTORY_SNAPSHOT_CACHE.clear()
+
+        with patch.object(support, "DatabaseService", None, create=True):
+            result = support.build_market_style_switch_snapshot(
+                "2026-07-23",
+                {
+                    "target_date": "2026-07-23",
+                    "total_turnover": 13000.0,
+                    "status_distribution": {},
+                    "tag_distribution": {},
+                    "zt_pool": [],
+                    "hot_rank_top30": [],
+                    "integrated_hot_list": [],
+                },
+                helpers={
+                    "load_data_snapshot": full_loader,
+                    "load_compact_metric_history_snapshot": compact_loader,
+                    "_normalize_kline_date_str": lambda value: str(value),
+                    "get_previous_date_str": lambda value: "2026-07-22" if value == "2026-07-23" else "",
+                },
+            )
+
+        self.assertEqual(result["turnover_series"][0]["date"], "2026-07-22")
         compact_loader.assert_called_once_with("2026-07-22")
         full_loader.assert_not_called()
 

@@ -199,6 +199,10 @@ def run(ctx):
                 "market_trend": inputs.get("market_trend", ""),
                 "zt_count": inputs.get("zt_count", 0),
                 "dt_count": inputs.get("dt_count", 0),
+                "dt_count_available": inputs.get(
+                    "dt_count_available",
+                    inputs.get("dt_count") is not None,
+                ),
                 "energy_state": market_state_snapshot.get("energy_state", "未知"),
                 "flow_direction": market_state_snapshot.get("flow_direction", "-"),
                 "mainline_text": mainline_text,

@@ -1,3 +1,6 @@
+from domains.market_activity.limit_pool_facts import resolve_limit_down_count
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -11,7 +14,8 @@ def _append_log(logs, step, status, message, **details):
 
 
 def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_count, dt_count, dt_panic_threshold, main_sectors):
-    is_dt_panic = dt_count >= dt_panic_threshold
+    dt_count_available = dt_count is not None
+    is_dt_panic = bool(dt_count_available and dt_count >= dt_panic_threshold)
     if "形成中" in str(zs_signal_status or ""):
         if zs_signal_type in ["跌破支撑", "暴跌至下一中枢"]:
             return (
@@ -26,6 +30,12 @@ def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_co
         )
 
     if zs_signal_type == "大盘突破":
+        if not dt_count_available:
+            return (
+                "0%不参与",
+                f"中枢已突破({zs_signal_status})，但跌停事实待确认，关键数据不完整，暂不提高参与资格",
+                is_dt_panic,
+            )
         if is_dt_panic:
             return (
                 "0%不参与",
@@ -46,16 +56,20 @@ def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_co
         )
 
     if zs_signal_type is None:
-        if market_trend == "强势上涨" and zt_count > 40 and dt_count < 3 and len(main_sectors) >= 2:
+        if dt_count_available and market_trend == "强势上涨" and zt_count > 40 and dt_count < 3 and len(main_sectors) >= 2:
             return ("50%条件执行", "市场强势上涨，主线明确，赚钱效应明显（中枢数据不可用，纯情绪判断）", is_dt_panic)
-        if market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 5 and len(main_sectors) >= 1:
+        if dt_count_available and market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 5 and len(main_sectors) >= 1:
             return ("50%条件执行", "市场震荡整理，有局部赚钱效应（中枢数据不可用，纯情绪判断）", is_dt_panic)
+        if not dt_count_available:
+            return ("0%不参与", "跌停事实待确认，关键数据不完整，暂不提高参与资格", is_dt_panic)
         return ("0%不参与", "市场调整明显，赚钱效应不足（中枢数据不可用，纯情绪判断）", is_dt_panic)
 
-    if market_trend == "强势上涨" and zt_count > 40 and not is_dt_panic:
+    if dt_count_available and market_trend == "强势上涨" and zt_count > 40 and not is_dt_panic:
         return ("50%条件执行", f"中枢内震荡({zs_signal_status})，但市场强势(涨停{zt_count}只)，只等固定交易窗口条件", is_dt_panic)
-    if market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 10:
+    if dt_count_available and market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 10:
         return ("50%条件执行", f"中枢内震荡({zs_signal_status})，市场温和，精选个股持有", is_dt_panic)
+    if not dt_count_available:
+        return ("0%不参与", f"中枢内震荡({zs_signal_status})且跌停事实待确认，暂不提高参与资格", is_dt_panic)
     return ("0%不参与", f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望", is_dt_panic)
 
 
@@ -83,6 +97,8 @@ def _is_index_recovery_inside_zhongshu(market_zhongshu, zs_signal_type, zt_count
     if zs_signal_type != "按个股信号操作":
         return False
     if (exit_analysis or {}).get("overall_level") == "红灯":
+        return False
+    if dt_count is None:
         return False
 
     signal = market_zhongshu.get("signal", {}) or {}
@@ -149,7 +165,8 @@ def build_market_phase_context_contract(
 
     turnover = data.get("total_turnover", 0)
     zt_count = len(data.get("zt_pool", []))
-    dt_count = len(data.get("dt_pool", []))
+    dt_count = resolve_limit_down_count(data)
+    dt_count_available = dt_count is not None
     indices = data.get("indices", {})
     sh_change = indices.get("上证指数", {}).get("涨跌幅", 0) if indices else 0
     market_stats = data.get("market_stats", {})
@@ -220,6 +237,7 @@ def build_market_phase_context_contract(
     if (
         zs_signal_type == "大盘突破"
         and "形成中" not in str(zs_signal_status or "")
+        and dt_count_available
         and not is_dt_panic
         and not final_gate["can_new_entry"]
         and "暂无明确主线" in str(sector_name)
@@ -291,6 +309,7 @@ def build_market_phase_context_contract(
         "turnover": turnover,
         "zt_count": zt_count,
         "dt_count": dt_count,
+        "dt_count_available": dt_count_available,
         "indices": indices,
         "sh_change": sh_change,
         "market_stats": market_stats,

@@ -38,11 +38,24 @@ def _annotate_calendar_events(events, *, query_date, calendar_scope):
     return annotated
 
 
-def _fetch_calendar_events_compat(fetch_calendar_events, target_date):
-    try:
+def _fetch_calendar_events_compat(
+    fetch_calendar_events,
+    target_date,
+    *,
+    target_date_only=False,
+):
+    if target_date_only:
         events = fetch_calendar_events(target_date=target_date)
-        if events:
-            return _annotate_calendar_events(events, query_date=target_date, calendar_scope="target_date"), "target_date"
+        return (
+            _annotate_calendar_events(
+                events or [],
+                query_date=target_date,
+                calendar_scope="target_date",
+            ),
+            "target_date",
+        )
+
+    try:
         window_events = fetch_calendar_events()
         if window_events:
             return (
@@ -53,9 +66,23 @@ def _fetch_calendar_events_compat(fetch_calendar_events, target_date):
                 ),
                 "upcoming_window",
             )
+    except TypeError as error:
+        error_text = str(error)
+        if (
+            "target_date" not in error_text
+            or "required" not in error_text
+            or "argument" not in error_text
+        ):
+            raise
+
+    try:
+        events = fetch_calendar_events(target_date=target_date)
+        if events:
+            return _annotate_calendar_events(events, query_date=target_date, calendar_scope="target_date"), "target_date"
         return [], "target_date"
     except TypeError as error:
-        if "target_date" not in str(error):
+        error_text = str(error)
+        if "target_date" not in error_text or "unexpected keyword argument" not in error_text:
             raise
         return (
             _annotate_calendar_events(
@@ -71,6 +98,7 @@ def collect_calendar_events_request_bundle(
     target_date,
     *,
     fetch_calendar_events,
+    target_date_only=False,
     timer,
     emit,
 ):
@@ -81,7 +109,11 @@ def collect_calendar_events_request_bundle(
 
     emit("  🔟 获取预期日历（财联社CLS）...")
     try:
-        calendar, calendar_scope = _fetch_calendar_events_compat(fetch_calendar_events, target_date)
+        calendar, calendar_scope = _fetch_calendar_events_compat(
+            fetch_calendar_events,
+            target_date,
+            target_date_only=target_date_only,
+        )
         if calendar:
             results["calendar_events"] = calendar
             data_status["预期日历"] = True

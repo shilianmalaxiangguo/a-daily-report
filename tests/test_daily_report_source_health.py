@@ -108,12 +108,98 @@ class DailyReportSourceHealthTest(unittest.TestCase):
             self.assertIn("table-wrap", html)
             self.assertIn("status-mark", html)
             self.assertIn("✓", html)
-            self.assertNotIn('name="viewport"', html)
-            self.assertNotIn("@media (max-width:", html)
             self.assertIn("×", html)
             self.assertIn("-", html)
             self.assertIn("数据源任务", html)
             self.assertEqual(len(hot_calls), 1)
+
+    def test_replay_artifacts_do_not_replace_official_source_health_files(self):
+        import daily_report_source_health as health
+
+        replay_check = {
+            "id": "snapshot.replay",
+            "task": "历史快照",
+            "required_for_generation": True,
+            "result": health.RESULT_PASS,
+            "advice": "历史快照可用",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            official_root = Path(tmpdir) / "logs" / "source_health"
+            official_root.mkdir(parents=True)
+            official_files = {
+                official_root / "2026-07-08_source_health.json": "official-date-json",
+                official_root / "2026-07-08_source_health.html": "official-date-html",
+                official_root / "latest_source_health.json": "official-latest-json",
+                official_root / "latest_source_health.html": "official-latest-html",
+            }
+            for path, content in official_files.items():
+                path.write_text(content, encoding="utf-8")
+
+            with patch.object(health, "_replay_snapshot_check", return_value=replay_check):
+                payload = health.run_source_health_check(
+                    "2026-07-08",
+                    root_dir=tmpdir,
+                    env={},
+                    replay=True,
+                )
+
+            replay_root = official_root / "replay"
+            self.assertEqual(
+                {Path(path).parent for path in payload["artifacts"].values()},
+                {replay_root},
+            )
+            self.assertTrue(all(Path(path).is_file() for path in payload["artifacts"].values()))
+            for path, content in official_files.items():
+                self.assertEqual(path.read_text(encoding="utf-8"), content)
+
+    def test_optional_cffex_check_is_warning_only_when_target_fact_is_missing(self):
+        import daily_report_source_health as health
+
+        payload = health.run_source_health_check(
+            "2026-07-08",
+            env={},
+            replay=True,
+            write_artifacts=False,
+            include_cffex=True,
+            cffex_checker=lambda _date: {
+                "connected": True,
+                "availability": "unavailable",
+                "raw_target_day": {"contract_rows": [], "member_rank_rows": []},
+            },
+        )
+
+        cffex = next(
+            row for row in payload["checks"] if row["id"] == "cffex.index_futures.position"
+        )
+        self.assertEqual(cffex["result"], health.RESULT_WARNING)
+        self.assertFalse(cffex["required_for_generation"])
+        self.assertTrue(any("中金所股指期货持仓" in item for item in payload["warnings"]))
+
+    def test_optional_cffex_partial_member_coverage_remains_warning(self):
+        import daily_report_source_health as health
+
+        payload = health.run_source_health_check(
+            "2026-07-08",
+            env={},
+            replay=True,
+            write_artifacts=False,
+            include_cffex=True,
+            cffex_checker=lambda _date: {
+                "connected": True,
+                "availability": "partial",
+                "raw_target_day": {
+                    "contract_rows": [{"contract_code": "IF2608"}],
+                    "member_rank_rows": [{"rank_type": "long"}],
+                },
+            },
+        )
+
+        cffex = next(
+            row for row in payload["checks"] if row["id"] == "cffex.index_futures.position"
+        )
+        self.assertEqual(cffex["result"], health.RESULT_WARNING)
+        self.assertEqual(cffex["target_date_status"], health.STATUS_MISSING)
+        self.assertEqual(cffex["row_count"], 2)
 
     def test_terminal_summary_uses_readable_labels_when_optional_qa_is_empty(self):
         import daily_report_source_health as health
@@ -573,6 +659,30 @@ class DailyReportSourceHealthTest(unittest.TestCase):
         self.assertEqual(row["connectivity_status"], "ok")
         self.assertEqual(row["target_date_status"], "not_checked")
         self.assertEqual(payload["overall_result"], "ready")
+
+    def test_fresh_default_postgres_probe_does_not_load_target_date_facts(self):
+        import daily_report_source_health as health
+
+        class FakeService:
+            repository = object()
+
+            def daily_report_fact_coverage(self, target_date):
+                raise AssertionError("fresh probe loaded target-date coverage")
+
+            def load_daily_report_snapshot(self, target_date):
+                raise AssertionError("fresh probe loaded target-date snapshot")
+
+        with patch.object(health.DatabaseService, "from_environment", return_value=FakeService()):
+            row = health._postgres_check(
+                {},
+                target_date="2026-08-13",
+                postgres_only=False,
+            )
+
+        self.assertEqual(row["result"], "pass")
+        self.assertEqual(row["connectivity_status"], "ok")
+        self.assertEqual(row["target_date_status"], "not_checked")
+        self.assertEqual(row["row_count"], 0)
 
     def test_postgres_missing_env_and_unavailable_store_stops_generation(self):
         import daily_report_source_health as health

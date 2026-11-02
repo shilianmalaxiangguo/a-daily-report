@@ -261,7 +261,43 @@ class WatchCandidatesRequestTest(unittest.TestCase):
         self.assertEqual(stats["tushare_fail"], 1)
         self.assertEqual(stats["tushare_failed_codes"], ["000022"])
         self.assertEqual(result["module_logs"][0]["details"]["tushare_failed_codes"], ["000022"])
+        coverage = result["results"]["candidate_history_coverage"]
+        self.assertFalse(coverage["coverage_complete"])
+        self.assertEqual(coverage["requested_codes"], ["000021", "000022"])
+        self.assertEqual(coverage["covered_codes"], ["000021"])
+        self.assertEqual(coverage["missing_codes"], ["000022"])
+        self.assertEqual(result["module_logs"][0]["status"], "error")
         self.assertTrue(any("Tushare成交额历史空数据: 000022" in line for line in emitted))
+
+    def test_fallback_source_completes_candidate_history_coverage(self):
+        request_module = importlib.import_module("domains.watch_candidates.request")
+        bundle = request_module.collect_watch_candidate_history_request_bundle
+
+        result = bundle(
+            "2026-05-14",
+            candidates=[
+                {"code": "000021", "name": "主源样本", "turnover": 18.0, "sector": "军工"},
+                {"code": "000022", "name": "兜底样本", "turnover": 17.0, "sector": "军工"},
+            ],
+            stock_full_info={},
+            get_cache=lambda: _CacheStub(),
+            fetch_tushare_turnover_history=lambda code, start_date, end_date: [1.0] if code == "000021" else [],
+            fetch_quicktiny_history=lambda **kwargs: [2.0],
+            baostock_source_factory=lambda: _BaoStockStub(),
+            timer=_TimerStub(),
+            emit=lambda _message: None,
+            enable_live_quicktiny=True,
+            enable_baostock_fallback=False,
+        )
+
+        coverage = result["results"]["candidate_history_coverage"]
+        self.assertTrue(coverage["coverage_complete"])
+        self.assertEqual(coverage["missing_codes"], [])
+        self.assertEqual(
+            [row["code"] for row in result["results"]["stocks_with_history"]],
+            ["000021", "000022"],
+        )
+        self.assertEqual(result["module_logs"][0]["status"], "success")
 
     def test_tushare_empty_history_retries_once_before_fallback(self):
         request_module = importlib.import_module("domains.watch_candidates.request")

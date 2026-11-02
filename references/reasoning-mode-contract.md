@@ -1,44 +1,17 @@
 # Reasoning Mode Contract
 
-This reference is for bounded daily-report reasoning. It is not a prompt manual and not an API integration guide.
+Updated: 2026-10-22. This file describes the boundary between current reading and the old reasoning implementation.
 
-## Core Contract
+## Current reading
 
-- Use no-API first: current-conversation reasoning or deterministic artifacts may produce a reasoning decision JSON.
-- Code owns deterministic facts: market snapshots, candidate pools, turnover share, source status, and replay artifacts.
-- Reasoning mode owns bounded decisions: action, mainline state, unique target judgment, trigger conditions, failure conditions, exclusion reasons, and confidence.
-- Reasoning must run at `reasoning_effort = xhigh`; this is the reasoning depth, not the trade-confidence label.
-- The report renderer owns expression: it shows only conclusion, evidence, triggers, failures, exclusions, and reasoning effort.
-- do not expose chain-of-thought, hidden reasoning traces, or long draft reasoning in the daily report.
+The default sector reading path uses dated facts. It does not call a model, construct an account decision, choose one mandatory target, or require a particular model/reasoning depth. A human-requested interpretation may be explicit, but must distinguish facts, alternatives, costs, unknowns, and the user's decision. Do not expose private reasoning traces.
 
-## Decision Boundary
+The current Wiki governs trading ideas. Do not impose a trend chain, sector-first sequence, fixed confirmation period, fixed sizing, or old account prescription through a reasoning schema.
 
-The only object allowed to cross from reasoning into report rendering is `reasoning_decision.v1`.
+## Historical implementation
 
-Required fields:
+`reasoning_decision.v1` and its validator still belong to the explicit full-report compatibility chain. Required schema fields describe that implementation, not the current trading philosophy. Do not populate them merely to make a sector reading page pass, and do not treat a valid historical schema as proof of profitability or a current instruction.
 
-- `schema_version`
-- `target_date`
-- `input_hash`
-- `prompt_version`
-- `reasoning_effort`
-- `model_source`
-- `action`
-- `mainline_state`
-- `unique_target`
-- `conclusion`
-- `evidence`
-- `trigger_conditions`
-- `failure_conditions`
-- `excluded_candidates`
-- `confidence`
+## Multiple samples
 
-## Safety Rules
-
-- Evidence must point to fields from the reasoning input packet.
-- `reasoning_effort` must be `xhigh`.
-- A unique target must come from the candidate pool.
-- `conditional_entry` must include trigger and failure conditions.
-- Low confidence cannot create an aggressive action.
-- Missing or degraded data must not become fake certainty.
-- API-backed reasoning may be added later, but it must fill the same JSON and pass the same validator before rendering.
+The user favors simple repeated comparisons and feedback. Agreement among model outputs is an agreement ratio, not a market probability or a position size. A shared factual error cannot be voted away. No new sampling program or model/provider requirement is authorized by this document.

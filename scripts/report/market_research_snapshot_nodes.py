@@ -13,6 +13,7 @@ from report.mainline_turnover_summary_support import (
     resolve_hot_sector_turnover_watch_summary,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
+    resolve_unconfirmed_mainline_summary,
     resolve_overtake_window_rows,
     resolve_trading_arena_fit_rows,
     resolve_mainline_turnover_summary,
@@ -68,6 +69,12 @@ def _benchmark_change(context):
 
 def _turnover(context):
     return float(context.get("turnover", 0) or 0)
+
+
+def _display_dt_count(observation):
+    if observation.get("dt_count_available") is False or observation.get("dt_count") is None:
+        return "待确认"
+    return str(int(_safe_float(observation.get("dt_count"), 0)))
 
 
 def _safe_float(value, default=0.0):
@@ -433,11 +440,14 @@ def _downgrade_pivot_row_for_unconfirmed_attack(pivot_row, attack_summary):
     if not attack_summary or attack_summary.get("attack_state") == "confirmed_attack":
         return pivot_row
     downgraded = dict(pivot_row)
-    downgraded["mainline"] = "暂无确认主线"
+    competition = resolve_unconfirmed_mainline_summary(
+        {"mainline_attack_evidence_summary": attack_summary}
+    )
+    downgraded["mainline"] = competition.get("cycle_label") or "未形成跨日胜出方向"
     downgraded["mainline_degree"] = "待确认"
     downgraded["replacement"] = "待确认"
-    evidence = attack_summary.get("confirmation_evidence") or "板块攻击证据不足"
-    downgraded["interpretation"] = f"中枢只记录候选方向，不把单日热度升级为周期主线；{evidence}。"
+    evidence = competition.get("competition_summary") or "资金未形成明确进攻方向"
+    downgraded["interpretation"] = f"中枢只记录竞争方向，不把单日热度升级为周期主线；{evidence}。"
     return downgraded
 
 
@@ -575,11 +585,12 @@ def build_market_research_snapshot_risk_preference_node(context, node_meta=None,
     benchmark_change = _benchmark_change(context)
     turnover = _turnover(context)
     action_effect = _risk_preference_action_effect(benchmark_change, turnover, observation)
+    dt_count_text = _display_dt_count(observation)
     if context.get("compact"):
         lines = [
             (
                 f"- **盘面风险偏好**: 上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
-                f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿；{action_effect}"
+                f"跌停{dt_count_text} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿；{action_effect}"
             )
         ]
     else:
@@ -589,7 +600,7 @@ def build_market_research_snapshot_risk_preference_node(context, node_meta=None,
                 "热点/趋势/异常",
                 (
                     f"上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
-                    f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿"
+                    f"跌停{dt_count_text} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿"
                 ),
                 action_effect,
             )

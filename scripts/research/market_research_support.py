@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from domains.market_activity.limit_pool_facts import resolve_limit_down_count
 from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 from domains.market_state.mainline_history_runtime import (
     build_mainline_history_record as build_mainline_history_record_runtime,
@@ -1058,7 +1059,8 @@ def _build_market_observation_snapshot_legacy_body(
     down_count = int(_safe_float(breadth_snapshot.get("down_count", 0)))
     rise_fall_ratio = breadth_snapshot.get("rise_fall_ratio")
     zt_count = len(data.get("zt_pool", []) or [])
-    dt_count = len(data.get("dt_pool", []) or [])
+    resolved_dt_count = resolve_limit_down_count(data)
+    dt_count = resolved_dt_count if resolved_dt_count is not None else 0
     turnover = _safe_float(data.get("total_turnover", 0.0))
 
     densest_sector = _first_directional_trend_item(sector_trend_snapshot)
@@ -1068,7 +1070,8 @@ def _build_market_observation_snapshot_legacy_body(
     return {
         "benchmark_change_pct": _round_or_none(sh_index.get("涨跌幅", sh_index.get("change_pct", 0.0)), 4),
         "zt_count": zt_count,
-        "dt_count": dt_count,
+        "dt_count": resolved_dt_count,
+        "dt_count_available": resolved_dt_count is not None,
         "up_count": up_count,
         "down_count": down_count,
         "breadth_available": bool(breadth_snapshot.get("breadth_available")),
@@ -1303,6 +1306,10 @@ def _render_step0_follow_section_legacy_body(step0_plan, market_research_snapsho
             or {},
             "zt_count": observation.get("zt_count", 0),
             "dt_count": observation.get("dt_count", 0),
+            "dt_count_available": observation.get(
+                "dt_count_available",
+                observation.get("dt_count") is not None,
+            ),
             "observation_summary": state_machine.get("observation_summary", "-"),
             "style_label": style_switch.get("style_label", "-"),
             "style_reason": style_switch.get("style_reason", "-"),

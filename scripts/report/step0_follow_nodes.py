@@ -7,6 +7,16 @@ def _full_row(label, current_evidence, derived_judgement, action_effect):
     return f"| {label} | {current_evidence} | {derived_judgement} | {action_effect} |"
 
 
+def _display_dt_count(context):
+    value = context.get("dt_count")
+    if context.get("dt_count_available") is False or value is None:
+        return "待确认"
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return "待确认"
+
+
 def build_step0_follow_verdict_node(context, node_meta=None, node_lookup=None):
     lines = [
         f"**明日裁决**: {context.get('step0_prediction_cn', '-')}",
@@ -32,15 +42,16 @@ def build_step0_follow_table_header_node(context, node_meta=None, node_lookup=No
 
 
 def build_step0_follow_risk_preference_node(context, node_meta=None, node_lookup=None):
+    dt_count_text = _display_dt_count(context)
     if context.get("compact"):
         lines = [
-            f"**盘面风险偏好**: 上证{context.get('zt_count', 0)} / 跌停{context.get('dt_count', 0)}；{context.get('observation_summary', '-')}"
+            f"**盘面风险偏好**: 上证{context.get('zt_count', 0)} / 跌停{dt_count_text}；{context.get('observation_summary', '-')}"
         ]
     else:
         lines = [
             _full_row(
                 "盘面风险偏好",
-                f"{context.get('zt_count', 0)} / {context.get('dt_count', 0)}",
+                f"{context.get('zt_count', 0)} / {dt_count_text}",
                 context.get("observation_summary", "-"),
                 "先看风险偏好，再决定能否继续往下判断",
             )

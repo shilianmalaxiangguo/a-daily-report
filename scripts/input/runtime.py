@@ -350,7 +350,12 @@ def _run_input_runtime_legacy_body(target_date=None):
     module_logs = []
     
     # 确定目标日期并初始化首批请求注册表
-    request_registry = build_input_request_registry(globals())
+    historical_rebuild_enabled = bool(globals().get("historical_rebuild", False))
+    request_registry = (
+        build_input_request_registry(globals(), historical_rebuild=True)
+        if historical_rebuild_enabled
+        else build_input_request_registry(globals())
+    )
     request_registry["database_service_cls"] = globals().get("DatabaseService", DatabaseService)
     target_date = resolve_request_target_date(target_date)
     
@@ -391,6 +396,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             fetch_market_activity_df=_fetch_market_activity_df,
             request_registry=request_registry,
             current_date=_dt.datetime.now().strftime("%Y-%m-%d"),
+            historical_rebuild=historical_rebuild_enabled,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -411,6 +417,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             request_registry=request_registry,
             xueqiu_hot_rank_fetcher=lambda: try_fetch_xueqiu_a_share_hot_24h(size=100),
             xueqiu_argument_fetcher=try_fetch_xueqiu_hot_stock_arguments,
+            historical_rebuild=historical_rebuild_enabled,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -433,6 +440,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             timer=timer,
             emit=lambda message: print(message, flush=True),
             current_dates=current_dates,
+            historical_rebuild=historical_rebuild_enabled,
         )
         results.update(market_activity_sector_result.get("results", {}))
         data_status.update(market_activity_sector_result.get("data_status", {}))
@@ -442,6 +450,7 @@ def _run_input_runtime_legacy_body(target_date=None):
         calendar_events_result = collect_calendar_events_request_bundle(
             target_date,
             fetch_calendar_events=tencent.get_calendar_events,
+            target_date_only=historical_rebuild_enabled,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -588,7 +597,18 @@ def _run_input_runtime_legacy_body(target_date=None):
             etf_turnover_fetcher = (
                 request_registry.get("etf_turnover_series") if isinstance(request_registry, dict) else None
             )
-            if callable(etf_turnover_fetcher):
+            if historical_rebuild_enabled:
+                etf_turnover_series = {
+                    "available": False,
+                    "rows": [],
+                    "requested_trade_date": target_date,
+                    "latest_data_date": "",
+                    "is_stale_for_target": False,
+                    "source": "historical_rebuild.excluded_current_etf_universe",
+                    "status": "target_date_fact_missing",
+                    "message": "目标日ETF样本池事实不足，本次历史重建不使用当前ETF样本池。",
+                }
+            elif callable(etf_turnover_fetcher):
                 etf_turnover_series = etf_turnover_fetcher(target_date=target_date, window_days=25)
             else:
                 etf_turnover_series = {}
@@ -800,6 +820,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             fetch_exchange_monitor_payload=_fetch_quicktiny_exchange_monitor_payload,
             fetch_stock_batch_info=lambda codes: TencentFinanceData().get_stock_batch_info(codes),
             fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
+            historical_rebuild=historical_rebuild_enabled,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -822,6 +843,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             limit_up_df=limit_up_df,
             existing_results=results,
             fetch_lhb_rows=_fetch_lhb_rows,
+            resolve_stock_sector=globals().get("get_stock_sector"),
             request_registry=request_registry,
             limit_up_provider=market_activity_pool_artifacts.get("limit_up_provider"),
             timer=timer,
@@ -1137,66 +1159,82 @@ def _run_input_runtime_legacy_body(target_date=None):
             print(f"🐉 龙虎榜净买入前十: {len(results['lhb_net_buy_top10'])} 只")
         
         # ========== 18. 板块四象限数据（击球区分析）==========
-        step_status['板块四象限数据获取'] = False
-        print("  1️⃣5️⃣ 获取板块四象限数据（击球区分析）...", flush=True)
-        try:
-            quadrant_data = get_sector_quadrant_data(period=20, strength_period=3)
-            if quadrant_data:
-                results['sector_quadrant'] = quadrant_data
-                hs_analysis = quadrant_data['high_strong_analysis']
-                print(f"   ✅ 板块四象限数据获取成功")
-                print(f"   📊 高强区间: {hs_analysis['total']}个板块")
-                print(f"      🏆 最佳击球区（≥80分）: {hs_analysis['tier1_count']}个")
-                print(f"      ⭐ 优质击球区（60-79分）: {hs_analysis['tier2_count']}个")
-                print(f"      ✓ 普通击球区（40-59分）: {hs_analysis['tier3_count']}个")
-                print(f"      ⚠️ 边缘击球区（<40分）: {hs_analysis['tier4_count']}个")
-                step_status['板块四象限数据获取'] = True
-                data_status['板块四象限'] = True
-                module_logs.append(
-                    {
-                        "module": "input.runtime",
-                        "step": "request.sector_quadrant",
-                        "status": "success",
-                        "message": "已获取板块四象限击球区数据",
-                        "details": {
-                            "provider": quadrant_data.get("provider") or "quicktiny.sector_analysis_quadrant",
-                            "target_keys": ["sector_quadrant"],
-                            "high_strong_count": hs_analysis.get("total", 0),
-                            "tier1_count": hs_analysis.get("tier1_count", 0),
-                        },
-                    }
-                )
-            else:
-                print(f"   ⚠️ 板块四象限数据获取失败")
+        if historical_rebuild_enabled:
+            print("  1️⃣5️⃣ 板块四象限：目标日事实不足，本次历史重建不使用当前数据", flush=True)
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.sector_quadrant",
+                    "status": "skipped",
+                    "message": "板块四象限未参与历史判断",
+                    "details": {
+                        "provider": "historical_rebuild.excluded_current_sector_quadrant",
+                        "target_keys": ["sector_quadrant"],
+                        "target_date": target_date,
+                    },
+                }
+            )
+        else:
+            step_status['板块四象限数据获取'] = False
+            print("  1️⃣5️⃣ 获取板块四象限数据（击球区分析）...", flush=True)
+            try:
+                quadrant_data = get_sector_quadrant_data(period=20, strength_period=3)
+                if quadrant_data:
+                    results['sector_quadrant'] = quadrant_data
+                    hs_analysis = quadrant_data['high_strong_analysis']
+                    print(f"   ✅ 板块四象限数据获取成功")
+                    print(f"   📊 高强区间: {hs_analysis['total']}个板块")
+                    print(f"      🏆 最佳击球区（≥80分）: {hs_analysis['tier1_count']}个")
+                    print(f"      ⭐ 优质击球区（60-79分）: {hs_analysis['tier2_count']}个")
+                    print(f"      ✓ 普通击球区（40-59分）: {hs_analysis['tier3_count']}个")
+                    print(f"      ⚠️ 边缘击球区（<40分）: {hs_analysis['tier4_count']}个")
+                    step_status['板块四象限数据获取'] = True
+                    data_status['板块四象限'] = True
+                    module_logs.append(
+                        {
+                            "module": "input.runtime",
+                            "step": "request.sector_quadrant",
+                            "status": "success",
+                            "message": "已获取板块四象限击球区数据",
+                            "details": {
+                                "provider": quadrant_data.get("provider") or "quicktiny.sector_analysis_quadrant",
+                                "target_keys": ["sector_quadrant"],
+                                "high_strong_count": hs_analysis.get("total", 0),
+                                "tier1_count": hs_analysis.get("tier1_count", 0),
+                            },
+                        }
+                    )
+                else:
+                    print(f"   ⚠️ 板块四象限数据获取失败")
+                    data_status['板块四象限'] = False
+                    module_logs.append(
+                        {
+                            "module": "input.runtime",
+                            "step": "request.sector_quadrant",
+                            "status": "degraded",
+                            "message": "板块四象限击球区数据为空",
+                            "details": {
+                                "provider": "quicktiny.sector_analysis_quadrant",
+                                "target_keys": ["sector_quadrant"],
+                            },
+                        }
+                    )
+            except Exception as e:
+                print(f"   ⚠️ 板块四象限数据获取异常: {e}")
                 data_status['板块四象限'] = False
                 module_logs.append(
                     {
                         "module": "input.runtime",
                         "step": "request.sector_quadrant",
-                        "status": "degraded",
-                        "message": "板块四象限击球区数据为空",
+                        "status": "error",
+                        "message": "板块四象限击球区请求失败",
                         "details": {
                             "provider": "quicktiny.sector_analysis_quadrant",
                             "target_keys": ["sector_quadrant"],
+                            "error": str(e),
                         },
                     }
                 )
-        except Exception as e:
-            print(f"   ⚠️ 板块四象限数据获取异常: {e}")
-            data_status['板块四象限'] = False
-            module_logs.append(
-                {
-                    "module": "input.runtime",
-                    "step": "request.sector_quadrant",
-                    "status": "error",
-                    "message": "板块四象限击球区请求失败",
-                    "details": {
-                        "provider": "quicktiny.sector_analysis_quadrant",
-                        "target_keys": ["sector_quadrant"],
-                        "error": str(e),
-                    },
-                }
-            )
 
         final_quote_logs = _refresh_final_report_stock_quotes(
             results,
@@ -1208,6 +1246,37 @@ def _run_input_runtime_legacy_body(target_date=None):
         module_logs.extend(final_quote_logs)
         
         # ========== 添加状态跟踪字典到结果 ==========
+        if historical_rebuild_enabled:
+            excluded_payloads = [
+                "etf_turnover_series",
+                "xuangubao_data",
+                "wanzhu_top10",
+                "exchange_monitor_today",
+                "exchange_monitor_nextday",
+                "sector_quadrant",
+            ]
+            excluded_sources = [
+                "当前ETF样本池",
+                "当前选股通板块与涨停解释",
+                "当前顽主杯",
+                "当前异动检测",
+                "当前板块四象限",
+                "雪球当前热榜与解释",
+            ]
+            if not results.get("calendar_events"):
+                excluded_payloads.append("calendar_events")
+                excluded_sources.append("目标日预期日历")
+            results["historical_rebuild"] = {
+                "schema_version": "daily_report_historical_rebuild.v1",
+                "target_date": target_date,
+                "query_date": target_date,
+                "source_date": target_date,
+                "excluded_payloads": excluded_payloads,
+                "excluded_sources": excluded_sources,
+            }
+            results["target_date"] = target_date
+            results["source_date"] = target_date
+            results["query_date"] = target_date
         results['data_status'] = data_status
         results['step_status'] = step_status
         request_diagnostics = build_request_diagnostics(module_logs, data_status=data_status, step_status=step_status)

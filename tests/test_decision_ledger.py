@@ -24,13 +24,13 @@ from report.decision_ledger import (
     merge_snapshot_with_previous_index,
     parse_extreme_conviction_list_from_markdown,
     prune_replaced_same_day_extreme_mentions,
+    refresh_daily_judgment_reviews_for_display,
     render_extreme_conviction_backtest_lines,
     render_extreme_conviction_mention_tracking_lines,
     render_extreme_conviction_tracking_lines,
     write_decision_ledger_artifacts_from_markdown_report,
     write_decision_ledger_artifacts,
 )
-from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 from domains.execution_chain.candidate_selection_nodes.conviction_list import (
     build_candidate_selection_conviction_list_node,
 )
@@ -1844,8 +1844,9 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("后续5日", rendered)
         self.assertIn("+10.00%", rendered)
         self.assertIn("+12.50%", rendered)
-        self.assertIn("待补事实", rendered)
-        self.assertIn("return_5d_pct", rendered)
+        self.assertIn("后续5日表现", rendered)
+        self.assertIn("5日最大回撤", rendered)
+        self.assertNotIn("return_5d_pct", rendered)
 
     def test_coverage_summary_uses_all_auditable_extreme_mentions(self):
         by_stock_code = {}
@@ -2027,9 +2028,9 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows_by_code["000636"]["review_status"], "预演作废")
         self.assertIn("高辨识度", rows_by_code["000636"]["selection_result_evidence"])
         self.assertEqual(rows_by_code["300721"]["selection_result_status"], "识别成功")
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |", rendered)
-        self.assertIn("| 2026-05-22 | 风华高科 | 000636 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
-        self.assertIn("| 2026-05-15 | 怡达股份 | 300721 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 观察位窗口 | 已有进度 | 尚缺 |", rendered)
+        self.assertIn("| 2026-05-22 | 风华高科 | 000636 | 09:50-10:10 | 样本=高惯性 / 高于普通上涨样本；识别=识别成功", rendered)
+        self.assertIn("| 2026-05-15 | 怡达股份 | 300721 | 09:30-09:35 | 样本=高惯性 / 高于普通上涨样本；识别=识别成功", rendered)
 
     def test_rebuilt_same_day_snapshot_drops_stale_extreme_mentions_from_previous_index(self):
         stale_snapshot = build_decision_ledger_snapshot(
@@ -3106,6 +3107,13 @@ class DecisionLedgerTest(unittest.TestCase):
                             "status": "预演命中",
                             "entry_decision": "open_buy",
                             "same_day_action": "按09:30-09:35开盘核心参与；只在竞价表态、开盘承接、回封/打板同时成立时买",
+                            "performance": {
+                                "return_1d_pct": 1.0,
+                                "return_3d_pct": 2.0,
+                                "return_5d_pct": 3.0,
+                                "max_drawdown_5d_pct": -1.0,
+                            },
+                            "source_dates": {"price_source_date": "2026-05-15"},
                         },
                         "mentions": [{"mention_trade_date": "2026-05-14", "source_section": "极度看好名单"}],
                     }
@@ -3118,7 +3126,7 @@ class DecisionLedgerTest(unittest.TestCase):
 
         self.assertIn("**重点观察历史回测表**", rendered)
         self.assertIn("历史回测表仅记录过去预演，不作为明日新增参与依据", rendered)
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 历史标准动作 |", rendered)
         self.assertIn("观察位成立", rendered)
         self.assertNotIn("买点质量", rendered)
         self.assertNotIn("买点成立", rendered)
@@ -3172,10 +3180,9 @@ class DecisionLedgerTest(unittest.TestCase):
 
         rendered = "\n".join(render_extreme_conviction_backtest_lines(index, final_action=final_action))
 
-        self.assertIn("| 2026-06-24 | 长电科技 | 600584 | 明日执行对象 |", rendered)
-        self.assertIn(f"长电科技(600584)已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT}", rendered)
-        self.assertIn("| 2026-06-24 | 海南海药 | 000566 | 高惯性 / 资金选择后的承接观察样本 |", rendered)
-        self.assertIn("等待计划窗口事实回写；不作为明日新增参与依据", rendered)
+        self.assertIn("| 2026-06-24 | 长电科技 | 600584 | 09:30-09:35 | 样本=明日执行对象", rendered)
+        self.assertIn("| 2026-06-24 | 海南海药 | 000566 | 09:30-09:35 | 样本=高惯性 / 资金选择后的承接观察样本", rendered)
+        self.assertIn("观察位质量复盘、执行复盘", rendered)
 
     def test_writer_auto_reviews_previous_extreme_conviction_cases_from_market_facts(self):
         first = build_decision_ledger_snapshot(
@@ -3287,7 +3294,8 @@ class DecisionLedgerTest(unittest.TestCase):
         review = index["by_stock_code"]["600578"][0]["participation_review"]
         self.assertEqual(review["status"], "预演命中")
         self.assertEqual(review["review_trade_date"], "2026-05-14")
-        self.assertIn("开盘核心", review["same_day_action"])
+        self.assertIn("B1执行资格", review["same_day_action"])
+        self.assertIn("不追加B2", review["same_day_action"])
 
     def test_writer_keeps_daily_low_reversal_as_waiting_window_review(self):
         first = build_decision_ledger_snapshot(
@@ -3802,6 +3810,58 @@ class DecisionLedgerTest(unittest.TestCase):
         )
         self.assertNotEqual(reviews["core_candidate"]["actual"], reviews["core_candidate"]["evidence"])
         self.assertNotIn("missing_fields", reviews["market_state"])
+
+    def test_display_refresh_settles_bold_daily_judgments_without_stock_record(self):
+        previous_report = """# 2026-08-17 a股市场分析
+
+**今日判断（2026-08-17，等待下一交易日验证）**
+**T-013**
+| 判断项 | 今日结论 | 下一交易日验证点 |
+|--------|----------|------------------|
+| 市场状态判断 | 加速 | 验证市场是否继续进攻 |
+| 主线判断 | 国产芯片替代 | 验证资金是否继续选择 |
+| 核心候选判断 | 待补事实 | 验证是否进入资金视野 |
+"""
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            report_dir = root / "reports"
+            report_dir.mkdir(parents=True)
+            (report_dir / "2026-08-17_A股日报_完整版.md").write_text(
+                previous_report,
+                encoding="utf-8",
+            )
+            refreshed = refresh_daily_judgment_reviews_for_display(
+                {
+                    "available_trade_dates": ["2026-05-29", "2026-08-18"],
+                    "by_stock_code": {},
+                },
+                trade_date="2026-08-18",
+                root_dir=root,
+                snapshot_data={
+                    "market_state_snapshot": {
+                        "pulse_stage": "退潮",
+                    },
+                    "mainline_turnover_summary": {
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "chaotic_rotation",
+                            "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                        },
+                    },
+                },
+            )
+
+        self.assertIn("2026-08-17", refreshed["available_trade_dates"])
+        reviews = {
+            item["judgment_type"]: item
+            for item in refreshed["daily_judgment_reviews"]
+        }
+        self.assertEqual(set(reviews), {"market_state", "mainline"})
+        self.assertEqual(reviews["market_state"]["expected"], "进攻")
+        self.assertEqual(reviews["market_state"]["actual"], "退潮")
+        self.assertFalse(reviews["market_state"]["is_correct"])
+        self.assertEqual(reviews["mainline"]["expected"], "国产芯片替代")
+        self.assertEqual(reviews["mainline"]["actual"], "无确认主线")
+        self.assertFalse(reviews["mainline"]["is_correct"])
 
     def test_core_candidate_primary_failure_is_not_rescued_by_backup_visibility(self):
         previous_report = """# 2026-06-01 a股市场分析

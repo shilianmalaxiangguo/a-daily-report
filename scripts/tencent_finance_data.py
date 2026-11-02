@@ -64,16 +64,16 @@ class TencentFinanceData:
     def get_calendar_events(self, target_date=None):
         if self._legacy is not None and hasattr(self._legacy, "get_calendar_events"):
             try:
-                return _filter_calendar_events_by_target_date(
-                    _normalize_calendar_events(self._legacy.get_calendar_events(target_date)),
-                    target_date,
-                )
+                legacy_events = _normalize_calendar_events(self._legacy.get_calendar_events(target_date))
+                if legacy_events:
+                    return _filter_calendar_events_by_target_date(legacy_events, target_date)
+                return self._fetch_calendar_events_from_cls(target_date)
             except TypeError:
                 try:
-                    return _filter_calendar_events_by_target_date(
-                        _normalize_calendar_events(self._legacy.get_calendar_events()),
-                        target_date,
-                    )
+                    legacy_events = _normalize_calendar_events(self._legacy.get_calendar_events())
+                    if legacy_events:
+                        return _filter_calendar_events_by_target_date(legacy_events, target_date)
+                    return self._fetch_calendar_events_from_cls(target_date)
                 except Exception:
                     return self._fetch_calendar_events_from_cls(target_date)
             except Exception:
@@ -84,7 +84,7 @@ class TencentFinanceData:
         url = "https://www.cls.cn/api/calendar/web/list"
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Referer": "https://www.cls.cn/calendar",
+            "Referer": "https://www.cls.cn/investkalendar",
             "Origin": "https://www.cls.cn",
         }
         response = self.session.get(url, headers=headers, timeout=15)

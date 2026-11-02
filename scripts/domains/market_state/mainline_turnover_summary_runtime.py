@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import isfinite
+
 from knowledge.sector_narrative_alias import merge_sector_evidence_rows_by_narrative
 
 __all__ = [
@@ -708,14 +710,24 @@ def build_overtake_window_summary(
         }
 
     if attack_state in ("chaotic_rotation", "candidate_attack"):
+        candidate_lines = [
+            str(item or "").strip()
+            for item in attack_summary.get("candidate_lines") or []
+            if str(item or "").strip()
+        ]
+        candidate_text = "、".join(candidate_lines)
         return {
             "window_state": "observe",
             "primary_line": primary_line,
-            "own_line": primary_line or "候选方向",
+            "own_line": primary_line or candidate_text or "候选方向",
             "rival_line": "多方向",
-            "rival_slowdown": "多方向都有局部热度",
+            "rival_slowdown": "多方向均有局部热度，但资金未明显胜出",
             "own_stability": "当前方向强度不足",
-            "observation_maturity": "样本不足，继续跑圈观察",
+            "observation_maturity": (
+                f"{candidate_text}已有局部热度，尚未形成跨日胜出方向"
+                if candidate_text
+                else "候选方向已有局部热度，尚未形成跨日胜出方向"
+            ),
             "overtake_logic": "未形成对手打滑、我方加速的差值",
             "arena_boundary": "不为制造动作扩大战法",
             "speed_gap": "未拉开",
@@ -1012,8 +1024,43 @@ def _append_unique_sector_name(items, value):
         items.append(_hot_sector_display_name(value))
 
 
+def _positive_finite_float(value):
+    number = _safe_float(value)
+    return number if isfinite(number) and number > 0 else 0.0
+
+
+def _hot_sector_row_matches_target_date(row, target_date=""):
+    row = row or {}
+    row_date = str(row.get("date") or row.get("trade_date") or "").strip()
+    target_date = str(target_date or "").strip()
+    return not target_date or not row_date or row_date == target_date
+
+
+def _has_hot_sector_turnover_evidence(row, *, target_date=""):
+    row = row or {}
+    if not _hot_sector_row_matches_target_date(row, target_date):
+        return False
+    share = _positive_finite_float(row.get("turnover_share_pct"))
+    sector_turnover = _positive_finite_float(row.get("sector_turnover") or row.get("sector_turnover_yi"))
+    if sector_turnover <= 0:
+        total_turnover = _positive_finite_float(row.get("total_turnover") or row.get("total_turnover_yi"))
+        if total_turnover > 0 and share > 0:
+            sector_turnover = round(total_turnover * share / 100, 2)
+    return bool(sector_turnover > 0 and share > 0)
+
+
+def _has_strong_hot_sector_watch_evidence(row, *, target_date=""):
+    row = row or {}
+    return bool(
+        _has_hot_sector_turnover_evidence(row, target_date=target_date)
+        and _positive_finite_float(row.get("high_anchor_height")) >= 3
+        and _positive_finite_float(row.get("limit_up_count")) >= 2
+    )
+
+
 def _hot_sector_candidate_names(
     *,
+    target_date="",
     current_mainline="",
     current_snapshot=None,
     recent_sector_turnover_history=None,
@@ -1021,11 +1068,10 @@ def _hot_sector_candidate_names(
     recent_hot_sector_turnover_history=None,
     max_sectors=8,
 ):
+    limit = max(int(max_sectors or 0), 1)
     candidates = []
     _append_unique_sector_name(candidates, _watch_row_sector_name(current_snapshot, current_mainline))
     _append_unique_sector_name(candidates, current_mainline)
-    for row in reversed(list(recent_sector_turnover_history or [])[-8:]):
-        _append_unique_sector_name(candidates, _watch_row_sector_name(row))
     ranked_attack_rows = sorted(
         [row for row in sector_attack_evidence_rows or [] if isinstance(row, dict)],
         key=lambda row: (
@@ -1036,11 +1082,43 @@ def _hot_sector_candidate_names(
         ),
         reverse=True,
     )
+    for row in reversed(list(recent_sector_turnover_history or [])[-8:]):
+        _append_unique_sector_name(candidates, _watch_row_sector_name(row))
     for row in ranked_attack_rows:
         _append_unique_sector_name(candidates, _watch_row_sector_name(row))
     for row in reversed(list(recent_hot_sector_turnover_history or [])):
         _append_unique_sector_name(candidates, _watch_row_sector_name(row))
-    return candidates[: max(int(max_sectors or 0), 1)]
+
+    selected = candidates[:limit]
+    protected_keys = {
+        _hot_sector_alias_key(_watch_row_sector_name(current_snapshot, current_mainline)),
+        _hot_sector_alias_key(current_mainline),
+    }
+    current_attack_keys = {
+        _hot_sector_alias_key(_watch_row_sector_name(row))
+        for row in ranked_attack_rows
+        if _has_hot_sector_turnover_evidence(row, target_date=target_date)
+    }
+    strong_attack_names = []
+    for row in ranked_attack_rows:
+        if _has_strong_hot_sector_watch_evidence(row, target_date=target_date):
+            _append_unique_sector_name(strong_attack_names, _watch_row_sector_name(row))
+    for strong_name in strong_attack_names:
+        strong_key = _hot_sector_alias_key(strong_name)
+        if strong_key in {_hot_sector_alias_key(name) for name in selected}:
+            continue
+        replacement_index = next(
+            (
+                index
+                for index in range(len(selected) - 1, -1, -1)
+                if _hot_sector_alias_key(selected[index]) not in protected_keys
+                and _hot_sector_alias_key(selected[index]) not in current_attack_keys
+            ),
+            None,
+        )
+        if replacement_index is not None:
+            selected[replacement_index] = strong_name
+    return selected
 
 
 def _hot_sector_row_key(item):
@@ -1215,6 +1293,7 @@ def _build_hot_sector_turnover_watch_rows(
     recent_hot_sector_turnover_history=None,
 ):
     candidate_names = _hot_sector_candidate_names(
+        target_date=target_date,
         current_mainline=current_mainline,
         current_snapshot=current_snapshot,
         recent_sector_turnover_history=recent_sector_turnover_history,

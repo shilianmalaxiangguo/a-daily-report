@@ -761,6 +761,51 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("> 当前解读：全A占比5.00%，极致扩散", rendered)
         for trade_date, count, pct, label in rows:
             self.assertIn(f"| {trade_date} | {count} | {pct:.2f}% | {label} |", rendered)
+        self.assertEqual(rendered.count("未判定*"), 5)
+        self.assertIn(
+            "> *板块分布未判定：2026-05-05（250只）、2026-05-04（100只）、2026-05-03（50只）、"
+            "2026-05-02（10只）、2026-05-01（9只）的逐股行业映射未冻结；这些日期不参与领头板块比较。",
+            rendered,
+        )
+        self.assertNotIn("待补充板块", rendered)
+        self.assertNotIn("板块归属事实不足", rendered)
+
+    def test_build_market_trend_sections_contract_names_zero_count_history_without_sector(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 18,
+                    "all_a_share_pct": 0.32,
+                    "summary": "创新高历史含零数量日期。",
+                    "trend_rows": [
+                        {
+                            "trade_date": "2026-07-23",
+                            "new_high_count": 0,
+                            "all_a_share_pct": 0.0,
+                            "change_text": "-14",
+                            "leading_sectors": "待补充板块",
+                        },
+                        {
+                            "trade_date": "2026-08-19",
+                            "new_high_count": 18,
+                            "all_a_share_pct": 0.32,
+                            "change_text": "+18",
+                            "leading_sectors": "化学制药",
+                        },
+                    ],
+                    "sector_distribution": [],
+                    "top_stocks": [],
+                }
+            },
+            target_date="2026-08-19",
+            enabled_node_keys=["new_high"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 2026-07-23 | 0 | 0.00% | 扩散断层 | -14 | 无阶段新高 |", rendered)
+        self.assertNotIn("待补充板块", rendered)
+        self.assertNotIn("2026-07-23（0只）", rendered)
 
     def test_build_market_trend_sections_contract_marks_mixed_source_single_digit_as_structure_only(self):
         sectors = [
@@ -806,8 +851,9 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("扩散断层预警", structure_line)
         self.assertIn("首次进入个位数", structure_line)
         self.assertIn("呈板块碎片化", structure_line)
-        self.assertIn("跨日速度和峰值保留率只作结构观察", structure_line)
-        self.assertIn("事实不足", structure_line)
+        self.assertIn("跨日速度和峰值保留率不计算", structure_line)
+        self.assertIn("逐日采集来源或来源日期未统一", structure_line)
+        self.assertNotIn("事实不足", structure_line)
         self.assertNotIn("-66.67%", structure_line)
         self.assertNotIn("半导体主导", structure_line)
         self.assertNotIn("主导板块", rendered)

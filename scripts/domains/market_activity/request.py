@@ -1,5 +1,10 @@
 import datetime as _dt
 
+from domains.market_activity.new_high_runtime import (
+    is_missing_new_high_name,
+    reconcile_new_high_feedback_identity,
+)
+
 
 def _append_log(logs, step, status, message, **details):
     logs.append(
@@ -37,6 +42,7 @@ HOT_RANK_SAMPLE_TARGET = 50
 HOT_RANK_STATUS_LABEL = f"热度前{HOT_RANK_SAMPLE_TARGET}个股"
 HOT_RANK_STEP_LABEL = f"{HOT_RANK_STATUS_LABEL}获取"
 _REPORT_STOCK_LIST_KEYS = {
+    "top_stocks",
     "hot_rank_top30",
     "hot_rank_top50",
     "integrated_hot_list",
@@ -86,6 +92,7 @@ _REPORT_STOCK_OBJECT_KEYS = {
     "candidate",
 }
 _REPORT_STOCK_CONTAINER_KEYS = {
+    "new_high_feedback",
     "execution_stage_context",
     "market_research_snapshot",
     "candidate_snapshot",
@@ -484,7 +491,10 @@ def _has_limit_pool_rows(snapshot):
     snapshot = snapshot or {}
     if snapshot.get("source_status") == "partial":
         return False
-    return bool(snapshot.get("zt_pool") or snapshot.get("dt_pool"))
+    direction_status = snapshot.get("direction_status") or {}
+    up_confirmed = bool(snapshot.get("zt_pool")) or direction_status.get("up") is True
+    down_confirmed = bool(snapshot.get("dt_pool")) or direction_status.get("down") is True
+    return up_confirmed and down_confirmed
 
 
 def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
@@ -492,12 +502,15 @@ def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
     zt_pool_records = list(snapshot.get("zt_pool") or [])
     dt_pool_records = list(snapshot.get("dt_pool") or [])
     market_stats = dict(snapshot.get("market_stats") or {})
+    direction_status = snapshot.get("direction_status") or {}
+    up_confirmed = bool(zt_pool_records) or direction_status.get("up") is True
+    down_confirmed = bool(dt_pool_records) or direction_status.get("down") is True
 
     results["zt_pool"] = zt_pool_records
     results["limit_up_codes"] = set(snapshot.get("limit_up_codes") or [row.get("代码") for row in zt_pool_records if row.get("代码")])
     artifacts["limit_up_df"] = snapshot.get("limit_up_df") or _RecordFrame(zt_pool_records)
     artifacts["limit_up_provider"] = snapshot.get("provider", "tushare.limit_list_ths")
-    data_status["涨停池"] = bool(zt_pool_records)
+    data_status["涨停池"] = up_confirmed
     if zt_pool_records:
         emit(f"   ✅ 涨停池: {len(zt_pool_records)} 只")
         results["zt_pool_by_sector"] = _build_sector_bucket(zt_pool_records, include_zt_type=True)
@@ -505,13 +518,13 @@ def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
         emit(f"   ✅ 涨停股板块分布: {len(results['zt_pool_by_sector'])} 个板块")
     else:
         results["zt_pool_by_sector"] = {}
-        data_status["涨停股板块分布"] = False
-        emit("   ❌ 涨停池为空")
+        data_status["涨停股板块分布"] = up_confirmed
+        emit("   ✅ 涨停池: 0 只（来源已确认）" if up_confirmed else "   ❌ 涨停池事实未确认")
 
     results["dt_pool"] = dt_pool_records
     results["limit_down_codes"] = set(snapshot.get("limit_down_codes") or [row.get("代码") for row in dt_pool_records if row.get("代码")])
     artifacts["limit_down_df"] = snapshot.get("limit_down_df") or _RecordFrame(dt_pool_records)
-    data_status["跌停池"] = bool(dt_pool_records)
+    data_status["跌停池"] = down_confirmed
     if dt_pool_records:
         emit(f"   ✅ 跌停池: {len(dt_pool_records)} 只")
         results["dt_pool_by_sector"] = _build_sector_bucket(dt_pool_records)
@@ -519,8 +532,8 @@ def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
         emit(f"   ✅ 跌停股板块分布: {len(results['dt_pool_by_sector'])} 个板块")
     else:
         results["dt_pool_by_sector"] = {}
-        data_status["跌停股板块分布"] = False
-        emit("   ❌ 跌停池为空")
+        data_status["跌停股板块分布"] = down_confirmed
+        emit("   ✅ 跌停池: 0 只（来源已确认）" if down_confirmed else "   ❌ 跌停池事实未确认")
 
     results["market_stats"] = market_stats
     data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
@@ -539,6 +552,7 @@ def collect_market_activity_pool_request_bundle(
     request_registry=None,
     current_date=None,
     allow_realtime_market_activity=None,
+    historical_rebuild=False,
     timer,
     emit,
 ):
@@ -590,6 +604,34 @@ def collect_market_activity_pool_request_bundle(
                 fallback_used=bool(snapshot.get("fallback_used")),
                 error=snapshot.get("source_error", "empty_result"),
             )
+            if historical_rebuild:
+                results.update(
+                    {
+                        "zt_pool": [],
+                        "dt_pool": [],
+                        "zt_pool_by_sector": {},
+                        "dt_pool_by_sector": {},
+                        "market_stats": snapshot_market_stats,
+                    }
+                )
+                data_status.update(
+                    {
+                        "涨停池": False,
+                        "跌停池": False,
+                        "涨停股板块分布": False,
+                        "跌停股板块分布": False,
+                        "大盘涨跌统计": _market_breadth_counts_complete(snapshot_market_stats),
+                    }
+                )
+                timer.record("涨停跌停数据获取(失败)", 4)
+                emit("   ❌ 目标日 Tushare 涨跌停事实不完整")
+                return {
+                    "results": results,
+                    "data_status": data_status,
+                    "step_status": step_status,
+                    "module_logs": module_logs,
+                    "artifacts": artifacts,
+                }
 
         date_str = str(target_date or "").replace("-", "")
 
@@ -607,12 +649,18 @@ def collect_market_activity_pool_request_bundle(
             emit(f"   ✅ 涨停股板块分布: {len(results['zt_pool_by_sector'])} 个板块")
         else:
             results["zt_pool"] = []
+            results["zt_pool_by_sector"] = {}
             results["limit_up_codes"] = set()
             data_status["涨停池"] = False
-            emit("   ❌ 涨停池为空")
+            data_status["涨停股板块分布"] = False
+            emit("   ❌ 涨停池事实未确认")
 
         limit_down_df, limit_down_codes = get_limit_down_pool(date_str)
         artifacts["limit_down_df"] = limit_down_df
+        limit_down_attrs = getattr(limit_down_df, "attrs", {}) or {}
+        artifacts["limit_down_provider"] = limit_down_attrs.get(
+            "provider", "akshare.stock_zt_pool_dtgc_em"
+        )
         if not limit_down_df.empty:
             dt_pool_records = limit_down_df.to_dict("records")
             results["dt_pool"] = dt_pool_records
@@ -624,9 +672,16 @@ def collect_market_activity_pool_request_bundle(
             emit(f"   ✅ 跌停股板块分布: {len(results['dt_pool_by_sector'])} 个板块")
         else:
             results["dt_pool"] = []
+            results["dt_pool_by_sector"] = {}
             results["limit_down_codes"] = set()
-            data_status["跌停池"] = False
-            emit("   ❌ 跌停池为空")
+            limit_down_confirmed = limit_down_attrs.get("source_confirmed") is True
+            data_status["跌停池"] = limit_down_confirmed
+            data_status["跌停股板块分布"] = limit_down_confirmed
+            emit(
+                "   ✅ 跌停池: 0 只（来源已确认）"
+                if limit_down_confirmed
+                else "   ❌ 跌停池事实未确认"
+            )
 
         fallback_stats = {
             "up_count": 0,
@@ -807,13 +862,22 @@ def collect_market_activity_pool_request_bundle(
         step_status["涨停跌停数据获取"] = True
         elapsed, _ = timer.record("涨停跌停数据获取", 4)
         emit(f"   ✅ 涨停跌停数据完成 [⏱ {elapsed:.2f}s]")
+        limit_down_provider = str(
+            artifacts.get("limit_down_provider") or "akshare.stock_zt_pool_dtgc_em"
+        )
+        limit_pool_provider = (
+            "akshare.limit_up_down"
+            if limit_down_provider == "akshare.stock_zt_pool_dtgc_em"
+            else f"akshare.stock_zt_pool_em+{limit_down_provider}"
+        )
         _append_log(
             module_logs,
             "request.pool_snapshot",
             "success",
             "已获取涨停跌停池与市场活跃度快照",
             provider=(
-                "akshare.limit_up_down+"
+                limit_pool_provider
+                + "+"
                 + (
                     ((results.get("market_stats") or {}).get("source") or (results.get("market_stats") or {}).get("data_source") or "storage.stock_daily_quotes_recent")
                     if not realtime_market_activity_allowed
@@ -829,11 +893,15 @@ def collect_market_activity_pool_request_bundle(
         emit(f"   ❌ 涨停跌停数据失败: {error} [⏱ {elapsed:.2f}s]")
         results["zt_pool"] = []
         results["dt_pool"] = []
+        results["zt_pool_by_sector"] = {}
+        results["dt_pool_by_sector"] = {}
         results["limit_up_codes"] = set()
         results["limit_down_codes"] = set()
         results["market_stats"] = {}
         data_status["涨停池"] = False
+        data_status["涨停股板块分布"] = False
         data_status["跌停池"] = False
+        data_status["跌停股板块分布"] = False
         data_status["大盘涨跌统计"] = False
         _append_log(
             module_logs,
@@ -864,6 +932,7 @@ def collect_market_activity_hot_rank_request_bundle(
     request_registry=None,
     xueqiu_hot_rank_fetcher=None,
     xueqiu_argument_fetcher=None,
+    historical_rebuild=False,
     timer,
     emit,
 ):
@@ -937,7 +1006,7 @@ def collect_market_activity_hot_rank_request_bundle(
             required_count=HOT_RANK_SAMPLE_TARGET,
         )
 
-    if not _hot_rank_sample_complete(results.get("hot_rank_top30")):
+    if not historical_rebuild and not _hot_rank_sample_complete(results.get("hot_rank_top30")):
         try:
             hot_stocks = fetch_ths_hot_stock(num=HOT_RANK_SAMPLE_TARGET)
         except Exception as error:
@@ -992,7 +1061,7 @@ def collect_market_activity_hot_rank_request_bundle(
                 required_count=HOT_RANK_SAMPLE_TARGET,
             )
 
-    if not _hot_rank_sample_complete(results.get("hot_rank_top30")):
+    if not historical_rebuild and not _hot_rank_sample_complete(results.get("hot_rank_top30")):
         try:
             hot_stocks = tencent.get_hot_stocks(num=HOT_RANK_SAMPLE_TARGET)
             if hot_stocks:
@@ -1051,21 +1120,27 @@ def collect_market_activity_hot_rank_request_bundle(
                 required_count=HOT_RANK_SAMPLE_TARGET,
             )
 
-    _collect_xueqiu_hot_rank_factors(
-        results,
-        data_status,
-        step_status,
-        module_logs,
-        xueqiu_hot_rank_fetcher=xueqiu_hot_rank_fetcher,
-        xueqiu_argument_fetcher=xueqiu_argument_fetcher,
-        emit=emit,
-    )
+    if not historical_rebuild:
+        _collect_xueqiu_hot_rank_factors(
+            results,
+            data_status,
+            step_status,
+            module_logs,
+            xueqiu_hot_rank_fetcher=xueqiu_hot_rank_fetcher,
+            xueqiu_argument_fetcher=xueqiu_argument_fetcher,
+            emit=emit,
+        )
 
     emit("  5️⃣.5️⃣ 构建整合热榜数据（Tushare 热榜优先）...")
     try:
         hot_rank_provider = _provider_from_rows(results.get("hot_rank_top30", []), "")
+        current_integrated_payload = (
+            []
+            if historical_rebuild
+            else get_integrated_hot_list(limit=100)
+        )
         integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = _normalize_integrated_hot_list_payload(
-            get_integrated_hot_list(limit=100)
+            current_integrated_payload
         )
         integrated_provider = "hot_list_integrated.get_integrated_hot_list"
         fallback_used = False
@@ -1229,6 +1304,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
     timer,
     emit,
     current_dates=None,
+    historical_rebuild=False,
 ):
     results = {}
     data_status = {}
@@ -1291,7 +1367,11 @@ def collect_market_activity_sector_snapshot_request_bundle(
             inflow = _normalize_sector_fund_flow_rows(sector_flow.get("inflow", []))
             outflow = _normalize_sector_fund_flow_rows(sector_flow.get("outflow", []))
             provider = (sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths")
-            if not (inflow or outflow) and (target_date == today or target_date == yesterday):
+            if (
+                not historical_rebuild
+                and not (inflow or outflow)
+                and (target_date == today or target_date == yesterday)
+            ):
                 inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
                 outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
                 if inflow or outflow:
@@ -1316,7 +1396,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
                 step_status["行业资金流向获取"] = False
                 timer.record("行业资金流向获取(失败)", 7)
                 emit("   ❌ 行业资金流向返回空，关键数据不完整，停止生成")
-        elif target_date == today or target_date == yesterday:
+        elif not historical_rebuild and (target_date == today or target_date == yesterday):
             inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
             outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
             results["sector_fund_flow"] = {
@@ -1688,6 +1768,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
     limit_up_df,
     existing_results,
     fetch_lhb_rows,
+    resolve_stock_sector=None,
     request_registry=None,
     limit_up_provider="akshare.limit_up_pool",
     timer,
@@ -1797,11 +1878,33 @@ def collect_market_activity_capital_snapshot_request_bundle(
             grouped_record_count = int(
                 _safe_float(snapshot.get("lhb_grouped_record_count"), len(grouped_rows))
             )
+            sector_enriched_count = 0
             for item in net_buy_top10 + net_sell_top10:
                 code = item.get("code", "")
                 if code and not _is_valid_sector_label(item.get("sector")):
                     item["sector"] = _resolve_lhb_sector(code, existing_results)
+                if code and not _is_valid_sector_label(item.get("sector")) and callable(resolve_stock_sector):
+                    try:
+                        resolved_sector = resolve_stock_sector(
+                            item.get("name", ""),
+                            code,
+                            hot_rank_data=existing_results.get("hot_rank_top30"),
+                            zt_pool_data=existing_results.get("zt_pool_by_sector"),
+                            zt_pool_raw=existing_results.get("zt_pool"),
+                            dt_pool_raw=existing_results.get("dt_pool"),
+                            lianban_data=existing_results.get("lianban_data"),
+                            lhb_data=None,
+                            sector_fund_flow=existing_results.get("sector_fund_flow"),
+                            xuangubao_data=existing_results.get("xuangubao_data"),
+                            skip_api_call=False,
+                        )
+                    except Exception:
+                        resolved_sector = ""
+                    if _is_valid_sector_label(resolved_sector):
+                        item["sector"] = str(resolved_sector).strip()
+                        sector_enriched_count += 1
         else:
+            sector_enriched_count = 0
             lhb_rows = list(fetch_lhb_rows(target_date) or [])
             source_record_count = len(lhb_rows)
             grouped = {}
@@ -1898,6 +2001,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
             buy_count=len(net_buy_top10),
             sell_count=len(net_sell_top10),
             inst_detail_count=len(inst_detail),
+            sector_enriched_count=sector_enriched_count,
         )
     except Exception as error:
         results["lhb_net_buy_top10"] = []
@@ -2038,12 +2142,23 @@ def _quote_info_complete(info, *, target_date=None):
     return all(value > 0 for value in numeric_prices)
 
 
+def _quote_identity_complete(info, code):
+    if not isinstance(info, dict):
+        return False
+    name = info.get("name") or info.get("名称") or info.get("stock_name")
+    return bool(
+        not is_missing_new_high_name(name, code)
+        and _quote_info_sector(info)
+    )
+
+
 def _patch_quote_fields(row, info):
     patched = dict(row or {})
     info = info or {}
-    if not patched.get("name"):
+    code = _report_stock_code(patched)
+    if is_missing_new_high_name(patched.get("name") or patched.get("名称"), code):
         name_from_info = info.get("name") or info.get("名称", "")
-        if name_from_info:
+        if not is_missing_new_high_name(name_from_info, code):
             patched["name"] = name_from_info
     if not _is_valid_sector_label(patched.get("sector")):
         sector_from_info = _quote_info_sector(info)
@@ -2098,6 +2213,7 @@ def collect_market_activity_stock_quote_request_bundle(
 
     emit("\n📊 批量获取股票完整信息（涨跌幅、最高价、最低价、开盘价、收盘价）...")
     all_stock_codes = _collect_report_stock_quote_codes(existing_results)
+    new_high_codes = _collect_report_stock_quote_codes(existing_results.get("new_high_feedback") or {})
     existing_stock_full_info = _normalize_stock_info_map(existing_results.get("stock_full_info") or {})
     realtime_quote_allowed = _realtime_quote_fallback_allowed(
         target_date,
@@ -2110,7 +2226,10 @@ def collect_market_activity_stock_quote_request_bundle(
             stock_full_info = dict(existing_stock_full_info)
             provider = "tencent.get_stock_batch_info"
             refresh_codes = sorted(
-                code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                code
+                for code in all_stock_codes
+                if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                or (code in new_high_codes and not _quote_identity_complete(stock_full_info.get(code), code))
             )
             if callable(fetch_tushare_stock_batch_info) and refresh_codes:
                 try:
@@ -2124,7 +2243,9 @@ def collect_market_activity_stock_quote_request_bundle(
                     valid_tushare_info = {
                         code: info
                         for code, info in tushare_info.items()
-                        if code in refresh_codes and _quote_info_complete(info, target_date=target_date)
+                        if code in refresh_codes
+                        and _quote_info_complete(info, target_date=target_date)
+                        and (code not in new_high_codes or _quote_identity_complete(info, code))
                     }
                     if valid_tushare_info:
                         stock_full_info.update(valid_tushare_info)
@@ -2136,7 +2257,10 @@ def collect_market_activity_stock_quote_request_bundle(
                         emit(f"   ⚠️ Tushare批量股票补数失败: {error}，历史日期不使用实时行情源")
 
             missing_codes = sorted(
-                code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                code
+                for code in all_stock_codes
+                if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                or (code in new_high_codes and not _quote_identity_complete(stock_full_info.get(code), code))
             )
             if missing_codes and realtime_quote_allowed:
                 tencent_info = _normalize_stock_info_map(fetch_stock_batch_info(missing_codes))
@@ -2147,7 +2271,10 @@ def collect_market_activity_stock_quote_request_bundle(
                     else:
                         provider = "tencent.get_stock_batch_info"
                 missing_codes = sorted(
-                    code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                    code
+                    for code in all_stock_codes
+                    if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                    or (code in new_high_codes and not _quote_identity_complete(stock_full_info.get(code), code))
                 )
             elif missing_codes:
                 provider = "tushare.daily"
@@ -2205,6 +2332,25 @@ def collect_market_activity_stock_quote_request_bundle(
                 or key in _REPORT_STOCK_CONTAINER_KEYS
             ) and _has_report_stock_rows(existing_results.get(key)):
                 results[key] = value
+
+    feedback = existing_results.get("new_high_feedback") or results.get("new_high_feedback")
+    if isinstance(feedback, dict):
+        feedback, identity = reconcile_new_high_feedback_identity(
+            feedback,
+            stock_full_info_for_fill,
+            target_date=target_date,
+        )
+        results["new_high_feedback"] = feedback
+        if identity.get("issues"):
+            _append_log(
+                module_logs,
+                "request.new_high_feedback_identity",
+                "degraded",
+                "创新高样本名称或所属板块事实不完整",
+                provider=identity.get("source") or "new_high_feedback.top_stocks",
+                target_keys=["new_high_feedback"],
+                issues=identity.get("issues") or [],
+            )
 
     return {
         "results": results,

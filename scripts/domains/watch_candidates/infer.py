@@ -577,16 +577,10 @@ def _build_abnormal_watch_pool_legacy_body(
                 sector = stock.get("sector", "") or stock.get("所属行业", "") or stock.get("所属板块", "")
                 is_mainline = sector_name_matches(sector, mainline_name) if mainline_name else False
                 base_score = _safe_float(stock.get("tomorrow_strength", stock.get("score", 0)))
-                follow_state = "跌不下去" if (is_mainline or base_score >= 70) else "新异动待观察"
-                abnormal_type = "放量大阳异动"
+                follow_state = "新异动待观察"
+                abnormal_type = "近期K线不足"
                 setup_signal = _resolve_abnormal_setup_signal(abnormal_type, follow_state)
                 anchor_price = _safe_float(stock.get("close", stock.get("price", 0)))
-                abnormal_score = (
-                    state_score_map.get(follow_state, 0)
-                    + type_score_map.get(abnormal_type, 0)
-                    + min(int(base_score / 10), 12)
-                    + (8 if is_mainline else 0)
-                )
                 watch_pool.append(
                     {
                         "name": stock.get("name", "未知"),
@@ -600,13 +594,14 @@ def _build_abnormal_watch_pool_legacy_body(
                         "setup_signal_phase": setup_signal.get("phase", ""),
                         "anchor_price": round(anchor_price, 2) if anchor_price else 0,
                         "action_rule": "观察样本：先看是否强于市场，不预设参与。",
-                        "abnormal_note": "缺少近期K线，先按强势/主线优先级纳入异常观察。",
-                        "abnormal_score": abnormal_score,
+                        "abnormal_note": "缺少近期K线，只保留待补事实观察，不形成承接结论。",
+                        "abnormal_score": 0,
                         "source": stock.get("source", ""),
                         "is_mainline": is_mainline,
                         "is_degraded_snapshot": True,
                         "degraded_reason": "missing_recent_bars",
                         "formal_decision_eligible": False,
+                        "observation_priority_eligible": False,
                     }
                 )
             continue
@@ -680,6 +675,7 @@ def _build_abnormal_watch_pool_legacy_body(
                 "is_degraded_snapshot": False,
                 "degraded_reason": "",
                 "formal_decision_eligible": True,
+                "observation_priority_eligible": True,
             }
         )
 

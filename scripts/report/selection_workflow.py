@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import datetime
+import math
+import re
+from copy import deepcopy
+
 from report.position_tier_contract import (
     normalize_planned_position_tier_pct,
     planned_position_tier_cap_pct,
+)
+from report.candidate_decision_evidence import (
+    build_sector_diffusion_stage_evidence,
+    build_sector_tournament_three_axis,
 )
 
 
 SCHEMA_VERSION = "selection_workflow.v1"
 DERIVATION_CONTRACT = "sector_first_strict.v1"
+_ISO_DATE_IN_TEXT_PATTERN = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
 LEGACY_SIGNAL_MARKERS = (
     "涨停",
     "连板",
@@ -184,6 +194,51 @@ def _clean_list(value):
         text = clean_visible_text(item)
         if text and text not in rows:
             rows.append(text)
+    return rows
+
+
+def _dated_evidence_items(value, target_date):
+    if isinstance(value, (list, tuple)):
+        source = value
+    elif value in (None, ""):
+        source = []
+    else:
+        source = [value]
+    rows = []
+    for item in source:
+        if isinstance(item, dict):
+            item_date = next(
+                (
+                    _valid_trade_date(item.get(key))
+                    for key in ("source_date", "trade_date", "date", "query_date")
+                    if _valid_trade_date(item.get(key))
+                ),
+                "",
+            )
+            text = clean_visible_text(
+                item.get("text")
+                or item.get("evidence")
+                or item.get("description")
+            )
+        else:
+            item_date = ""
+            text = clean_visible_text(item)
+        embedded_dates = [
+            _valid_trade_date(match)
+            for match in _ISO_DATE_IN_TEXT_PATTERN.findall(text)
+            if _valid_trade_date(match)
+        ]
+        if (
+            not text
+            or not (item_date or embedded_dates)
+            or (item_date and target_date and item_date > target_date)
+            or any(target_date and date > target_date for date in embedded_dates)
+        ):
+            continue
+        source_date = item_date or max(embedded_dates)
+        row = {"text": text, "source_date": source_date}
+        if row not in rows:
+            rows.append(row)
     return rows
 
 
@@ -486,6 +541,14 @@ def _normalize_quote_date(value):
     return text
 
 
+def _valid_trade_date(value):
+    normalized = _normalize_quote_date(value)
+    try:
+        return datetime.date.fromisoformat(normalized).isoformat()
+    except (TypeError, ValueError):
+        return ""
+
+
 def _mapping_dates(value, *keys):
     value = _as_dict(value)
     dates = []
@@ -502,7 +565,22 @@ def _nested_source_date(value, key):
 
 
 def _sector_source_date(data, context, snapshot, supplied=None):
-    for source in (_as_dict(supplied), _as_dict(context), _as_dict(snapshot)):
+    roots = (
+        _as_dict(supplied),
+        _as_dict(context),
+        _as_dict(snapshot),
+    )
+    dated_sources = list(roots)
+    for root in (*roots[1:], _as_dict(data)):
+        dated_sources.extend(
+            _as_dict(root.get(key))
+            for key in (
+                "mainline_turnover_summary",
+                "current_sector_turnover_snapshot",
+                "current_mainline_history_record",
+            )
+        )
+    for source in dated_sources:
         nested = _nested_source_date(source, "sector_source_date")
         if nested:
             return nested
@@ -511,7 +589,6 @@ def _sector_source_date(data, context, snapshot, supplied=None):
             "sector_source_date",
             "trade_date",
             "source_date",
-            "target_date",
             "date",
         )
         if dates:
@@ -1077,6 +1154,27 @@ def _candidate_driver_tags(candidate):
     return tags
 
 
+_NON_DIRECTION_SECTOR_NAMES = {
+    "-",
+    "暂无",
+    "待确认",
+    "待补事实",
+    "事实不足",
+    "无确认主线",
+    "暂无确认主线",
+    "暂无明确主线",
+    "主线待确认",
+    "无确认主攻线",
+    "暂无确认主攻线",
+    "未形成跨日胜出方向",
+    "当日资金未形成明确进攻方向",
+    "候选方向",
+    "当前方向",
+    "混沌轮动",
+    "多方向轮动",
+}
+
+
 def _sector_name(value):
     if isinstance(value, dict):
         value = (
@@ -1086,23 +1184,178 @@ def _sector_name(value):
             or value.get("direction")
             or value.get("name")
         )
-    return clean_visible_text(value)
+    sector = clean_visible_text(value)
+    return "" if sector in _NON_DIRECTION_SECTOR_NAMES else sector
 
 
-def _sector_names_match(left, right):
+_PROOF_WRITER = "selection_workflow.local_trend_sector_proof"
+_INTERNAL_EXPANSION_RULE = "趋势数≥2且强势数≥2"
+
+
+def _sector_canonical_index(*sources):
+    """把行业原始名归到报告已经使用的标准板块名，避免同一方向用三套名字各算一遍。"""
+    for source in sources:
+        analysis = _as_dict(_as_dict(source).get("sector_ai_analysis"))
+        mapping = _as_dict(analysis.get("mapping"))
+        tree = _as_dict(analysis.get("sector_tree"))
+        if not mapping and not tree:
+            continue
+        canonical = {}
+        for name, target in mapping.items():
+            name = clean_visible_text(name)
+            target = clean_visible_text(target)
+            if name and target:
+                canonical[name] = target
+        families = {}
+        for name, target in canonical.items():
+            families.setdefault(target, []).append(name)
+        for theme, node in tree.items():
+            theme = clean_visible_text(theme)
+            if not theme:
+                continue
+            members = families.setdefault(theme, [])
+            for member in _as_list(_as_dict(node).get("all_sectors")):
+                member = clean_visible_text(member)
+                if member and member not in members:
+                    members.append(member)
+        return {"canonical": canonical, "families": families}
+    return {}
+
+
+def _sector_canonical(name, sector_index=None):
+    name = _sector_name(name)
+    if not name:
+        return ""
+    return clean_visible_text(_as_dict(sector_index).get("canonical", {}).get(name)) or name
+
+
+def _sector_names_match(left, right, sector_index=None):
     left = _sector_name(left)
     right = _sector_name(right)
     if not left or not right:
         return False
-    return left == right or (len(left) >= 2 and len(right) >= 2 and (left in right or right in left))
+    if left == right or (len(left) >= 2 and len(right) >= 2 and (left in right or right in left)):
+        return True
+    sector_index = _as_dict(sector_index)
+    if not sector_index:
+        return False
+    if _sector_canonical(left, sector_index) != _sector_canonical(right, sector_index):
+        return False
+    # 同一标准板块只承认"标准名与其成员行业"之间成立，不把两个成员行业互相等同。
+    families = _as_dict(sector_index.get("families"))
+    return right in (families.get(left) or []) or left in (families.get(right) or [])
 
 
-def _sector_trend_row(context, direction=""):
+def _is_own_proof_payload(value):
+    value = _as_dict(value)
+    if not value:
+        return False
+    if value.get("produced_by") == _PROOF_WRITER:
+        return True
+    return "evidence_gaps" in value and "direction" in value and "complete" in value
+
+
+def _first_as_of_sector_value(candidates, target_date, *, target_day_only=False):
+    target_date = _valid_trade_date(target_date)
+    for value, source_date in candidates:
+        sector = _sector_name(value)
+        source_date = _valid_trade_date(source_date)
+        if not sector or not source_date:
+            continue
+        if target_day_only:
+            if source_date != target_date:
+                continue
+        elif target_date and source_date > target_date:
+            continue
+        return sector, source_date
+    return "", ""
+
+
+def _select_as_of_status_dates(
+    sources,
+    *,
+    status_key,
+    dates_key,
+    target_date,
+    status_aliases,
+):
+    target_date = _valid_trade_date(target_date)
+    candidates = []
+    excluded_future_dates = []
+    for source in sources:
+        source = _as_dict(source)
+        raw_dates = [
+            _valid_trade_date(value)
+            for value in _as_list(source.get(dates_key))
+        ]
+        dates = sorted(
+            {
+                date
+                for date in raw_dates
+                if date and (not target_date or date <= target_date)
+            }
+        )
+        excluded_future_dates.extend(
+            date for date in raw_dates if date and target_date and date > target_date
+        )
+        raw_status = clean_text(source.get(status_key)).lower()
+        status = status_aliases.get(raw_status, "unresolved")
+        if dates or raw_status:
+            candidates.append((status, dates))
+    selected = next(
+        (
+            row
+            for row in candidates
+            if len(row[1]) >= 2 and row[0] != "unresolved"
+        ),
+        None,
+    )
+    if selected is None:
+        selected = next((row for row in candidates if len(row[1]) >= 2), None)
+    if selected is None:
+        selected = next((row for row in candidates if row[1]), ("unresolved", []))
+    status, dates = selected
+    if len(dates) < 2:
+        status = "unresolved"
+    return status, dates, sorted(set(excluded_future_dates))
+
+
+def _first_target_day_rotation_count(candidates, target_date):
+    target_date = _valid_trade_date(target_date)
+    for value, source_date in candidates:
+        if value in (None, ""):
+            continue
+        number = _safe_float(value)
+        source_date = _valid_trade_date(source_date)
+        if (
+            number is not None
+            and number >= 0
+            and number.is_integer()
+            and source_date == target_date
+        ):
+            return int(number), source_date
+    return None, ""
+
+
+def _sector_trend_row(context, direction="", sector_index=None):
     rows = [item for item in _as_list(_as_dict(context).get("sector_trend_snapshot")) if isinstance(item, dict)]
+    sector_index = _as_dict(sector_index)
     if direction:
-        matched = next((item for item in rows if _sector_names_match(item, direction)), None)
+        matched = [item for item in rows if _sector_names_match(item, direction, sector_index)]
+        if len(matched) == 1:
+            row = dict(matched[0])
+            row["matched_sectors"] = [_sector_name(matched[0])]
+            return row
         if matched:
-            return matched
+            aggregate = {"sector": _sector_name(direction), "matched_sectors": [_sector_name(item) for item in matched]}
+            for key in ("trend_count", "strong_count", "limit_up_count"):
+                total = 0
+                for item in matched:
+                    value = _safe_float(item.get(key))
+                    if value and value > 0:
+                        total += value
+                aggregate[key] = total
+            return aggregate
     return rows[0] if len(rows) == 1 else {}
 
 
@@ -1115,6 +1368,115 @@ def _mainline_summary(*sources):
     return {}
 
 
+def _liquidity_allocation_facts(data, context, snapshot, *, target_date=""):
+    normalized_target_date = _valid_trade_date(target_date)
+    sources = (_as_dict(data), _as_dict(context), _as_dict(snapshot))
+
+    def consistent_record_date(record):
+        present_values = [
+            record.get(key)
+            for key in ("source_date", "trade_date", "date", "query_date")
+            if record.get(key) not in (None, "")
+        ]
+        normalized_dates = [_valid_trade_date(value) for value in present_values]
+        if (
+            not normalized_dates
+            or any(not date for date in normalized_dates)
+            or len(set(normalized_dates)) != 1
+        ):
+            return ""
+        return normalized_dates[0]
+
+    current_values = set()
+    breadth_values = set()
+    history_by_date = {}
+    for source in sources:
+        current = _as_dict(source.get("current_sector_turnover_snapshot"))
+        current_date = consistent_record_date(current)
+        current_total = _safe_float(current.get("total_turnover"))
+        if (
+            current_date == normalized_target_date
+            and current_total is not None
+            and math.isfinite(current_total)
+            and current_total > 0
+        ):
+            current_values.add(round(current_total, 2))
+
+        market_stats = _as_dict(source.get("market_stats"))
+        breadth_date = consistent_record_date(market_stats)
+        up_count = _safe_float(market_stats.get("up_count"))
+        down_count = _safe_float(market_stats.get("down_count"))
+        if (
+            breadth_date == normalized_target_date
+            and up_count is not None
+            and down_count is not None
+            and up_count >= 0
+            and down_count >= 0
+            and up_count.is_integer()
+            and down_count.is_integer()
+            and up_count + down_count > 0
+        ):
+            breadth_values.add((int(up_count), int(down_count)))
+
+        history_candidates = [(source.get("recent_sector_turnover_history"), 1)]
+        summary = _as_dict(source.get("mainline_turnover_summary"))
+        history_candidates.append((summary.get("recent_sector_turnover_history"), 1))
+        top50_series = _as_dict(source.get("top50_turnover_share_series"))
+        history_candidates.append((top50_series.get("rows"), 2))
+        for rows, priority in history_candidates:
+            for row in _as_list(rows):
+                row = _as_dict(row)
+                row_date = consistent_record_date(row)
+                if not row_date or not normalized_target_date or row_date >= normalized_target_date:
+                    continue
+                total_turnover = _safe_float(
+                    row.get("total_turnover")
+                    if row.get("total_turnover") not in (None, "")
+                    else row.get("market_amount_yi")
+                )
+                if (
+                    total_turnover is not None
+                    and math.isfinite(total_turnover)
+                    and total_turnover > 0
+                ):
+                    history_by_date.setdefault(row_date, []).append(
+                        (priority, total_turnover)
+                    )
+
+    current_total_turnover = next(iter(current_values)) if len(current_values) == 1 else None
+    up_count = down_count = None
+    if len(breadth_values) == 1:
+        up_count, down_count = next(iter(breadth_values))
+    previous_source_date = max(history_by_date) if history_by_date else ""
+    previous_rows = history_by_date.get(previous_source_date, [])
+    previous_total_turnover = None
+    if previous_rows:
+        highest_priority = max(priority for priority, _value in previous_rows)
+        preferred_values = [
+            value for priority, value in previous_rows if priority == highest_priority
+        ]
+        if len({round(value, 2) for value in preferred_values}) == 1:
+            previous_total_turnover = max(
+                preferred_values,
+                key=lambda value: len(str(value).partition(".")[2].rstrip("0")),
+            )
+    return {
+        "current_total_turnover": current_total_turnover,
+        "current_turnover_source_date": (
+            normalized_target_date if current_total_turnover is not None else ""
+        ),
+        "previous_total_turnover": previous_total_turnover,
+        "previous_turnover_source_date": (
+            previous_source_date if previous_total_turnover is not None else ""
+        ),
+        "up_count": up_count,
+        "down_count": down_count,
+        "market_breadth_source_date": (
+            normalized_target_date if up_count is not None and down_count is not None else ""
+        ),
+    }
+
+
 def _state_snapshot(*sources):
     for source in sources:
         source = _as_dict(source)
@@ -1125,7 +1487,14 @@ def _state_snapshot(*sources):
     return {}
 
 
-def _market_participation_limit(data, context, snapshot, *, missing_fields=None):
+def _market_participation_limit(
+    data,
+    context,
+    snapshot,
+    *,
+    missing_fields=None,
+    target_date="",
+):
     sources = (_as_dict(context), _as_dict(snapshot), _as_dict(data))
     state = _state_snapshot(*sources)
     summary = _mainline_summary(*sources)
@@ -1212,6 +1581,7 @@ def _market_participation_limit(data, context, snapshot, *, missing_fields=None)
         reason = "市场未形成广泛确认，完整局部趋势最多取得B1参与权"
         risk = "没有局部趋势完整证明时仍回到0%不参与"
     return {
+        "source_date": _valid_trade_date(target_date) or None,
         "max_position_pct": max_position_pct,
         "market_state": market_state,
         "attack_state": attack_state or "待确认",
@@ -1225,40 +1595,229 @@ def _market_participation_limit(data, context, snapshot, *, missing_fields=None)
     }
 
 
-def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
+def _local_trend_sector_proof(data, context, snapshot, *, target_date="", sector_index=None):
     sources = (_as_dict(context), _as_dict(snapshot), _as_dict(data))
-    supplied = _source_value(sources, "local_trend_sector_proof")
-    supplied = _as_dict(supplied)
+    supplied = _as_dict(_source_value(sources, "local_trend_sector_proof"))
+    # 旧快照会把上一轮的证明原样带回来；读回来当外部证据会把自己上一轮的结论锁死。
+    if _is_own_proof_payload(supplied):
+        supplied = {}
+    sector_index = _as_dict(sector_index) or _sector_canonical_index(data, context, snapshot)
     source_date = _sector_source_date(data, context, snapshot, supplied)
-    normalized_target_date = _normalize_quote_date(target_date)
-    source_date_matches_target = not bool(
-        normalized_target_date and source_date and source_date != normalized_target_date
+    normalized_target_date = _valid_trade_date(target_date)
+    source_date = _valid_trade_date(source_date)
+    source_date_matches_target = bool(
+        normalized_target_date
+        and source_date
+        and source_date == normalized_target_date
     )
     summary = _mainline_summary(*sources)
+    double_mainline = _as_dict(summary.get("double_mainline_summary"))
     attack = _as_dict(summary.get("mainline_attack_evidence_summary"))
     overtake = _as_dict(summary.get("overtake_window_summary"))
-    direction = _sector_name(
-        _first_non_empty(
-            supplied.get("direction"),
-            supplied.get("selected_direction"),
-            attack.get("primary_line"),
-            summary.get("current_mainline"),
-            context.get("mainline_name"),
-        )
+    supplied_direction_source_date = _first_non_empty(
+        supplied.get("direction_source_date"),
+        supplied.get("source_date"),
+        supplied.get("sector_source_date"),
+        _nested_source_date(supplied, "sector_source_date"),
     )
-    trend_row = _sector_trend_row(context, direction)
+    summary_source_date = _first_non_empty(
+        summary.get("source_date"),
+        summary.get("trade_date"),
+        summary.get("date"),
+    )
+    attack_source_date = _first_non_empty(
+        attack.get("source_date"),
+        attack.get("trade_date"),
+        attack.get("date"),
+        summary_source_date,
+    )
+    context_direction_source_date = _first_non_empty(
+        context.get("mainline_name_source_date"),
+        context.get("sector_source_date"),
+        _nested_source_date(context, "sector_source_date"),
+        context.get("trade_date"),
+        context.get("source_date"),
+        context.get("date"),
+    )
+    direction, direction_source_date = _first_as_of_sector_value(
+        (
+            (supplied.get("direction"), supplied_direction_source_date),
+            (supplied.get("selected_direction"), supplied_direction_source_date),
+            (attack.get("primary_line"), attack_source_date),
+            (summary.get("current_mainline"), summary_source_date),
+            (context.get("mainline_name"), context_direction_source_date),
+        ),
+        normalized_target_date,
+    )
+    trend_row = _sector_trend_row(context, direction, sector_index)
     current_record = _as_dict(_source_value(sources, "current_mainline_history_record"))
     recent_history = _source_value(sources, "recent_mainline_history")
     recent_history = [item for item in _as_list(recent_history) if isinstance(item, dict)]
-    dated_direction_rows = [
-        item
-        for item in recent_history + ([current_record] if current_record else [])
-        if clean_text(item.get("date") or item.get("trade_date") or item.get("source_date"))
-        and any(
-            _sector_names_match(item.get(key), direction)
+    supplied_continuity_dates = _as_list(
+        supplied.get("continuity_dates")
+        or supplied.get("cross_day_dates")
+        or supplied.get("trade_dates")
+    )
+    direction_history_dates = []
+    for item in recent_history + ([current_record] if current_record else []):
+        if not any(
+            _sector_names_match(item.get(key), direction, sector_index)
             for key in ("primary_mainline", "leading_line", "mainline", "sector_name", "daily_attack_line")
+        ):
+            continue
+        row_date = _valid_trade_date(
+            item.get("date") or item.get("trade_date") or item.get("source_date")
         )
+        if row_date:
+            direction_history_dates.append(row_date)
+    all_continuity_dates = [
+        date
+        for date in (
+            _valid_trade_date(value)
+            for value in supplied_continuity_dates + direction_history_dates
+        )
+        if date and (not normalized_target_date or date <= normalized_target_date)
     ]
+    continuity_dates = sorted(set(all_continuity_dates))
+    excluded_future_continuity_dates = sorted(
+        {
+            date
+            for date in (
+                _valid_trade_date(value)
+                for value in supplied_continuity_dates + direction_history_dates
+            )
+            if date and normalized_target_date and date > normalized_target_date
+        }
+    )
+    supplied_stage_mainline = _as_dict(supplied.get("stage_mainline_evidence"))
+    supplied_stage_mainline_directions = [
+        deepcopy(item)
+        for item in _as_list(
+            supplied_stage_mainline.get("directions")
+            or supplied.get("stage_mainline_directions")
+        )
+        if isinstance(item, dict)
+    ]
+    supplied_cross_day_competition = _as_dict(
+        supplied.get("cross_day_competition")
+        or supplied_stage_mainline.get("cross_day_competition")
+    )
+    cycle_mainline, cycle_mainline_source_date = _first_as_of_sector_value(
+        (
+            (
+                supplied_stage_mainline.get("cycle_mainline"),
+                supplied_stage_mainline.get("cycle_mainline_source_date"),
+            ),
+            (
+                double_mainline.get("cycle_mainline"),
+                _first_non_empty(
+                    double_mainline.get("cycle_mainline_source_date"),
+                    double_mainline.get("source_date"),
+                    summary_source_date,
+                ),
+            ),
+        ),
+        normalized_target_date,
+    )
+    daily_attack_line, daily_attack_line_source_date = _first_as_of_sector_value(
+        (
+            (
+                supplied_stage_mainline.get("daily_attack_line"),
+                supplied_stage_mainline.get("daily_attack_line_source_date"),
+            ),
+            (
+                double_mainline.get("daily_attack_line"),
+                _first_non_empty(
+                    double_mainline.get("daily_attack_line_source_date"),
+                    double_mainline.get("source_date"),
+                    summary_source_date,
+                ),
+            ),
+        ),
+        normalized_target_date,
+        target_day_only=True,
+    )
+    observed_candidate_directions = []
+    if attack_source_date == normalized_target_date:
+        for value in _as_list(attack.get("candidate_lines")):
+            candidate_direction = _sector_name(value)
+            if candidate_direction and candidate_direction not in observed_candidate_directions:
+                observed_candidate_directions.append(candidate_direction)
+    phase_rotation_status, phase_rotation_dates, excluded_future_phase_rotation_dates = (
+        _select_as_of_status_dates(
+            (supplied_stage_mainline, supplied),
+            status_key="phase_rotation_status",
+            dates_key="phase_rotation_dates",
+            target_date=normalized_target_date,
+            status_aliases={
+                "1": "confirmed",
+                "true": "confirmed",
+                "yes": "confirmed",
+                "confirmed": "confirmed",
+                "完整": "confirmed",
+                "成立": "confirmed",
+                "已确认": "confirmed",
+                "0": "failed",
+                "false": "failed",
+                "no": "failed",
+                "failed": "failed",
+                "不足": "failed",
+                "缺失": "failed",
+                "未确认": "failed",
+                "不成立": "failed",
+                "unresolved": "unresolved",
+            },
+        )
+    )
+    (
+        sector_index_slope_status,
+        sector_index_slope_dates,
+        excluded_future_sector_index_slope_dates,
+    ) = _select_as_of_status_dates(
+        (supplied_stage_mainline, supplied),
+        status_key="sector_index_slope_status",
+        dates_key="sector_index_slope_dates",
+        target_date=normalized_target_date,
+        status_aliases={
+            "upward": "upward",
+            "flat": "flat",
+            "downward": "downward",
+            "unresolved": "unresolved",
+            "向上": "upward",
+            "上行": "upward",
+            "持平": "flat",
+            "无明显斜率": "flat",
+            "向下": "downward",
+            "下行": "downward",
+        },
+    )
+    sector_index_slope_evidence = []
+    for source in (supplied_stage_mainline, supplied):
+        for row in _dated_evidence_items(
+            source.get("sector_index_slope_evidence"),
+            normalized_target_date,
+        ):
+            if row not in sector_index_slope_evidence:
+                sector_index_slope_evidence.append(row)
+    if len(sector_index_slope_dates) < 2:
+        sector_index_slope_evidence = []
+    intraday_rotation_count, intraday_rotation_source_date = (
+        _first_target_day_rotation_count(
+            (
+                (
+                    supplied_stage_mainline.get("intraday_rotation_count"),
+                    supplied_stage_mainline.get(
+                        "intraday_rotation_source_date"
+                    ),
+                ),
+                (
+                    supplied.get("intraday_rotation_count"),
+                    supplied.get("intraday_rotation_source_date"),
+                ),
+            ),
+            normalized_target_date,
+        )
+    )
     explicit_cross_day = _explicit_bool(
         _first_non_empty(
             supplied.get("cross_day_continuity"),
@@ -1266,7 +1825,17 @@ def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
             supplied.get("continuity_confirmed"),
         )
     )
-    cross_day_continuity = explicit_cross_day if explicit_cross_day is not None else len(dated_direction_rows) >= 2
+    cross_day_continuity = bool(
+        explicit_cross_day is not False
+        and len(continuity_dates) >= 2
+    )
+    cross_day_continuity_status = (
+        "confirmed"
+        if cross_day_continuity
+        else "failed"
+        if explicit_cross_day is False
+        else "unresolved"
+    )
     explicit_divergence = _explicit_bool(
         _first_non_empty(
             supplied.get("divergence_acceptance"),
@@ -1288,6 +1857,13 @@ def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
         explicit_divergence
         if explicit_divergence is not None
         else bool(acceptance_text and _text_has_any(acceptance_text, ("强承接", "分歧承接", "承接稳定", "没有塌", "仍承接")))
+    )
+    divergence_acceptance_status = (
+        "confirmed"
+        if divergence_acceptance
+        else "failed"
+        if explicit_divergence is False
+        else "unresolved"
     )
     explicit_expansion = _explicit_bool(
         _first_non_empty(
@@ -1311,6 +1887,13 @@ def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
         else bool(trend_count >= 2 and strong_count >= 2)
         or _text_has_any(expansion_text, ("扩散", "抬升", "同步", "成群"))
     )
+    internal_expansion_status = (
+        "confirmed"
+        if internal_expansion
+        else "failed"
+        if explicit_expansion is False
+        else "unresolved"
+    )
     explicit_competition = _explicit_bool(
         _first_non_empty(
             supplied.get("competition_comparison"),
@@ -1331,6 +1914,13 @@ def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
         if explicit_competition is not None
         else competition_state in {"open", "confirm_next", "单主线聚焦", "双主线竞争"}
     )
+    competition_comparison_status = (
+        "confirmed"
+        if competition_comparison
+        else "failed"
+        if explicit_competition is False
+        else "unresolved"
+    )
     evidence_gaps = []
     if not direction:
         evidence_gaps.append("资金选择方向")
@@ -1342,26 +1932,165 @@ def _local_trend_sector_proof(data, context, snapshot, *, target_date=""):
         evidence_gaps.append("内部扩散")
     if not competition_comparison:
         evidence_gaps.append("竞争方向对照")
-    if not source_date_matches_target:
-        evidence_gaps.append("板块事实日期")
+    if not source_date:
+        evidence_gaps.append("板块事实日期缺失")
+    elif not source_date_matches_target:
+        evidence_gaps.append("板块事实日期不属于目标日")
     return {
         "direction": direction,
+        "direction_source_date": direction_source_date or None,
         "complete": not evidence_gaps,
         "source_date": source_date or None,
         "source_date_matches_target": source_date_matches_target,
+        "continuity_dates": continuity_dates,
+        "excluded_future_continuity_dates": excluded_future_continuity_dates,
         "cross_day_continuity": bool(cross_day_continuity),
+        "cross_day_continuity_status": cross_day_continuity_status,
         "divergence_acceptance": bool(divergence_acceptance),
+        "divergence_acceptance_status": divergence_acceptance_status,
         "internal_expansion": bool(internal_expansion),
+        "internal_expansion_status": internal_expansion_status,
         "competition_comparison": bool(competition_comparison),
+        "competition_comparison_status": competition_comparison_status,
         "competition_state": competition_state or "待确认",
+        "first_active_divergence": _explicit_bool(
+            supplied.get("first_active_divergence")
+        ),
+        "capital_return_status": clean_text(
+            supplied.get("capital_return_status")
+        ) or "unresolved",
+        "consensus_status": clean_text(
+            supplied.get("consensus_status")
+        ) or "unresolved",
+        "story_spread_status": clean_text(
+            supplied.get("story_spread_status")
+        ) or "unresolved",
+        "trend_continuation_status": clean_text(
+            supplied.get("trend_continuation_status")
+        ) or "unresolved",
+        "leader_structure_status": clean_text(
+            supplied.get("leader_structure_status")
+        ) or "unresolved",
+        "stage_mainline_evidence": {
+            "directions": supplied_stage_mainline_directions,
+            "candidate_directions": observed_candidate_directions,
+            "candidate_direction_source_date": (
+                attack_source_date if observed_candidate_directions else None
+            ),
+            "candidate_direction_evidence": (
+                [clean_visible_text(attack.get("confirmation_evidence"))]
+                if observed_candidate_directions
+                and clean_visible_text(attack.get("confirmation_evidence"))
+                else []
+            ),
+            "cycle_mainline": cycle_mainline,
+            "cycle_mainline_source_date": cycle_mainline_source_date or None,
+            "daily_attack_line": daily_attack_line,
+            "daily_attack_line_source_date": daily_attack_line_source_date or None,
+            "phase_rotation_status": phase_rotation_status,
+            "phase_rotation_dates": phase_rotation_dates,
+            "sector_index_slope_status": sector_index_slope_status,
+            "sector_index_slope_dates": sector_index_slope_dates,
+            "sector_index_slope_evidence": sector_index_slope_evidence,
+            "intraday_rotation_count": intraday_rotation_count,
+            "intraday_rotation_source_date": intraday_rotation_source_date or None,
+            "excluded_future_phase_rotation_dates": excluded_future_phase_rotation_dates,
+            "excluded_future_sector_index_slope_dates": excluded_future_sector_index_slope_dates,
+        },
+        "cross_day_competition": deepcopy(supplied_cross_day_competition),
         "trend_count": trend_count,
         "strong_count": strong_count,
         "matching_candidates": [],
         "evidence_gaps": evidence_gaps,
+        "produced_by": _PROOF_WRITER,
+        "observed": {
+            "direction": direction or None,
+            "sector_rows": list(trend_row.get("matched_sectors") or []),
+            "trend_count": trend_count,
+            "strong_count": strong_count,
+            "internal_expansion_rule": _INTERNAL_EXPANSION_RULE,
+            "acceptance_text": clean_visible_text(acceptance_text) or None,
+            "expansion_text": clean_visible_text(expansion_text) or None,
+            "competition_text": competition_state or None,
+        },
     }
 
 
-def _candidate_matches_local_trend_proof(candidate, proof):
+def refresh_sector_tournament_three_axis_for_display(
+    *,
+    target_date="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    selection_workflow=None,
+):
+    data = _as_dict(data)
+    context = dict(_as_dict(execution_stage_context))
+    snapshot = _as_dict(market_research_snapshot)
+    workflow = _as_dict(selection_workflow)
+    target_date = clean_text(
+        target_date
+        or workflow.get("target_date")
+        or data.get("target_date")
+        or snapshot.get("target_date")
+    )
+    if not _valid_trade_date(target_date):
+        return {}
+
+    proof = _local_trend_sector_proof(
+        data,
+        context,
+        snapshot,
+        target_date=target_date,
+    )
+    sector_index = _sector_canonical_index(data, context, snapshot)
+    candidate_pool = _as_list(workflow.get("candidate_pool"))
+    stage = build_sector_diffusion_stage_evidence(
+        target_date=target_date,
+        local_trend_sector_proof=proof,
+        price_acceptance_rows=_sector_diffusion_price_acceptance_rows(
+            candidate_pool,
+            target_date=target_date,
+            direction=proof.get("direction"),
+            sector_index=sector_index,
+        ),
+        source_refs=[
+            "selection_workflow.candidate_pool",
+            "selection_workflow.local_trend_sector_proof",
+        ],
+    )
+    market_limit = _as_dict(workflow.get("market_participation_limit"))
+    if not market_limit:
+        market_limit = _market_participation_limit(
+            data,
+            context,
+            snapshot,
+            target_date=target_date,
+        )
+    liquidity_facts = _liquidity_allocation_facts(
+        data,
+        context,
+        snapshot,
+        target_date=target_date,
+    )
+    return build_sector_tournament_three_axis(
+        target_date=target_date,
+        sector_diffusion_stage_evidence=stage,
+        local_trend_sector_proof=proof,
+        market_participation_limit=market_limit,
+        liquidity_allocation_facts=liquidity_facts,
+        source_refs=[
+            "selection_workflow.market_participation_limit",
+            "selection_workflow.local_trend_sector_proof",
+            "selection_workflow.sector_diffusion_stage_evidence",
+            "selection_workflow.market_stats",
+            "selection_workflow.current_sector_turnover_snapshot",
+            "selection_workflow.recent_sector_turnover_history",
+        ],
+    )
+
+
+def _candidate_matches_local_trend_proof(candidate, proof, sector_index=None):
     proof = _as_dict(proof)
     if not proof.get("complete"):
         return False
@@ -1373,7 +2102,10 @@ def _candidate_matches_local_trend_proof(candidate, proof):
         if _sector_name(candidate.get(key))
     ]
     candidate_directions.extend(_candidate_driver_tags(candidate))
-    return bool(direction and any(_sector_names_match(item, direction) for item in candidate_directions))
+    return bool(
+        direction
+        and any(_sector_names_match(item, direction, sector_index) for item in candidate_directions)
+    )
 
 
 def _candidate_has_market_emotion_derivation(candidate, context):
@@ -1393,53 +2125,36 @@ def _candidate_has_market_emotion_derivation(candidate, context):
     return bool(stock_key(proof_leader) and stock_key(proof_leader) == stock_key(candidate))
 
 
-def _sector_anchor_keys(context, *, direction=""):
-    keys = set()
-    context = _as_dict(context)
-    for item in _as_list(context.get("sector_trend_snapshot")):
-        if not isinstance(item, dict):
-            continue
-        if direction and not _sector_names_match(item, direction):
-            continue
-        for key in ("anchor_code", "anchor_name", "leader_code", "leader_name", "core_code", "core_name"):
-            value = clean_visible_text(item.get(key))
-            if value:
-                keys.add(normalize_stock_code(value) if any(ch.isdigit() for ch in value) else value)
-    return keys
-
-
 def _candidate_has_legacy_signal(candidate):
     return _text_has_any(_candidate_text_blob(candidate), LEGACY_SIGNAL_MARKERS)
 
 
-def _candidate_has_sector_derivation(source_key, candidate, context, local_trend_sector_proof=None):
+def _candidate_has_sector_derivation(
+    source_key, candidate, context, local_trend_sector_proof=None, sector_index=None
+):
     candidate = _as_dict(candidate)
     proof = _as_dict(local_trend_sector_proof) or _as_dict(_as_dict(context).get("local_trend_sector_proof"))
-    if not _candidate_matches_local_trend_proof(candidate, proof):
-        return False
-    keys = _sector_anchor_keys(context, direction=proof.get("direction"))
-    key = stock_key(candidate)
-    structured_candidate = _explicit_bool(candidate.get("local_trend_sector_match"))
-    return bool(
-        structured_candidate is True
-        or (key and key in keys)
-        or clean_text(source_key).find("sector_derived_candidates") >= 0
-        or clean_text(source_key).find("sector_leader_candidates") >= 0
-    )
+    # 板块证明成立时，候选只要属于该方向（含其成员行业）就算板块推导来源；
+    # 个股是否真能成为执行对象仍由板块角色、执行证据和价格承接单独判定。
+    return _candidate_matches_local_trend_proof(candidate, proof, sector_index)
 
 
-def _candidate_origin(source_key, candidate, context, local_trend_sector_proof=None):
+def _candidate_origin(source_key, candidate, context, local_trend_sector_proof=None, sector_index=None):
     if clean_text(source_key) == "selected_position_candidate":
         return "manual_observation"
     if "market_emotion_candidates" in clean_text(source_key) and _candidate_has_market_emotion_derivation(candidate, context):
         return "market_emotion_line"
-    if _candidate_has_sector_derivation(source_key, candidate, context, local_trend_sector_proof):
+    if _candidate_has_sector_derivation(
+        source_key, candidate, context, local_trend_sector_proof, sector_index
+    ):
         return "sector_first"
     return "legacy_signal_only"
 
 
-def _candidate_entry_basis(source_key, candidate, context, local_trend_sector_proof=None):
-    origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
+def _candidate_entry_basis(
+    source_key, candidate, context, local_trend_sector_proof=None, sector_index=None
+):
+    origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof, sector_index)
     if origin == "sector_first":
         return clean_visible_text(
             candidate.get("sector_derivation_evidence")
@@ -1461,7 +2176,9 @@ def _candidate_entry_basis(source_key, candidate, context, local_trend_sector_pr
     return "未证明来自板块发酵和市场选择，不能作为新仓入口"
 
 
-def _candidate_new_entry_qualified(source_key, candidate, context, local_trend_sector_proof=None):
+def _candidate_new_entry_qualified(
+    source_key, candidate, context, local_trend_sector_proof=None, sector_index=None
+):
     if _candidate_blocks_new_entry_by_price(candidate):
         return False
     target_date = _normalize_quote_date(_as_dict(context).get("_selection_target_date"))
@@ -1474,7 +2191,9 @@ def _candidate_new_entry_qualified(source_key, candidate, context, local_trend_s
     )
     if target_date and candidate_dates and target_date not in candidate_dates:
         return False
-    return _candidate_origin(source_key, candidate, context, local_trend_sector_proof) in {"sector_first", "market_emotion_line"}
+    return _candidate_origin(
+        source_key, candidate, context, local_trend_sector_proof, sector_index
+    ) in {"sector_first", "market_emotion_line"}
 
 
 def _build_candidate_pool(
@@ -1483,6 +2202,7 @@ def _build_candidate_pool(
     selected_position_candidate=None,
     quote_lookup=None,
     local_trend_sector_proof=None,
+    sector_index=None,
 ):
     context = _as_dict(execution_stage_context)
     final_key = stock_key(final_stock)
@@ -1494,9 +2214,15 @@ def _build_candidate_pool(
         if not key or key in seen:
             continue
         seen.add(key)
-        candidate_origin = _candidate_origin(source_key, candidate, context, local_trend_sector_proof)
-        new_entry_qualified = _candidate_new_entry_qualified(source_key, candidate, context, local_trend_sector_proof)
-        local_trend_sector_match = _candidate_matches_local_trend_proof(candidate, local_trend_sector_proof)
+        candidate_origin = _candidate_origin(
+            source_key, candidate, context, local_trend_sector_proof, sector_index
+        )
+        new_entry_qualified = _candidate_new_entry_qualified(
+            source_key, candidate, context, local_trend_sector_proof, sector_index
+        )
+        local_trend_sector_match = _candidate_matches_local_trend_proof(
+            candidate, local_trend_sector_proof, sector_index
+        )
         status = _candidate_status(candidate, final_key)
         eliminated_at = "N6" if status in {"降级观察", "不参与"} else ""
         brooks = _brooks_price_action_judge(candidate)
@@ -1559,11 +2285,36 @@ def _build_candidate_pool(
                 "first_seen_node": "N5",
                 "source_pools": source_pools,
                 "entered_reason": _entered_reason(source_key, candidate),
-                "entry_basis": _candidate_entry_basis(source_key, candidate, context, local_trend_sector_proof),
+                "entry_basis": _candidate_entry_basis(
+                    source_key, candidate, context, local_trend_sector_proof, sector_index
+                ),
                 "candidate_origin": candidate_origin,
                 "new_entry_qualified": new_entry_qualified,
                 "local_trend_sector_match": local_trend_sector_match,
                 "proven_direction": _sector_name(_as_dict(local_trend_sector_proof).get("direction")),
+                "price_source_date": next(
+                    (
+                        date
+                        for date in (
+                            _mapping_dates(
+                                candidate,
+                                "trade_date",
+                                "source_date",
+                                "target_date",
+                                "date",
+                            )
+                            + _mapping_dates(
+                                _as_dict(candidate.get("same_day_quote")),
+                                "trade_date",
+                                "source_date",
+                                "target_date",
+                                "date",
+                            )
+                        )
+                        if date == _valid_trade_date(context.get("_selection_target_date"))
+                    ),
+                    None,
+                ),
                 "mainline": clean_visible_text(candidate.get("mainline") or context.get("mainline_name")),
                 "sector": clean_visible_text(candidate.get("sector") or candidate.get("sector_name")),
                 "current_driver_tags": _candidate_driver_tags(candidate),
@@ -1589,10 +2340,17 @@ def _build_candidate_pool(
 
 
 def _candidate_matches_selected(candidate, selected_position_candidate):
-    selected_key = stock_key(selected_position_candidate)
-    if not selected_key:
-        return False
-    return stock_key(candidate) == selected_key
+    candidate_payload = stock_payload(candidate)
+    selected_payload = stock_payload(selected_position_candidate)
+    selected_code = clean_text(selected_payload.get("code"))
+    candidate_code = clean_text(candidate_payload.get("code"))
+    selected_name = clean_visible_text(selected_payload.get("name"))
+    candidate_name = clean_visible_text(candidate_payload.get("name"))
+    if selected_code:
+        if candidate_code:
+            return candidate_code == selected_code
+        return bool(selected_name and candidate_name and candidate_name == selected_name)
+    return bool(selected_name and candidate_name and candidate_name == selected_name)
 
 
 def _selected_candidate_has_execution_evidence(candidate):
@@ -1619,7 +2377,10 @@ def _candidate_can_be_final_execution_object(
     source_key="",
     context=None,
     local_trend_sector_proof=None,
+    sector_index=None,
 ):
+    if not _as_dict(local_trend_sector_proof).get("complete"):
+        return False
     if _candidate_blocks_new_entry_by_price(candidate):
         return False
     return (
@@ -1630,7 +2391,35 @@ def _candidate_can_be_final_execution_object(
             candidate,
             _as_dict(context),
             local_trend_sector_proof,
+            sector_index,
         )
+    )
+
+
+def _candidate_has_target_day_price_acceptance(candidate, context):
+    target_date = _valid_trade_date(_as_dict(context).get("_selection_target_date"))
+    if not target_date:
+        return False
+    candidate = _as_dict(candidate)
+    candidate_dates = _mapping_dates(
+        candidate,
+        "trade_date",
+        "source_date",
+        "target_date",
+        "date",
+    )
+    candidate_dates.extend(
+        _mapping_dates(
+            _as_dict(candidate.get("same_day_quote")),
+            "trade_date",
+            "source_date",
+            "target_date",
+            "date",
+        )
+    )
+    return bool(
+        target_date in set(candidate_dates)
+        and _brooks_price_action_judge(candidate).get("status") == "accepted"
     )
 
 
@@ -1694,11 +2483,33 @@ def _pick_final_candidate(
     position_decision=None,
     quote_lookup=None,
     local_trend_sector_proof=None,
+    formal_candidate_selection=None,
+    sector_index=None,
 ):
     if _position_pct(position_decision) <= 0:
         return {}
     context = _as_dict(execution_stage_context)
     sources = _candidate_sources(context)
+    formal_selection = _as_dict(formal_candidate_selection)
+    if formal_selection:
+        if formal_selection.get("status") not in {"clear_winner", "single_qualified"}:
+            return {}
+        winner = _as_dict(formal_selection.get("winner"))
+        if not stock_key(winner):
+            return {}
+        for source_key, candidate in sources:
+            if not _candidate_matches_selected(candidate, winner):
+                continue
+            candidate = _candidate_with_quote(candidate, quote_lookup)
+            if _candidate_can_be_final_execution_object(
+                candidate,
+                source_key=source_key,
+                context=context,
+                local_trend_sector_proof=local_trend_sector_proof,
+                sector_index=sector_index,
+            ) and _candidate_has_target_day_price_acceptance(candidate, context):
+                return stock_payload(candidate)
+        return {}
     if stock_key(selected_position_candidate):
         selected_in_pool = False
         for source_key, candidate in sources:
@@ -1718,6 +2529,7 @@ def _pick_final_candidate(
                     source_key=source_key,
                     context=context,
                     local_trend_sector_proof=local_trend_sector_proof,
+                    sector_index=sector_index,
                 ):
                     return stock_payload(merged)
         if not selected_in_pool:
@@ -1731,6 +2543,7 @@ def _pick_final_candidate(
                 source_key=source_key,
                 context=context,
                 local_trend_sector_proof=local_trend_sector_proof,
+                sector_index=sector_index,
             ):
                 return stock_payload(candidate)
         return {}
@@ -1741,9 +2554,44 @@ def _pick_final_candidate(
             source_key=source_key,
             context=context,
             local_trend_sector_proof=local_trend_sector_proof,
+            sector_index=sector_index,
         ):
             return stock_payload(candidate)
     return {}
+
+
+def _sector_diffusion_price_acceptance_rows(candidate_pool, target_date="", direction="", sector_index=None):
+    target_date = _valid_trade_date(target_date)
+    direction = _sector_name(direction)
+    if not direction:
+        return []
+    rows = []
+    for item in _as_list(candidate_pool):
+        item = _as_dict(item)
+        item_direction = _sector_name(item.get("sector") or item.get("mainline"))
+        if direction and not _sector_names_match(item_direction, direction, sector_index):
+            continue
+        brooks = _as_dict(item.get("brooks_price_action_judge"))
+        brooks_status = clean_text(brooks.get("status"))
+        source_date = _valid_trade_date(
+            item.get("price_source_date")
+        )
+        rows.append(
+            {
+                "stock": stock_payload(item.get("stock")),
+                "sector": clean_visible_text(item.get("sector")),
+                "status": (
+                    "accepted"
+                    if brooks_status == "accepted"
+                    else "rejected"
+                    if brooks_status in {"risk_first", "price_rejected"}
+                    else "unresolved"
+                ),
+                "source_date": source_date or None,
+                "source_refs": ["selection_workflow.candidate_pool"],
+            }
+        )
+    return rows
 
 
 def _selection_workflow_missing_fields(data, context, snapshot):
@@ -2127,6 +2975,7 @@ def build_selection_workflow(
     selected_position_candidate=None,
     position_decision=None,
     final_target_resolution=None,
+    formal_candidate_selection=None,
 ):
     data = _as_dict(data)
     context = dict(_as_dict(execution_stage_context))
@@ -2143,11 +2992,13 @@ def build_selection_workflow(
             selected_position_candidate=selected_position_candidate,
         )
     missing_fields = _selection_workflow_missing_fields(data, context, snapshot)
+    sector_index = _sector_canonical_index(data, context, snapshot)
     local_trend_sector_proof = _local_trend_sector_proof(
         data,
         context,
         snapshot,
         target_date=target_date,
+        sector_index=sector_index,
     )
     if local_trend_sector_proof.get("source_date_matches_target") is False:
         missing_fields.append("板块事实日期")
@@ -2156,14 +3007,24 @@ def build_selection_workflow(
         context,
         snapshot,
         missing_fields=missing_fields,
+        target_date=target_date,
+    )
+    liquidity_allocation_facts = _liquidity_allocation_facts(
+        data,
+        context,
+        snapshot,
+        target_date=target_date,
     )
     context["local_trend_sector_proof"] = local_trend_sector_proof
+    context["mainline_name"] = local_trend_sector_proof.get("direction") or ""
     final_stock = _pick_final_candidate(
         context,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         quote_lookup=quote_lookup,
         local_trend_sector_proof=local_trend_sector_proof,
+        sector_index=sector_index,
+        formal_candidate_selection=formal_candidate_selection,
     )
     if missing_fields:
         final_stock = {}
@@ -2175,6 +3036,7 @@ def build_selection_workflow(
         base_execution_stock,
         selected_position_candidate,
         local_trend_sector_proof=local_trend_sector_proof,
+        sector_index=sector_index,
     )
     local_trend_sector_proof["matching_candidates"] = [
         item.get("stock")
@@ -2190,11 +3052,7 @@ def build_selection_workflow(
         final_target_resolution=final_target_resolution,
         final_stock=final_stock,
         candidate_pool=base_candidate_pool,
-        mainline=clean_text(
-            context.get("mainline_name")
-            or _as_dict(context.get("mainline_turnover_summary")).get("current_mainline"),
-            "",
-        ),
+        mainline=clean_text(local_trend_sector_proof.get("direction"), ""),
         base_position_pct=base_position_pct,
     )
     position_pct = _apply_premarket_review_position(base_position_pct, premarket_narrative_review)
@@ -2205,6 +3063,36 @@ def build_selection_workflow(
         selected_position_candidate,
         quote_lookup=quote_lookup,
         local_trend_sector_proof=local_trend_sector_proof,
+        sector_index=sector_index,
+    )
+    sector_diffusion_stage_evidence = build_sector_diffusion_stage_evidence(
+        target_date=target_date,
+        local_trend_sector_proof=local_trend_sector_proof,
+        price_acceptance_rows=_sector_diffusion_price_acceptance_rows(
+            candidate_pool,
+            target_date=target_date,
+            direction=local_trend_sector_proof.get("direction"),
+            sector_index=sector_index,
+        ),
+        source_refs=[
+            "selection_workflow.local_trend_sector_proof",
+            "selection_workflow.candidate_pool",
+        ],
+    )
+    sector_tournament_three_axis = build_sector_tournament_three_axis(
+        target_date=target_date,
+        sector_diffusion_stage_evidence=sector_diffusion_stage_evidence,
+        local_trend_sector_proof=local_trend_sector_proof,
+        market_participation_limit=market_participation_limit,
+        liquidity_allocation_facts=liquidity_allocation_facts,
+        source_refs=[
+            "selection_workflow.market_participation_limit",
+            "selection_workflow.local_trend_sector_proof",
+            "selection_workflow.sector_diffusion_stage_evidence",
+            "selection_workflow.market_stats",
+            "selection_workflow.current_sector_turnover_snapshot",
+            "selection_workflow.recent_sector_turnover_history",
+        ],
     )
     if premarket_narrative_review:
         final_key = stock_key(final_stock)
@@ -2214,8 +3102,7 @@ def build_selection_workflow(
     conflicts = _selected_candidate_conflicts(context, selected_position_candidate)
     market_state = clean_text(_as_dict(context.get("market_state_snapshot")).get("market_state"), "市场状态待确认")
     mainline = clean_text(
-        context.get("mainline_name")
-        or _as_dict(context.get("mainline_turnover_summary")).get("current_mainline"),
+        local_trend_sector_proof.get("direction"),
         "主线待确认",
     )
     market_layer = {
@@ -2227,17 +3114,18 @@ def build_selection_workflow(
         "market_participation_limit": market_participation_limit,
     }
     sector_layer = {
-        "selected_direction": local_trend_sector_proof.get("direction") or mainline,
+        "selected_direction": local_trend_sector_proof.get("direction") or "",
         "sector_path_selected": bool(local_trend_sector_proof.get("complete")),
         "sector_fermentation": clean_text(context.get("sector_fermentation") or context.get("板块发酵"), "待确认"),
         "sector_emotion": clean_text(context.get("sector_emotion") or context.get("板块情绪"), "待确认"),
         "turnover_expansion": clean_text(context.get("sector_turnover_expansion") or context.get("板块成交扩散"), "待确认"),
         "backrow_acceptance": clean_text(context.get("backrow_acceptance") or context.get("后排承接"), "待确认"),
         "local_trend_sector_proof": local_trend_sector_proof,
+        "sector_diffusion_stage_evidence": sector_diffusion_stage_evidence,
     }
     leader_layer = {
-        "leader_source": "板块发酵推导" if execution_stock and any(item.get("new_entry_qualified") for item in candidate_pool) else "待确认",
-        "leader": stock_label(execution_stock) if execution_stock else "暂无",
+        "leader_source": "板块发酵推导" if base_execution_stock and any(item.get("new_entry_qualified") for item in base_candidate_pool) else "待确认",
+        "leader": stock_label(base_execution_stock) if base_execution_stock else "暂无",
         "market_selection_rule": "下一级必须证明承接了上一级资金选择",
     }
     data_completeness = {
@@ -2245,7 +3133,7 @@ def build_selection_workflow(
         "missing_fields": missing_fields,
         "action": "关键数据不完整，停止生成" if missing_fields else "继续推导",
     }
-    final_label = stock_label(final_stock)
+    base_execution_label = stock_label(base_execution_stock)
     brooks_counts = {}
     for item in candidate_pool:
         status = _as_dict(item.get("brooks_price_action_judge")).get("status", "insufficient")
@@ -2279,16 +3167,25 @@ def build_selection_workflow(
         _node("N0", "数据封装", judgement=f"事实日期：{target_date or '待确认'}", passes_forward={"target_date": target_date}),
         _node("N1", "市场周期判断", input_refs=["N0"], judgement=market_state, passes_forward={"market_layer": market_layer}),
         _node("N2", "资金方向判断", input_refs=["N1"], judgement=f"资金方向：{mainline}", passes_forward={"mainline": mainline, "volume_role": "量能先用于识别资金表态"}),
-        _node("N3", "板块关系拆解", input_refs=["N2"], judgement=f"板块方向：{mainline}", passes_forward={"sector_layer": sector_layer}),
+        _node(
+            "N3",
+            "板块关系拆解",
+            input_refs=["N2"],
+            judgement=f"板块方向：{mainline}",
+            passes_forward={
+                "sector_layer": sector_layer,
+                "sector_tournament_three_axis": sector_tournament_three_axis,
+            },
+        ),
         _node("N4", "板块内角色识别", input_refs=["N3"], judgement="识别板块内角色", passes_forward={"leader_layer": leader_layer, "has_sector_roles": bool(context.get("sector_trend_snapshot"))}),
-        _node("N5", "候选池归一", input_refs=["N4"], judgement=f"归一候选{len(candidate_pool)}只", passes_forward={"candidate_count": len(candidate_pool)}),
+        _node("N5", "候选池归一", input_refs=["N4"], judgement=f"归一候选{len(base_candidate_pool)}只", passes_forward={"candidate_count": len(base_candidate_pool)}),
         _node(
             "N6",
             "反推龙头",
             input_refs=["N5"],
-            judgement=f"保留对象：{final_label if execution_stock else '无'}",
+            judgement=f"保留对象：{base_execution_label if base_execution_stock else '无'}",
             passes_forward={
-                "execution_object": execution_stock,
+                "execution_object": base_execution_stock,
                 "market_layer": market_layer,
                 "sector_layer": sector_layer,
                 "leader_layer": leader_layer,
@@ -2302,7 +3199,7 @@ def build_selection_workflow(
             input_refs=["N6"],
             judgement=f"布鲁克斯价格行为裁判：{brooks_judgement}；共同选择待复核{common_selection_pending}只",
             passes_forward={
-                "execution_object": execution_stock,
+                "execution_object": base_execution_stock,
                 "brooks_price_action": {
                     "price_first": True,
                     "volume_role": "资金表态证据",
@@ -2318,7 +3215,7 @@ def build_selection_workflow(
             input_refs=["N7"],
             judgement=n8_judgement,
             passes_forward={
-                "execution_object": execution_stock,
+                "execution_object": base_execution_stock,
                 "base_position_pct": base_position_pct,
                 "planned_position_pct": planned_position_pct,
                 "market_participation_limit": market_participation_limit,
@@ -2359,7 +3256,23 @@ def build_selection_workflow(
             conflicts=conflicts,
         )
     )
+    formal_selection = _as_dict(formal_candidate_selection)
+    formal_selection_status = clean_text(formal_selection.get("status"))
+    formal_selection_reason = {
+        "tie_unresolved": "统一候选台账无法证明唯一优势，保持现金",
+        "unresolved": "统一候选台账的比较事实不足，保持现金",
+        "no_qualified_candidate": "统一候选台账没有取得完整资格的对象，保持现金",
+        "facts_invalid": "统一候选台账的目标日事实不完整，保持现金",
+    }.get(formal_selection_status, "")
+    if (
+        not formal_selection_reason
+        and formal_selection_status in {"clear_winner", "single_qualified"}
+        and not final_stock
+    ):
+        formal_selection_reason = "统一候选胜者未通过目标日板块、价格和执行事实复核，保持现金"
     final_failure_conditions = list(missing_fields)
+    if formal_selection_reason:
+        final_failure_conditions.append(formal_selection_reason)
     if not local_trend_sector_proof.get("complete"):
         final_failure_conditions.extend(
             f"局部趋势板块证明缺少{item}"
@@ -2387,6 +3300,8 @@ def build_selection_workflow(
         if summary and summary not in final_failure_conditions:
             final_failure_conditions.append(summary)
     final_reason = _premarket_review_final_reason(premarket_narrative_review)
+    if not final_reason and formal_selection_reason:
+        final_reason = formal_selection_reason
     if not final_reason and missing_fields:
         final_reason = "关键数据不完整，停止生成"
     elif not final_reason and market_participation_limit.get("systemic_risk"):
@@ -2416,10 +3331,13 @@ def build_selection_workflow(
         "market_participation_limit": market_participation_limit,
         "sector_layer": sector_layer,
         "local_trend_sector_proof": local_trend_sector_proof,
+        "sector_diffusion_stage_evidence": sector_diffusion_stage_evidence,
+        "sector_tournament_three_axis": sector_tournament_three_axis,
         "leader_layer": leader_layer,
         "data_completeness": data_completeness,
         "nodes": nodes,
         "candidate_pool": candidate_pool,
+        "formal_candidate_selection": dict(formal_selection),
         "premarket_narrative_review": premarket_narrative_review,
         "final": {
             "execution_object": execution_stock,
@@ -2436,7 +3354,7 @@ def build_selection_workflow(
         },
         "flowchart_payload": {
             "nodes": [{"id": node["node_id"], "label": node["node_name"], "judgement": node["judgement"]} for node in nodes],
-            "final_label": final_label if position_pct else "无执行对象",
+            "final_label": stock_label(execution_stock) if position_pct else "无执行对象",
         },
     }
 
@@ -2487,7 +3405,9 @@ def render_selection_workflow_mermaid(workflow):
         if not node_id:
             continue
         known_ids.add(node_id)
-        node_title = _mermaid_escape(f"{node_id} {node.get('node_name')}")
+        node_title = _mermaid_escape(
+            " ".join(part for part in (node_id, clean_text(node.get("node_name"))) if part)
+        )
         judgement = _mermaid_wrap(node.get("judgement"))
         label = f"{node_title}<br/>{judgement}"
         lines.append(f'  {node_id}["{label}"]')
@@ -2502,8 +3422,8 @@ def render_selection_workflow_mermaid(workflow):
         if source in known_ids and target_id in known_ids:
             lines.append(f"  {source} --> {target_id}")
     final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
-    target = stock_label(final.get("execution_object"))
-    pct = final.get("position_pct", 0)
+    pct = _position_pct({"target_position_pct": final.get("position_pct", 0)})
+    target = stock_label(final.get("execution_object")) if pct > 0 else "暂无"
     final_label = _mermaid_escape(f"最终：{target}<br/>仓位：{pct}%")
     lines.append(f'  FINAL["{final_label}"]')
     source_node = clean_text(final.get("source_node"))
@@ -2518,6 +3438,7 @@ __all__ = [
     "build_selection_workflow",
     "clean_text",
     "normalize_stock_code",
+    "refresh_sector_tournament_three_axis_for_display",
     "render_selection_workflow_mermaid",
     "stock_key",
     "stock_label",

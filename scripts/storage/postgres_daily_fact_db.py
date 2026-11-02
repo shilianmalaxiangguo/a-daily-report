@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import importlib
 import json
 import os
@@ -10,7 +11,6 @@ from domains.market_state.market_language_translation import (
     MARKET_LANGUAGE_SOURCE_POLICY,
     normalize_market_language_translation,
 )
-
 POSTGRES_SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS market_cycle_days (
@@ -196,6 +196,52 @@ POSTGRES_SCHEMA_STATEMENTS = [
         PRIMARY KEY (index_code, trade_date)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS cffex_index_futures_contract_daily (
+        trade_date DATE NOT NULL,
+        product_code TEXT NOT NULL,
+        contract_code TEXT NOT NULL,
+        close_price DOUBLE PRECISION,
+        settlement_price DOUBLE PRECISION NOT NULL,
+        previous_settlement_price DOUBLE PRECISION,
+        volume BIGINT NOT NULL,
+        open_interest BIGINT NOT NULL,
+        previous_open_interest BIGINT NOT NULL,
+        contract_multiplier INTEGER NOT NULL,
+        source_url TEXT NOT NULL,
+        source_date DATE NOT NULL,
+        query_date DATE NOT NULL,
+        content_hash TEXT NOT NULL,
+        source_policy TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, product_code, contract_code)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_cffex_contract_product_date ON cffex_index_futures_contract_daily(product_code, trade_date)",
+    """
+    CREATE TABLE IF NOT EXISTS cffex_index_futures_member_rank_daily (
+        trade_date DATE NOT NULL,
+        product_code TEXT NOT NULL,
+        contract_code TEXT NOT NULL,
+        rank_type TEXT NOT NULL,
+        rank_no INTEGER NOT NULL,
+        member_id TEXT NOT NULL DEFAULT '',
+        member_name TEXT NOT NULL,
+        quantity BIGINT NOT NULL,
+        daily_change BIGINT,
+        source_url TEXT NOT NULL,
+        source_date DATE NOT NULL,
+        query_date DATE NOT NULL,
+        content_hash TEXT NOT NULL,
+        source_policy TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, product_code, contract_code, rank_type, rank_no)
+    )
+    """,
+    "ALTER TABLE cffex_index_futures_member_rank_daily ADD COLUMN IF NOT EXISTS member_id TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_cffex_member_rank_member_id_date ON cffex_index_futures_member_rank_daily(member_id, trade_date)",
+    "CREATE INDEX IF NOT EXISTS idx_cffex_member_rank_member_date ON cffex_index_futures_member_rank_daily(member_name, trade_date)",
+    "CREATE INDEX IF NOT EXISTS idx_cffex_member_rank_product_date ON cffex_index_futures_member_rank_daily(product_code, trade_date)",
     """
     CREATE TABLE IF NOT EXISTS index_minute_bars (
         index_code TEXT NOT NULL,
@@ -661,6 +707,110 @@ POSTGRES_SCHEMA_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_runtime_cache_entries_expires_at ON runtime_cache_entries(expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_runtime_cache_entries_namespace_date ON runtime_cache_entries(namespace, target_date)",
+    """
+    CREATE TABLE IF NOT EXISTS daily_report_consensus_batches (
+        run_id TEXT PRIMARY KEY,
+        target_date DATE NOT NULL,
+        query_date DATE NOT NULL,
+        input_hash TEXT NOT NULL,
+        proposal_hash TEXT NOT NULL,
+        decision_hash TEXT,
+        freeze_hash TEXT,
+        record_hash TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        contract_version TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        proposal_kind TEXT NOT NULL,
+        proposal_stock_code TEXT NOT NULL DEFAULT '',
+        proposal_stock_name TEXT NOT NULL DEFAULT '',
+        proposal_sector TEXT NOT NULL DEFAULT '',
+        frozen_at TIMESTAMPTZ NOT NULL,
+        decision_cutoff_at TIMESTAMPTZ NOT NULL,
+        decision_at TIMESTAMPTZ,
+        input_status TEXT NOT NULL,
+        consensus_status TEXT NOT NULL,
+        stable_consensus BOOLEAN NOT NULL DEFAULT false,
+        confirmation_count INTEGER NOT NULL DEFAULT 0,
+        denial_count INTEGER NOT NULL DEFAULT 0,
+        denominator INTEGER NOT NULL DEFAULT 10,
+        failure_count INTEGER NOT NULL DEFAULT 0,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        periods JSONB NOT NULL DEFAULT '{}'::jsonb,
+        batch_file_sha256 TEXT NOT NULL DEFAULT '',
+        reviews_file_sha256 TEXT NOT NULL DEFAULT '',
+        summary_file_sha256 TEXT NOT NULL DEFAULT '',
+        run_file_sha256 TEXT NOT NULL DEFAULT '',
+        funnel_file_sha256 TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CHECK (proposal_kind IN ('object', 'no_object')),
+        CHECK (denominator = 10),
+        CHECK (confirmation_count BETWEEN 0 AND 10),
+        CHECK (denial_count BETWEEN 0 AND 10),
+        CHECK (failure_count BETWEEN 0 AND 10)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_batches_target_date ON daily_report_consensus_batches(target_date, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_batches_input_hash ON daily_report_consensus_batches(input_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_batches_proposal_hash ON daily_report_consensus_batches(proposal_hash)",
+    """
+    CREATE TABLE IF NOT EXISTS daily_report_consensus_reviews (
+        run_id TEXT NOT NULL REFERENCES daily_report_consensus_batches(run_id),
+        sequence INTEGER NOT NULL,
+        review_run_id TEXT NOT NULL,
+        target_date DATE NOT NULL,
+        record_hash TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        status TEXT NOT NULL,
+        vote TEXT,
+        seed BIGINT,
+        provider_request_id TEXT NOT NULL DEFAULT '',
+        input_hash TEXT NOT NULL,
+        proposal_hash TEXT NOT NULL,
+        contract_version TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        prompt_hash TEXT NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL,
+        ended_at TIMESTAMPTZ NOT NULL,
+        duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        missing_facts JSONB NOT NULL DEFAULT '[]'::jsonb,
+        alternative_mentions JSONB NOT NULL DEFAULT '[]'::jsonb,
+        failure_reason TEXT NOT NULL DEFAULT '',
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (run_id, sequence),
+        CHECK (sequence BETWEEN 1 AND 10),
+        CHECK (status IN ('completed', 'failed', 'timeout', 'contract_invalid')),
+        CHECK (vote IS NULL OR vote IN ('confirm_existing', 'deny_existing', 'confirm_no_object')),
+        CHECK (duration_seconds >= 0)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_reviews_target_date ON daily_report_consensus_reviews(target_date, run_id, sequence)",
+    """
+    CREATE TABLE IF NOT EXISTS daily_report_consensus_funnel_records (
+        sample_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES daily_report_consensus_batches(run_id),
+        parent_id TEXT,
+        target_date DATE NOT NULL,
+        covered_from DATE,
+        covered_to DATE,
+        record_hash TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        input_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CHECK (unit IN ('fact', 'batch', 'decision', 'outcome', 'training_sample')),
+        CHECK (status IN ('included', 'excluded'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_funnel_target_date ON daily_report_consensus_funnel_records(target_date, run_id, stage)",
+    "CREATE INDEX IF NOT EXISTS idx_daily_report_consensus_funnel_run_id ON daily_report_consensus_funnel_records(run_id, stage, sample_id)",
 ]
 
 _WEEKDAY_FIELDS = ("monday", "tuesday", "wednesday", "thursday", "friday")
@@ -871,6 +1021,58 @@ def _date_obj_or_none(value):
         return _dt.datetime.strptime(str(text)[:10], "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def _cffex_signatures_by_product(rows):
+    signatures = {}
+    for row in rows or []:
+        product = _text((row or {}).get("product_code"))
+        entry = signatures.setdefault(
+            product,
+            {"hashes": set(), "row_count": 0, "row_signatures": set()},
+        )
+        entry["hashes"].add(_text((row or {}).get("content_hash")))
+        entry["row_count"] += 1
+        fields = (
+            (
+                "trade_date",
+                "product_code",
+                "contract_code",
+                "rank_type",
+                "rank_no",
+                "member_id",
+                "member_name",
+                "quantity",
+                "daily_change",
+                "source_url",
+                "source_date",
+                "query_date",
+                "content_hash",
+                "source_policy",
+            )
+            if "rank_type" in (row or {})
+            else (
+                "trade_date",
+                "product_code",
+                "contract_code",
+                "close_price",
+                "settlement_price",
+                "previous_settlement_price",
+                "volume",
+                "open_interest",
+                "previous_open_interest",
+                "contract_multiplier",
+                "source_url",
+                "source_date",
+                "query_date",
+                "content_hash",
+                "source_policy",
+            )
+        )
+        entry["row_signatures"].add(
+            tuple((field, (row or {}).get(field)) for field in fields)
+        )
+    return signatures
 
 
 def _weekday_name_for_date(value):
@@ -1462,8 +1664,12 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "personal_position_context",
     "position_context_provided",
     "selected_position_candidate",
+    "candidate_decision_evidence_facts",
     "selection_workflow",
+    "formal_decision_input",
+    "formal_account_decision",
     "final_target_resolution",
+    "decision_product_freeze",
     "two_layer_decision_payload",
     "sniper_target_derivation",
 )
@@ -1473,6 +1679,8 @@ _EXECUTION_CONTEXT_FACT_KEYS = (
     "position_decision",
     "position_reason",
     "market_state_snapshot",
+    "candidates",
+    "watchlist",
     "core_stocks",
     "secondary_stocks",
     "crossline_observation_stocks",
@@ -2056,6 +2264,7 @@ def _compact_margin_pressure(snapshot):
             "target_date",
             "is_stale_for_target",
             "stale_trade_days",
+            "trade_dates",
             "latest_margin_turnover_ratio_pct",
             "latest_pressure_diff_pct",
             "summary",
@@ -2277,6 +2486,8 @@ def _compact_execution_context(context):
             result[key] = _compact_special_probe_verdict(value)
             continue
         if key in {
+            "candidates",
+            "watchlist",
             "core_stocks",
             "secondary_stocks",
             "crossline_observation_stocks",
@@ -2658,6 +2869,125 @@ def _market_capacity_phase(window_state, mainline_regime, turnover_quality):
     return "待确认"
 
 
+_CONSENSUS_REVIEW_COUNT = 10
+_CONSENSUS_REVIEW_STATUSES = {
+    "completed",
+    "failed",
+    "timeout",
+    "contract_invalid",
+}
+_CONSENSUS_REVIEW_VOTES = {
+    "confirm_existing",
+    "deny_existing",
+    "confirm_no_object",
+}
+_CONSENSUS_FUNNEL_UNITS = {
+    "fact",
+    "batch",
+    "decision",
+    "outcome",
+    "training_sample",
+}
+
+
+def _consensus_date(value, field, *, required=True):
+    text = _text(value)
+    if not text and not required:
+        return None
+    try:
+        return _dt.date.fromisoformat(text).isoformat()
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"共识记录 {field} 必须是 YYYY-MM-DD") from error
+
+
+def _consensus_timestamp(value, field, *, required=True):
+    if value in (None, "") and not required:
+        return None
+    if isinstance(value, _dt.datetime):
+        parsed = value
+    else:
+        text = _text(value)
+        if text.endswith(("Z", "z")):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = _dt.datetime.fromisoformat(text)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"共识记录 {field} 必须是带时区 RFC3339 时间") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"共识记录 {field} 必须包含时区")
+    return parsed.isoformat(timespec="seconds")
+
+
+def _consensus_hash(value, field, *, required=True):
+    text = _text(value).lower()
+    if not text and not required:
+        return None
+    if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError(f"共识记录 {field} 必须是 SHA-256")
+    return text
+
+
+def _consensus_json_ready(value):
+    if isinstance(value, dict):
+        return {str(key): _consensus_json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_consensus_json_ready(item) for item in value]
+    if isinstance(value, set):
+        return sorted(
+            (_consensus_json_ready(item) for item in value),
+            key=lambda item: json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ),
+        )
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.isoformat()
+    return value
+
+
+def _consensus_json_text(value):
+    return json.dumps(
+        _consensus_json_ready(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _consensus_record_hash(value):
+    return hashlib.sha256(_consensus_json_text(value).encode("utf-8")).hexdigest()
+
+
+def _consensus_json_value(value, default):
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _consensus_required_text(value, field):
+    text = _text(value)
+    if not text:
+        raise ValueError(f"共识记录缺少 {field}")
+    return text
+
+
+def _consensus_iso_text(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return value.isoformat()
+    return _text(value) or None
+
+
 class PostgresDailyFactDb:
     def __init__(self, database_url, *, connect=None, ensure_schema=True):
         self.database_url = _text(database_url)
@@ -2696,6 +3026,684 @@ class PostgresDailyFactDb:
 
     def is_postgres_backed(self):
         return True
+
+    def append_daily_report_consensus(
+        self,
+        batch,
+        reviews,
+        funnel_records,
+        *,
+        file_hashes=None,
+    ):
+        if not isinstance(batch, dict):
+            raise ValueError("共识批次必须是对象")
+        if not isinstance(reviews, (list, tuple)):
+            raise ValueError("十次复核记录必须是列表")
+        if not isinstance(funnel_records, (list, tuple)):
+            raise ValueError("样本漏斗记录必须是列表")
+
+        run_id = _consensus_required_text(batch.get("run_id"), "run_id")
+        target_date = _consensus_date(batch.get("target_date"), "target_date")
+        query_date = _consensus_date(batch.get("query_date"), "query_date")
+        input_hash = _consensus_hash(batch.get("input_hash"), "input_hash")
+        proposal_hash = _consensus_hash(batch.get("proposal_hash"), "proposal_hash")
+        decision_hash = _consensus_hash(
+            batch.get("decision_hash"), "decision_hash", required=False
+        )
+        freeze_hash = _consensus_hash(
+            batch.get("freeze_hash"), "freeze_hash", required=False
+        )
+        schema_version = _consensus_required_text(
+            batch.get("schema_version"), "schema_version"
+        )
+        contract_version = _consensus_required_text(
+            batch.get("contract_version"), "contract_version"
+        )
+        model_version = _consensus_required_text(
+            batch.get("model_version"), "model_version"
+        )
+        prompt_version = _consensus_required_text(
+            batch.get("prompt_version"), "prompt_version"
+        )
+        prompt_hash = _consensus_hash(batch.get("prompt_hash"), "prompt_hash")
+        if _safe_int(batch.get("review_count"), -1) != _CONSENSUS_REVIEW_COUNT:
+            raise ValueError("共识批次必须登记十次复核")
+
+        proposal = batch.get("proposal") if isinstance(batch.get("proposal"), dict) else {}
+        proposal_kind = _consensus_required_text(proposal.get("kind"), "proposal.kind")
+        if proposal_kind not in {"object", "no_object"}:
+            raise ValueError("共识提案类型不正确")
+        proposal_identity = (
+            proposal.get("identity") if isinstance(proposal.get("identity"), dict) else {}
+        )
+        time_roles = (
+            batch.get("time_roles") if isinstance(batch.get("time_roles"), dict) else {}
+        )
+        frozen_at = _consensus_timestamp(
+            batch.get("frozen_at") or time_roles.get("collected_at"),
+            "frozen_at",
+        )
+        decision_cutoff_at = _consensus_timestamp(
+            batch.get("decision_cutoff_at") or time_roles.get("decision_cutoff_at"),
+            "decision_cutoff_at",
+        )
+        decision_at = _consensus_timestamp(
+            batch.get("decision_at") or time_roles.get("decision_at"),
+            "decision_at",
+            required=False,
+        )
+
+        consensus = (
+            batch.get("consensus") if isinstance(batch.get("consensus"), dict) else {}
+        )
+        input_status = _consensus_required_text(
+            batch.get("input_status"), "input_status"
+        )
+        consensus_status = _text(consensus.get("status")) or (
+            "input_invalid" if input_status != "ready" else "pending"
+        )
+
+        def bounded_count(field, default=0):
+            value = _safe_int(consensus.get(field), default)
+            if not 0 <= value <= _CONSENSUS_REVIEW_COUNT:
+                raise ValueError(f"共识记录 {field} 必须在 0 到 10 之间")
+            return value
+
+        denominator = _safe_int(
+            consensus.get("denominator"), _CONSENSUS_REVIEW_COUNT
+        )
+        if denominator != _CONSENSUS_REVIEW_COUNT:
+            raise ValueError("共识比例分母必须固定为十次")
+        confirmation_count = bounded_count("confirmation_count")
+        denial_count = bounded_count("denial_count")
+        failure_count = bounded_count("failure_count")
+        reason_codes = consensus.get("reason_codes") or batch.get("input_issue_codes") or []
+        if not isinstance(reason_codes, (list, tuple)):
+            raise ValueError("共识原因码必须是列表")
+        periods = batch.get("periods") if isinstance(batch.get("periods"), dict) else {}
+
+        hashes = file_hashes if isinstance(file_hashes, dict) else {}
+        if isinstance(hashes.get("sha256"), dict):
+            hashes = hashes["sha256"]
+        normalized_file_hashes = {}
+        for filename in (
+            "batch.json",
+            "reviews.jsonl",
+            "summary.txt",
+            "run.jsonl",
+            "funnel.jsonl",
+        ):
+            normalized_file_hashes[filename] = (
+                _consensus_hash(
+                    hashes.get(filename),
+                    f"{filename} SHA-256",
+                    required=False,
+                )
+                or ""
+            )
+
+        review_rows = []
+        sequences = []
+        for raw_review in reviews:
+            if not isinstance(raw_review, dict):
+                raise ValueError("每条复核记录必须是对象")
+            review = dict(raw_review)
+            sequence = _safe_int(review.get("sequence"), -1)
+            sequences.append(sequence)
+            if review.get("target_date") != target_date:
+                raise ValueError("复核记录目标日期与批次不一致")
+            if review.get("input_hash") != input_hash:
+                raise ValueError("复核记录输入哈希与批次不一致")
+            if review.get("proposal_hash") != proposal_hash:
+                raise ValueError("复核记录提案哈希与批次不一致")
+            if review.get("contract_version") != contract_version:
+                raise ValueError("复核记录契约版本与批次不一致")
+            if review.get("model_version") != model_version:
+                raise ValueError("复核记录模型版本与批次不一致")
+            if review.get("prompt_hash") != prompt_hash:
+                raise ValueError("复核记录提示词哈希与批次不一致")
+            status = _consensus_required_text(review.get("status"), "review.status")
+            if status not in _CONSENSUS_REVIEW_STATUSES:
+                raise ValueError("复核记录执行结果不正确")
+            vote = _text(review.get("vote")) or None
+            if vote is not None and vote not in _CONSENSUS_REVIEW_VOTES:
+                raise ValueError("复核记录票值不正确")
+            if status == "completed" and vote is None:
+                raise ValueError("完成的复核记录必须包含有效票")
+            if status != "completed" and vote is not None:
+                raise ValueError("未完成的复核记录票值必须为空")
+            missing_facts = review.get("missing_facts") or []
+            alternative_mentions = review.get("alternative_mentions") or []
+            review_reason_codes = review.get("reason_codes") or []
+            if not isinstance(missing_facts, (list, tuple)):
+                raise ValueError("复核缺失事实必须是列表")
+            if not isinstance(alternative_mentions, (list, tuple)):
+                raise ValueError("复核替代对象说明必须是列表")
+            if not isinstance(review_reason_codes, (list, tuple)):
+                raise ValueError("复核原因码必须是列表")
+            started_at = _consensus_timestamp(review.get("started_at"), "started_at")
+            ended_at = _consensus_timestamp(review.get("ended_at"), "ended_at")
+            if _dt.datetime.fromisoformat(ended_at) < _dt.datetime.fromisoformat(started_at):
+                raise ValueError("复核结束时间不能早于开始时间")
+            try:
+                duration_seconds = float(review.get("duration_seconds") or 0)
+            except (TypeError, ValueError) as error:
+                raise ValueError("复核耗时必须是非负数") from error
+            if duration_seconds < 0:
+                raise ValueError("复核耗时必须是非负数")
+            seed = review.get("seed")
+            if seed not in (None, ""):
+                try:
+                    seed = int(seed)
+                except (TypeError, ValueError) as error:
+                    raise ValueError("复核 seed 必须是整数或空值") from error
+            else:
+                seed = None
+            review_rows.append(
+                (
+                    run_id,
+                    sequence,
+                    _consensus_required_text(
+                        review.get("review_run_id"), "review_run_id"
+                    ),
+                    target_date,
+                    _consensus_record_hash(review),
+                    _consensus_required_text(
+                        review.get("schema_version"), "review.schema_version"
+                    ),
+                    status,
+                    vote,
+                    seed,
+                    _text(review.get("provider_request_id")),
+                    input_hash,
+                    proposal_hash,
+                    contract_version,
+                    model_version,
+                    prompt_hash,
+                    started_at,
+                    ended_at,
+                    duration_seconds,
+                    _text(review.get("reason")),
+                    _consensus_json_text(missing_facts),
+                    _consensus_json_text(alternative_mentions),
+                    _text(review.get("failure_reason")),
+                    _consensus_json_text(review_reason_codes),
+                )
+            )
+        if sorted(sequences) != list(range(1, _CONSENSUS_REVIEW_COUNT + 1)):
+            raise ValueError("复核序号必须完整覆盖 1 到 10")
+
+        funnel_rows = []
+        sample_ids = []
+        for raw_record in funnel_records:
+            if not isinstance(raw_record, dict):
+                raise ValueError("每条样本漏斗记录必须是对象")
+            record = dict(raw_record)
+            sample_id = _consensus_required_text(record.get("sample_id"), "sample_id")
+            sample_ids.append(sample_id)
+            unit = _consensus_required_text(record.get("unit"), "funnel.unit")
+            if unit not in _CONSENSUS_FUNNEL_UNITS:
+                raise ValueError("样本漏斗统计单位不正确")
+            status = _consensus_required_text(record.get("status"), "funnel.status")
+            if status not in {"included", "excluded"}:
+                raise ValueError("样本漏斗结果不正确")
+            if record.get("target_date") != target_date:
+                raise ValueError("样本漏斗目标日期与批次不一致")
+            if record.get("input_hash") != input_hash:
+                raise ValueError("样本漏斗输入哈希与批次不一致")
+            funnel_reason_codes = record.get("reason_codes") or []
+            if not isinstance(funnel_reason_codes, (list, tuple)):
+                raise ValueError("样本漏斗原因码必须是列表")
+            payload = record.get("payload") or {}
+            if not isinstance(payload, dict):
+                raise ValueError("样本漏斗明细必须是对象")
+            funnel_rows.append(
+                (
+                    sample_id,
+                    run_id,
+                    _text(record.get("parent_id")) or None,
+                    target_date,
+                    _consensus_date(
+                        record.get("covered_from"), "covered_from", required=False
+                    ),
+                    _consensus_date(
+                        record.get("covered_to"), "covered_to", required=False
+                    ),
+                    _consensus_record_hash(record),
+                    _consensus_required_text(
+                        record.get("schema_version"), "funnel.schema_version"
+                    ),
+                    _consensus_required_text(record.get("stage"), "funnel.stage"),
+                    unit,
+                    input_hash,
+                    status,
+                    _consensus_json_text(funnel_reason_codes),
+                    _consensus_json_text(payload),
+                )
+            )
+        if len(sample_ids) != len(set(sample_ids)):
+            raise ValueError("同一批次的样本漏斗标识不能重复")
+
+        batch_row = (
+            run_id,
+            target_date,
+            query_date,
+            input_hash,
+            proposal_hash,
+            decision_hash,
+            freeze_hash,
+            _consensus_record_hash(
+                {"batch": batch, "file_hashes": normalized_file_hashes}
+            ),
+            schema_version,
+            contract_version,
+            model_version,
+            prompt_version,
+            prompt_hash,
+            proposal_kind,
+            _text(proposal_identity.get("code")),
+            _text(proposal_identity.get("name")),
+            _text(proposal_identity.get("sector")),
+            frozen_at,
+            decision_cutoff_at,
+            decision_at,
+            input_status,
+            consensus_status,
+            bool(consensus.get("stable_consensus")),
+            confirmation_count,
+            denial_count,
+            denominator,
+            failure_count,
+            _consensus_json_text(reason_codes),
+            _consensus_json_text(periods),
+            normalized_file_hashes["batch.json"],
+            normalized_file_hashes["reviews.jsonl"],
+            normalized_file_hashes["summary.txt"],
+            normalized_file_hashes["run.jsonl"],
+            normalized_file_hashes["funnel.jsonl"],
+        )
+
+        with self._connect() as conn:
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO daily_report_consensus_batches(
+                            run_id, target_date, query_date, input_hash, proposal_hash,
+                            decision_hash, freeze_hash, record_hash, schema_version,
+                            contract_version, model_version, prompt_version, prompt_hash,
+                            proposal_kind, proposal_stock_code, proposal_stock_name,
+                            proposal_sector, frozen_at, decision_cutoff_at, decision_at,
+                            input_status, consensus_status, stable_consensus,
+                            confirmation_count, denial_count, denominator, failure_count,
+                            reason_codes, periods, batch_file_sha256, reviews_file_sha256,
+                            summary_file_sha256, run_file_sha256, funnel_file_sha256
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
+                            %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (run_id) DO NOTHING
+                        RETURNING run_id
+                        """,
+                        batch_row,
+                    )
+                    if not cursor.fetchone():
+                        rollback = getattr(conn, "rollback", None)
+                        if callable(rollback):
+                            rollback()
+                        return {
+                            "status": "conflict",
+                            "write_performed": False,
+                            "reason": "run_id_exists",
+                            "run_id": run_id,
+                            "target_date": target_date,
+                        }
+                    cursor.executemany(
+                        """
+                        INSERT INTO daily_report_consensus_reviews(
+                            run_id, sequence, review_run_id, target_date, record_hash,
+                            schema_version, status, vote, seed, provider_request_id,
+                            input_hash, proposal_hash, contract_version, model_version,
+                            prompt_hash, started_at, ended_at, duration_seconds, reason,
+                            missing_facts, alternative_mentions, failure_reason, reason_codes
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s::jsonb, %s::jsonb, %s, %s::jsonb
+                        )
+                        """,
+                        review_rows,
+                    )
+                    if funnel_rows:
+                        cursor.executemany(
+                            """
+                            INSERT INTO daily_report_consensus_funnel_records(
+                                sample_id, run_id, parent_id, target_date, covered_from,
+                                covered_to, record_hash, schema_version, stage, unit,
+                                input_hash, status, reason_codes, payload
+                            )
+                            VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, %s::jsonb, %s::jsonb
+                            )
+                            """,
+                            funnel_rows,
+                        )
+                conn.commit()
+            except Exception:
+                rollback = getattr(conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
+                raise
+        return {
+            "status": "inserted",
+            "write_performed": True,
+            "reason": "",
+            "run_id": run_id,
+            "target_date": target_date,
+            "batch_count": 1,
+            "review_count": len(review_rows),
+            "funnel_count": len(funnel_rows),
+        }
+
+    def query_daily_report_consensus_batches(
+        self,
+        target_date=None,
+        *,
+        run_id=None,
+        limit=100,
+    ):
+        conditions = []
+        params = []
+        if target_date not in (None, ""):
+            conditions.append("target_date = %s")
+            params.append(_consensus_date(target_date, "target_date"))
+        if run_id not in (None, ""):
+            conditions.append("run_id = %s")
+            params.append(_consensus_required_text(run_id, "run_id"))
+        requested_limit = max(1, min(_safe_int(limit, 100), 1000))
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        columns = (
+            "run_id",
+            "target_date",
+            "query_date",
+            "input_hash",
+            "proposal_hash",
+            "decision_hash",
+            "freeze_hash",
+            "record_hash",
+            "schema_version",
+            "contract_version",
+            "model_version",
+            "prompt_version",
+            "prompt_hash",
+            "proposal_kind",
+            "proposal_stock_code",
+            "proposal_stock_name",
+            "proposal_sector",
+            "frozen_at",
+            "decision_cutoff_at",
+            "decision_at",
+            "input_status",
+            "consensus_status",
+            "stable_consensus",
+            "confirmation_count",
+            "denial_count",
+            "denominator",
+            "failure_count",
+            "reason_codes",
+            "periods",
+            "batch_file_sha256",
+            "reviews_file_sha256",
+            "summary_file_sha256",
+            "run_file_sha256",
+            "funnel_file_sha256",
+            "created_at",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {', '.join(columns)}
+                    FROM daily_report_consensus_batches
+                    {where}
+                    ORDER BY target_date DESC, created_at DESC, run_id ASC
+                    LIMIT %s
+                    """,
+                    (*params, requested_limit),
+                )
+                rows = cursor.fetchall()
+        results = []
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            results.append(
+                {
+                    "run_id": _text(item.get("run_id")),
+                    "target_date": _consensus_iso_text(item.get("target_date")),
+                    "query_date": _consensus_iso_text(item.get("query_date")),
+                    "input_hash": _text(item.get("input_hash")),
+                    "proposal_hash": _text(item.get("proposal_hash")),
+                    "decision_hash": _consensus_iso_text(item.get("decision_hash")),
+                    "freeze_hash": _consensus_iso_text(item.get("freeze_hash")),
+                    "record_hash": _text(item.get("record_hash")),
+                    "schema_version": _text(item.get("schema_version")),
+                    "contract_version": _text(item.get("contract_version")),
+                    "model_version": _text(item.get("model_version")),
+                    "prompt_version": _text(item.get("prompt_version")),
+                    "prompt_hash": _text(item.get("prompt_hash")),
+                    "proposal": {
+                        "kind": _text(item.get("proposal_kind")),
+                        "identity": {
+                            key: value
+                            for key, value in {
+                                "code": _text(item.get("proposal_stock_code")),
+                                "name": _text(item.get("proposal_stock_name")),
+                                "sector": _text(item.get("proposal_sector")),
+                            }.items()
+                            if value
+                        },
+                    },
+                    "frozen_at": _consensus_iso_text(item.get("frozen_at")),
+                    "decision_cutoff_at": _consensus_iso_text(
+                        item.get("decision_cutoff_at")
+                    ),
+                    "decision_at": _consensus_iso_text(item.get("decision_at")),
+                    "input_status": _text(item.get("input_status")),
+                    "consensus": {
+                        "status": _text(item.get("consensus_status")),
+                        "stable_consensus": bool(item.get("stable_consensus")),
+                        "confirmation_count": _safe_int(item.get("confirmation_count")),
+                        "denial_count": _safe_int(item.get("denial_count")),
+                        "denominator": _safe_int(item.get("denominator")),
+                        "failure_count": _safe_int(item.get("failure_count")),
+                        "reason_codes": _consensus_json_value(
+                            item.get("reason_codes"), []
+                        ),
+                    },
+                    "periods": _consensus_json_value(item.get("periods"), {}),
+                    "file_hashes": {
+                        "batch.json": _text(item.get("batch_file_sha256")),
+                        "reviews.jsonl": _text(item.get("reviews_file_sha256")),
+                        "summary.txt": _text(item.get("summary_file_sha256")),
+                        "run.jsonl": _text(item.get("run_file_sha256")),
+                        "funnel.jsonl": _text(item.get("funnel_file_sha256")),
+                    },
+                    "created_at": _consensus_iso_text(item.get("created_at")),
+                }
+            )
+        return results
+
+    def query_daily_report_consensus_reviews(self, run_id, *, sequence=None):
+        normalized_run_id = _consensus_required_text(run_id, "run_id")
+        params = [normalized_run_id]
+        sequence_clause = ""
+        if sequence not in (None, ""):
+            normalized_sequence = _safe_int(sequence, -1)
+            if not 1 <= normalized_sequence <= _CONSENSUS_REVIEW_COUNT:
+                raise ValueError("复核序号必须在 1 到 10 之间")
+            sequence_clause = " AND sequence = %s"
+            params.append(normalized_sequence)
+        columns = (
+            "run_id",
+            "sequence",
+            "review_run_id",
+            "target_date",
+            "record_hash",
+            "schema_version",
+            "status",
+            "vote",
+            "seed",
+            "provider_request_id",
+            "input_hash",
+            "proposal_hash",
+            "contract_version",
+            "model_version",
+            "prompt_hash",
+            "started_at",
+            "ended_at",
+            "duration_seconds",
+            "reason",
+            "missing_facts",
+            "alternative_mentions",
+            "failure_reason",
+            "reason_codes",
+            "created_at",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {', '.join(columns)}
+                    FROM daily_report_consensus_reviews
+                    WHERE run_id = %s{sequence_clause}
+                    ORDER BY sequence ASC
+                    """,
+                    tuple(params),
+                )
+                rows = cursor.fetchall()
+        results = []
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            results.append(
+                {
+                    **{
+                        key: item.get(key)
+                        for key in (
+                            "run_id",
+                            "sequence",
+                            "review_run_id",
+                            "record_hash",
+                            "schema_version",
+                            "status",
+                            "vote",
+                            "seed",
+                            "provider_request_id",
+                            "input_hash",
+                            "proposal_hash",
+                            "contract_version",
+                            "model_version",
+                            "prompt_hash",
+                            "duration_seconds",
+                            "reason",
+                            "failure_reason",
+                        )
+                    },
+                    "target_date": _consensus_iso_text(item.get("target_date")),
+                    "started_at": _consensus_iso_text(item.get("started_at")),
+                    "ended_at": _consensus_iso_text(item.get("ended_at")),
+                    "missing_facts": _consensus_json_value(
+                        item.get("missing_facts"), []
+                    ),
+                    "alternative_mentions": _consensus_json_value(
+                        item.get("alternative_mentions"), []
+                    ),
+                    "reason_codes": _consensus_json_value(
+                        item.get("reason_codes"), []
+                    ),
+                    "created_at": _consensus_iso_text(item.get("created_at")),
+                }
+            )
+        return results
+
+    def query_daily_report_consensus_funnel_records(
+        self,
+        *,
+        run_id=None,
+        target_date=None,
+    ):
+        conditions = []
+        params = []
+        if run_id not in (None, ""):
+            conditions.append("run_id = %s")
+            params.append(_consensus_required_text(run_id, "run_id"))
+        if target_date not in (None, ""):
+            conditions.append("target_date = %s")
+            params.append(_consensus_date(target_date, "target_date"))
+        if not conditions:
+            raise ValueError("查询样本漏斗时必须提供目标日期或运行标识")
+        columns = (
+            "sample_id",
+            "run_id",
+            "parent_id",
+            "target_date",
+            "covered_from",
+            "covered_to",
+            "record_hash",
+            "schema_version",
+            "stage",
+            "unit",
+            "input_hash",
+            "status",
+            "reason_codes",
+            "payload",
+            "created_at",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT {', '.join(columns)}
+                    FROM daily_report_consensus_funnel_records
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY stage ASC, sample_id ASC
+                    """,
+                    tuple(params),
+                )
+                rows = cursor.fetchall()
+        results = []
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            results.append(
+                {
+                    **{
+                        key: _text(item.get(key))
+                        for key in (
+                            "sample_id",
+                            "run_id",
+                            "parent_id",
+                            "record_hash",
+                            "schema_version",
+                            "stage",
+                            "unit",
+                            "input_hash",
+                            "status",
+                        )
+                    },
+                    "target_date": _consensus_iso_text(item.get("target_date")),
+                    "covered_from": _consensus_iso_text(item.get("covered_from")),
+                    "covered_to": _consensus_iso_text(item.get("covered_to")),
+                    "reason_codes": _consensus_json_value(
+                        item.get("reason_codes"), []
+                    ),
+                    "payload": _consensus_json_value(item.get("payload"), {}),
+                    "created_at": _consensus_iso_text(item.get("created_at")),
+                }
+            )
+        return results
 
     def save_provider_source_run(self, run):
         return 0
@@ -2833,6 +3841,71 @@ class PostgresDailyFactDb:
                 }
             )
         return result
+
+    def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+        digits = "".join(ch for ch in _text(stock_code) if ch.isdigit())
+        stock_code = digits[-6:].zfill(6) if digits else ""
+        end_date = _date_or_none(end_date)
+        limit = max(_safe_int(limit, 10), 1)
+        if not stock_code or not end_date:
+            return []
+        columns = (
+            "trade_date",
+            "ts_code",
+            "stock_code",
+            "market",
+            "name",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pct_chg",
+            "vol",
+            "amount_yi",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, ts_code, stock_code, market, name, open, high, low,
+                           close, pct_chg, vol, amount_yi, source_run_id
+                    FROM stock_daily_quotes_recent
+                    WHERE stock_code = %s AND trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (stock_code, end_date, limit),
+                )
+                rows = list(cursor.fetchall() or [])
+        records = []
+        for row in reversed(rows):
+            item = _row_dict(row, columns)
+            trade_date = _text(item.get("trade_date"))
+            amount_yi = _safe_float(item.get("amount_yi"))
+            records.append(
+                {
+                    "date": trade_date,
+                    "trade_date": trade_date,
+                    "source_date": trade_date,
+                    "ts_code": _text(item.get("ts_code")),
+                    "stock_code": _text(item.get("stock_code")),
+                    "market": _text(item.get("market")),
+                    "name": _text(item.get("name")),
+                    "open": _safe_float(item.get("open")),
+                    "high": _safe_float(item.get("high")),
+                    "low": _safe_float(item.get("low")),
+                    "close": _safe_float(item.get("close")),
+                    "pct_chg": _safe_float(item.get("pct_chg")),
+                    "volume": _safe_float(item.get("vol")),
+                    "amount": amount_yi * 100000000.0,
+                    "amount_yi": amount_yi,
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                    "data_source": "postgresql.stock_daily_quotes_recent",
+                    "source": "postgresql.stock_daily_quotes_recent",
+                }
+            )
+        return records
 
     def _normalize_monthly_account_ledger(self, row):
         row = row or {}
@@ -3579,11 +4652,23 @@ class PostgresDailyFactDb:
             conn.commit()
         return len(items)
 
-    def query_index_daily_bars(self, index_code, end_date, *, window_days=250):
+    def query_index_daily_bars(
+        self,
+        index_code,
+        end_date,
+        *,
+        window_days=250,
+        finite_positive_close_only=False,
+    ):
         index_code = _normalize_index_code(index_code)
         if not index_code:
             return []
         limit = max(_safe_int(window_days, 250), 1)
+        close_filter = (
+            "AND close > 0 AND close < 'Infinity'::double precision"
+            if finite_positive_close_only
+            else ""
+        )
         columns = (
             "index_code",
             "trade_date",
@@ -3599,12 +4684,13 @@ class PostgresDailyFactDb:
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """
+                    f"""
                     SELECT index_code, trade_date, open, high, low, close,
                            volume, amount, source_policy, source_run_id
                     FROM index_daily_bars
                     WHERE index_code = %s
                       AND trade_date <= %s
+                      {close_filter}
                     ORDER BY trade_date DESC
                     LIMIT %s
                     """,
@@ -3630,6 +4716,590 @@ class PostgresDailyFactDb:
                 }
             )
         return records
+
+    def replace_cffex_index_futures_day(
+        self,
+        trade_date,
+        contract_rows,
+        member_rank_rows,
+        *,
+        replace_products=None,
+    ):
+        from market_data.cffex_index_futures import (
+            CFFEX_PRODUCTS,
+            CffexDataError,
+            assess_cffex_day_scope,
+            normalize_contract_daily_record,
+            normalize_member_rank_record,
+            normalize_trade_date,
+        )
+
+        target_date = normalize_trade_date(trade_date)
+        normalized_contracts = [
+            normalize_contract_daily_record(row, expected_trade_date=target_date)
+            for row in (contract_rows or [])
+        ]
+        normalized_ranks = [
+            normalize_member_rank_record(row, expected_trade_date=target_date)
+            for row in (member_rank_rows or [])
+        ]
+        contract_products = {row["product_code"] for row in normalized_contracts}
+        rank_products = {row["product_code"] for row in normalized_ranks}
+        products = {
+            str(product or "").strip().upper()
+            for product in (replace_products if replace_products is not None else rank_products)
+        }
+        invalid_products = sorted(products - set(CFFEX_PRODUCTS))
+        if invalid_products:
+            raise CffexDataError(f"不支持的股指期货品种：{','.join(invalid_products)}")
+        if not products:
+            raise CffexDataError("没有可写入的中金所股指期货品种")
+        missing_contract_products = sorted(products - contract_products)
+        missing_rank_products = sorted(products - rank_products)
+        if missing_contract_products or missing_rank_products:
+            raise CffexDataError(
+                "中金所单日事实不完整："
+                f"缺合约日行情={','.join(missing_contract_products) or '无'}；"
+                f"缺会员排名={','.join(missing_rank_products) or '无'}"
+            )
+        normalized_contracts = [
+            row for row in normalized_contracts if row["product_code"] in products
+        ]
+        normalized_ranks = [row for row in normalized_ranks if row["product_code"] in products]
+        contract_keys = {
+            (row["product_code"], row["contract_code"]) for row in normalized_contracts
+        }
+        if len(contract_keys) != len(normalized_contracts):
+            raise CffexDataError("中金所合约日行情存在重复主键")
+        rank_keys = {
+            (
+                row["product_code"],
+                row["contract_code"],
+                row["rank_type"],
+                row["rank_no"],
+            )
+            for row in normalized_ranks
+        }
+        if len(rank_keys) != len(normalized_ranks):
+            raise CffexDataError("中金所会员排名存在重复主键")
+        missing_daily_contracts = sorted(
+            {
+                (row["product_code"], row["contract_code"])
+                for row in normalized_ranks
+                if (row["product_code"], row["contract_code"]) not in contract_keys
+            }
+        )
+        if missing_daily_contracts:
+            labels = ",".join(f"{product}/{contract}" for product, contract in missing_daily_contracts)
+            raise CffexDataError(f"会员排名合约缺少同日日行情：{labels}")
+        assessment = assess_cffex_day_scope(
+            normalized_contracts,
+            normalized_ranks,
+            expected_trade_date=target_date,
+            expected_products=sorted(products),
+        )
+        structural_errors = [
+            *assessment.get("integrity_errors", []),
+            *assessment.get("structural_reasons", []),
+        ]
+        if structural_errors:
+            raise CffexDataError(
+                "中金所单日事实结构不完整：" + "；".join(structural_errors)
+            )
+
+        expected_contract_signatures = _cffex_signatures_by_product(normalized_contracts)
+        expected_rank_signatures = _cffex_signatures_by_product(normalized_ranks)
+        product_list = sorted(products)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                existing_contract_signatures = self._query_cffex_signatures(
+                    cursor,
+                    "cffex_index_futures_contract_daily",
+                    target_date,
+                    product_list,
+                )
+                existing_rank_signatures = self._query_cffex_signatures(
+                    cursor,
+                    "cffex_index_futures_member_rank_daily",
+                    target_date,
+                    product_list,
+                )
+                unchanged_products = [
+                    product
+                    for product in product_list
+                    if existing_contract_signatures.get(product) == expected_contract_signatures.get(product)
+                    and existing_rank_signatures.get(product) == expected_rank_signatures.get(product)
+                ]
+                changed_products = [
+                    product for product in product_list if product not in unchanged_products
+                ]
+                if changed_products:
+                    cursor.execute(
+                        "DELETE FROM cffex_index_futures_member_rank_daily "
+                        "WHERE trade_date = %s AND product_code = ANY(%s)",
+                        (target_date, changed_products),
+                    )
+                    cursor.execute(
+                        "DELETE FROM cffex_index_futures_contract_daily "
+                        "WHERE trade_date = %s AND product_code = ANY(%s)",
+                        (target_date, changed_products),
+                    )
+                    changed_contracts = [
+                        row for row in normalized_contracts if row["product_code"] in changed_products
+                    ]
+                    changed_ranks = [
+                        row for row in normalized_ranks if row["product_code"] in changed_products
+                    ]
+                    cursor.executemany(
+                        """
+                        INSERT INTO cffex_index_futures_contract_daily(
+                            trade_date, product_code, contract_code, close_price,
+                            settlement_price, previous_settlement_price, volume,
+                            open_interest, previous_open_interest, contract_multiplier,
+                            source_url, source_date, query_date, content_hash, source_policy
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        [
+                            (
+                                row["trade_date"],
+                                row["product_code"],
+                                row["contract_code"],
+                                row["close_price"],
+                                row["settlement_price"],
+                                row["previous_settlement_price"],
+                                row["volume"],
+                                row["open_interest"],
+                                row["previous_open_interest"],
+                                row["contract_multiplier"],
+                                row["source_url"],
+                                row["source_date"],
+                                row["query_date"],
+                                row["content_hash"],
+                                row["source_policy"],
+                            )
+                            for row in changed_contracts
+                        ],
+                    )
+                    cursor.executemany(
+                        """
+                        INSERT INTO cffex_index_futures_member_rank_daily(
+                            trade_date, product_code, contract_code, rank_type,
+                            rank_no, member_id, member_name, quantity, daily_change, source_url,
+                            source_date, query_date, content_hash, source_policy
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        [
+                            (
+                                row["trade_date"],
+                                row["product_code"],
+                                row["contract_code"],
+                                row["rank_type"],
+                                row["rank_no"],
+                                row["member_id"],
+                                row["member_name"],
+                                row["quantity"],
+                                row["daily_change"],
+                                row["source_url"],
+                                row["source_date"],
+                                row["query_date"],
+                                row["content_hash"],
+                                row["source_policy"],
+                            )
+                            for row in changed_ranks
+                        ],
+                    )
+            conn.commit()
+        return {
+            "trade_date": target_date,
+            "replaced_products": changed_products,
+            "unchanged_products": unchanged_products,
+            "contract_row_count": sum(
+                row["product_code"] in changed_products for row in normalized_contracts
+            ),
+            "member_rank_row_count": sum(
+                row["product_code"] in changed_products for row in normalized_ranks
+            ),
+        }
+
+    @staticmethod
+    def _query_cffex_signatures(cursor, table_name, trade_date, products):
+        from market_data.cffex_index_futures import (
+            normalize_contract_daily_record,
+            normalize_member_rank_record,
+        )
+
+        columns_by_table = {
+            "cffex_index_futures_contract_daily": (
+                "trade_date",
+                "product_code",
+                "contract_code",
+                "close_price",
+                "settlement_price",
+                "previous_settlement_price",
+                "volume",
+                "open_interest",
+                "previous_open_interest",
+                "contract_multiplier",
+                "source_url",
+                "source_date",
+                "query_date",
+                "content_hash",
+                "source_policy",
+            ),
+            "cffex_index_futures_member_rank_daily": (
+                "trade_date",
+                "product_code",
+                "contract_code",
+                "rank_type",
+                "rank_no",
+                "member_id",
+                "member_name",
+                "quantity",
+                "daily_change",
+                "source_url",
+                "source_date",
+                "query_date",
+                "content_hash",
+                "source_policy",
+            ),
+        }
+        columns = columns_by_table.get(table_name)
+        if columns is None:
+            raise ValueError(f"unexpected CFFEX table: {table_name}")
+        cursor.execute(
+            f"""
+            SELECT {', '.join(columns)}
+            FROM {table_name}
+            WHERE trade_date = %s AND product_code = ANY(%s)
+            ORDER BY product_code, contract_code
+            """,
+            (trade_date, products),
+        )
+        normalizer = (
+            normalize_contract_daily_record
+            if table_name == "cffex_index_futures_contract_daily"
+            else normalize_member_rank_record
+        )
+        rows = []
+        for raw_row in cursor.fetchall() or []:
+            row = _row_dict(raw_row, columns)
+            rows.append(normalizer(row, expected_trade_date=trade_date))
+        return _cffex_signatures_by_product(rows)
+
+    def query_cffex_index_futures_day(self, trade_date):
+        from market_data.cffex_index_futures import normalize_trade_date
+
+        target_date = normalize_trade_date(trade_date)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                contract_rows, member_rank_rows = self._query_cffex_rows_for_dates(
+                    cursor, [target_date]
+                )
+        return {
+            "trade_date": target_date,
+            "trade_dates": [target_date] if contract_rows or member_rank_rows else [],
+            "contract_rows": contract_rows,
+            "member_rank_rows": member_rank_rows,
+            "source": "postgresql.cffex_index_futures",
+        }
+
+    def query_cffex_index_futures_history(self, end_date, *, window_days=60):
+        from market_data.cffex_index_futures import normalize_trade_date
+
+        target_date = normalize_trade_date(end_date)
+        limit = max(_safe_int(window_days, 60), 1)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT trade_date
+                    FROM cffex_index_futures_member_rank_daily
+                    WHERE trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (target_date, limit),
+                )
+                date_rows = list(cursor.fetchall() or [])
+                trade_dates = sorted(
+                    _text(_row_dict(row, ("trade_date",)).get("trade_date"))
+                    for row in date_rows
+                    if _text(_row_dict(row, ("trade_date",)).get("trade_date"))
+                )
+                contract_rows, member_rank_rows = self._query_cffex_rows_for_dates(
+                    cursor, trade_dates
+                )
+        return {
+            "end_date": target_date,
+            "requested_window": limit,
+            "trade_dates": trade_dates,
+            "contract_rows": contract_rows,
+            "member_rank_rows": member_rank_rows,
+            "source": "postgresql.cffex_index_futures",
+        }
+
+    def query_cffex_index_futures_history_summaries(self, end_date, *, window_days=60):
+        from market_data.cffex_index_futures import normalize_trade_date
+
+        target_date = normalize_trade_date(end_date)
+        limit = max(_safe_int(window_days, 60), 1)
+        columns = (
+            "trade_date",
+            "member_net_short_change",
+            "member_net_short_notional",
+            "top20_cross_section_net_short",
+            "product_count",
+            "contract_count",
+            "complete_scope",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    WITH recent_dates AS (
+                        SELECT DISTINCT trade_date
+                        FROM cffex_index_futures_member_rank_daily
+                        WHERE trade_date <= %s
+                        ORDER BY trade_date DESC
+                        LIMIT %s
+                    ), rank_scope AS (
+                        SELECT
+                            r.trade_date,
+                            r.product_code,
+                            r.contract_code,
+                            COUNT(*) FILTER (WHERE r.rank_type = 'volume') AS volume_count,
+                            COUNT(DISTINCT r.rank_no) FILTER (
+                                WHERE r.rank_type = 'volume'
+                            ) AS volume_distinct_rank_count,
+                            MIN(r.rank_no) FILTER (WHERE r.rank_type = 'volume') AS volume_min_rank,
+                            MAX(r.rank_no) FILTER (WHERE r.rank_type = 'volume') AS volume_max_rank,
+                            COUNT(*) FILTER (WHERE r.rank_type = 'long') AS long_count,
+                            COUNT(DISTINCT r.rank_no) FILTER (
+                                WHERE r.rank_type = 'long'
+                            ) AS long_distinct_rank_count,
+                            MIN(r.rank_no) FILTER (WHERE r.rank_type = 'long') AS long_min_rank,
+                            MAX(r.rank_no) FILTER (WHERE r.rank_type = 'long') AS long_max_rank,
+                            COUNT(*) FILTER (WHERE r.rank_type = 'short') AS short_count,
+                            COUNT(DISTINCT r.rank_no) FILTER (
+                                WHERE r.rank_type = 'short'
+                            ) AS short_distinct_rank_count,
+                            MIN(r.rank_no) FILTER (WHERE r.rank_type = 'short') AS short_min_rank,
+                            MAX(r.rank_no) FILTER (WHERE r.rank_type = 'short') AS short_max_rank,
+                            SUM(r.quantity) FILTER (WHERE r.rank_type = 'long') AS top20_long_quantity,
+                            SUM(r.quantity) FILTER (WHERE r.rank_type = 'short') AS top20_short_quantity,
+                            COUNT(*) FILTER (
+                                WHERE r.rank_type = 'long' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_long_count,
+                            COUNT(*) FILTER (
+                                WHERE r.rank_type = 'short' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_short_count,
+                            MAX(r.quantity) FILTER (
+                                WHERE r.rank_type = 'long' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_long_quantity,
+                            MAX(r.quantity) FILTER (
+                                WHERE r.rank_type = 'short' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_short_quantity,
+                            MAX(r.daily_change) FILTER (
+                                WHERE r.rank_type = 'long' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_long_change,
+                            MAX(r.daily_change) FILTER (
+                                WHERE r.rank_type = 'short' AND r.member_name LIKE '中信期货%%'
+                            ) AS member_short_change
+                        FROM cffex_index_futures_member_rank_daily r
+                        JOIN recent_dates d ON d.trade_date = r.trade_date
+                        GROUP BY r.trade_date, r.product_code, r.contract_code
+                    ), daily_scope AS (
+                        SELECT
+                            r.trade_date,
+                            COUNT(DISTINCT r.product_code) AS product_count,
+                            COUNT(*) AS contract_count,
+                            BOOL_AND(
+                                r.volume_count = 20
+                                AND r.volume_distinct_rank_count = 20
+                                AND r.volume_min_rank = 1
+                                AND r.volume_max_rank = 20
+                                AND r.long_count = 20
+                                AND r.long_distinct_rank_count = 20
+                                AND r.long_min_rank = 1
+                                AND r.long_max_rank = 20
+                                AND r.short_count = 20
+                                AND r.short_distinct_rank_count = 20
+                                AND r.short_min_rank = 1
+                                AND r.short_max_rank = 20
+                                AND r.member_long_count = 1
+                                AND r.member_short_count = 1
+                                AND c.contract_code IS NOT NULL
+                            ) AS complete_scope,
+                            SUM(r.member_short_change - r.member_long_change) AS member_net_short_change,
+                            SUM(
+                                (r.member_short_quantity - r.member_long_quantity)
+                                * c.settlement_price
+                                * c.contract_multiplier
+                            ) AS member_net_short_notional,
+                            SUM(r.top20_short_quantity - r.top20_long_quantity) AS top20_cross_section_net_short
+                        FROM rank_scope r
+                        LEFT JOIN cffex_index_futures_contract_daily c
+                          ON c.trade_date = r.trade_date
+                         AND c.product_code = r.product_code
+                         AND c.contract_code = r.contract_code
+                        GROUP BY r.trade_date
+                    )
+                    SELECT
+                        trade_date,
+                        CASE WHEN product_count = 4 AND complete_scope
+                             THEN member_net_short_change END AS member_net_short_change,
+                        CASE WHEN product_count = 4 AND complete_scope
+                             THEN member_net_short_notional END AS member_net_short_notional,
+                        CASE WHEN product_count = 4 AND complete_scope
+                             THEN top20_cross_section_net_short END AS top20_cross_section_net_short,
+                        product_count,
+                        contract_count,
+                        (product_count = 4 AND complete_scope) AS complete_scope
+                    FROM daily_scope
+                    ORDER BY trade_date ASC
+                    """,
+                    (target_date, limit),
+                )
+                raw_rows = list(cursor.fetchall() or [])
+        summaries = []
+        for raw_row in raw_rows:
+            row = _row_dict(raw_row, columns)
+            summaries.append(
+                {
+                    "trade_date": _text(row.get("trade_date")),
+                    "member_net_short_change": _nullable_float(
+                        row.get("member_net_short_change")
+                    ),
+                    "member_net_short_notional": _nullable_float(
+                        row.get("member_net_short_notional")
+                    ),
+                    "top20_cross_section_net_short": _nullable_float(
+                        row.get("top20_cross_section_net_short")
+                    ),
+                    "product_count": _safe_int(row.get("product_count")),
+                    "contract_count": _safe_int(row.get("contract_count")),
+                    "complete_scope": bool(row.get("complete_scope")),
+                }
+            )
+        return {
+            "end_date": target_date,
+            "requested_window": limit,
+            "summaries": summaries,
+            "source": "postgresql.cffex_index_futures.summary",
+        }
+
+    @staticmethod
+    def _query_cffex_rows_for_dates(cursor, trade_dates):
+        if not trade_dates:
+            return [], []
+        cursor.execute(
+            """
+            SELECT trade_date, product_code, contract_code, close_price,
+                   settlement_price, previous_settlement_price, volume,
+                   open_interest, previous_open_interest, contract_multiplier,
+                   source_url, source_date, query_date, content_hash, source_policy
+            FROM cffex_index_futures_contract_daily
+            WHERE trade_date = ANY(%s)
+            ORDER BY trade_date, product_code, contract_code
+            """,
+            (list(trade_dates),),
+        )
+        contract_columns = (
+            "trade_date",
+            "product_code",
+            "contract_code",
+            "close_price",
+            "settlement_price",
+            "previous_settlement_price",
+            "volume",
+            "open_interest",
+            "previous_open_interest",
+            "contract_multiplier",
+            "source_url",
+            "source_date",
+            "query_date",
+            "content_hash",
+            "source_policy",
+        )
+        contract_rows = []
+        for raw_row in cursor.fetchall() or []:
+            row = _row_dict(raw_row, contract_columns)
+            contract_rows.append(
+                {
+                    "trade_date": _text(row.get("trade_date")),
+                    "product_code": _text(row.get("product_code")),
+                    "contract_code": _text(row.get("contract_code")),
+                    "close_price": _nullable_float(row.get("close_price")),
+                    "settlement_price": _safe_float(row.get("settlement_price")),
+                    "previous_settlement_price": _nullable_float(
+                        row.get("previous_settlement_price")
+                    ),
+                    "volume": _safe_int(row.get("volume")),
+                    "open_interest": _safe_int(row.get("open_interest")),
+                    "previous_open_interest": _safe_int(row.get("previous_open_interest")),
+                    "contract_multiplier": _safe_int(row.get("contract_multiplier")),
+                    "source_url": _text(row.get("source_url")),
+                    "source_date": _text(row.get("source_date")),
+                    "query_date": _text(row.get("query_date")),
+                    "content_hash": _text(row.get("content_hash")),
+                    "source_policy": _text(row.get("source_policy")),
+                }
+            )
+        cursor.execute(
+            """
+            SELECT trade_date, product_code, contract_code, rank_type, rank_no,
+                   member_id, member_name, quantity, daily_change, source_url, source_date,
+                   query_date, content_hash, source_policy
+            FROM cffex_index_futures_member_rank_daily
+            WHERE trade_date = ANY(%s)
+            ORDER BY trade_date, product_code, contract_code, rank_type, rank_no
+            """,
+            (list(trade_dates),),
+        )
+        rank_columns = (
+            "trade_date",
+            "product_code",
+            "contract_code",
+            "rank_type",
+            "rank_no",
+            "member_id",
+            "member_name",
+            "quantity",
+            "daily_change",
+            "source_url",
+            "source_date",
+            "query_date",
+            "content_hash",
+            "source_policy",
+        )
+        member_rank_rows = []
+        for raw_row in cursor.fetchall() or []:
+            row = _row_dict(raw_row, rank_columns)
+            member_rank_rows.append(
+                {
+                    "trade_date": _text(row.get("trade_date")),
+                    "product_code": _text(row.get("product_code")),
+                    "contract_code": _text(row.get("contract_code")),
+                    "rank_type": _text(row.get("rank_type")),
+                    "rank_no": _safe_int(row.get("rank_no")),
+                    "member_id": _text(row.get("member_id")),
+                    "member_name": _text(row.get("member_name")),
+                    "quantity": _safe_int(row.get("quantity")),
+                    "daily_change": (
+                        None
+                        if row.get("daily_change") is None
+                        else _safe_int(row.get("daily_change"))
+                    ),
+                    "source_url": _text(row.get("source_url")),
+                    "source_date": _text(row.get("source_date")),
+                    "query_date": _text(row.get("query_date")),
+                    "content_hash": _text(row.get("content_hash")),
+                    "source_policy": _text(row.get("source_policy")),
+                }
+            )
+        return contract_rows, member_rank_rows
 
     def upsert_index_minute_bars(self, index_code, trade_date, period, rows, *, source_policy="", source_run_id=0):
         index_code = _normalize_index_code(index_code)
@@ -6314,41 +7984,107 @@ class PostgresDailyFactDb:
             limit=limit,
             rank_scope=rank_scope,
         )
-        value = self._load_daily_report_fact_value(end_date, "top50_turnover_share_series")
-        if structured.get("rows"):
-            rows = list(structured.get("rows") or [])
-            required_window_rows = max(_safe_int(window_days, 30), 1)
-            previous_rows = []
-            previous_source = ""
-            if len(rows) < required_window_rows and isinstance(value, dict):
-                previous_rows = list(value.get("rows") or [])
-                previous_source = _text(value.get("source")) or "postgres.daily_report_facts.top50_turnover_share_series"
-            if len(rows) < required_window_rows and not previous_rows:
-                latest_value = self._load_latest_daily_report_fact_value_before_or_on(
-                    end_date,
-                    "top50_turnover_share_series",
+        rows, sources = self._merge_report_metric_history(
+            end_date, "top50_turnover_share_series", "rows",
+            structured.get("rows") or [], window_days=window_days,
+        )
+        result = dict(structured)
+        result["rows"] = rows
+        result["source"] = "+".join(dict.fromkeys(
+            part for part in [structured.get("source"), *sources] if part
+        ))
+        return result
+
+    def _load_daily_report_fact_values_before(self, trade_date, key, *, limit=60):
+        """Return [(report_date, value)] newest first for one key, in one query."""
+        trade_date = _date_or_none(trade_date)
+        key = _text(key)
+        if not trade_date or not key:
+            return []
+        prefix = _encode_fact_path_part(key)
+        columns = ("trade_date", "field_path", "value_text", "value_number", "value_bool", "value_kind")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, field_path, value_text, value_number, value_bool, value_kind
+                    FROM daily_report_fact_fields
+                    WHERE trade_date < %s
+                      AND (field_path = %s OR field_path LIKE %s)
+                    ORDER BY trade_date DESC, field_path ASC
+                    """,
+                    (trade_date, prefix, prefix + "/%"),
                 )
-                if isinstance(latest_value, dict):
-                    previous_rows = list(latest_value.get("rows") or [])
-                    previous_source = _text(latest_value.get("source")) or "postgres.daily_report_facts.top50_turnover_share_series"
-            if previous_rows:
-                by_date = {}
-                for row in previous_rows + rows:
-                    trade_date = _text((row or {}).get("trade_date") or (row or {}).get("date"))
-                    if not trade_date:
-                        continue
-                    item = dict(row or {})
-                    item["trade_date"] = trade_date
-                    by_date[trade_date] = item
-                merged_rows = [by_date[trade_date] for trade_date in sorted(by_date)][-required_window_rows:]
-                merged = dict(structured)
-                merged["source"] = "+".join(part for part in (structured.get("source"), previous_source) if part)
-                merged["rows"] = merged_rows
-                return merged
-            return structured
-        if isinstance(value, dict):
-            return dict(value)
-        return {"source": "postgres.daily_report_facts.top50_turnover_share_series", "rows": []}
+                rows = cursor.fetchall() or []
+        grouped = {}
+        order = []
+        for row in rows:
+            item = _row_dict(row, columns)
+            day = _text(item.get("trade_date"))
+            if not day:
+                continue
+            if day not in grouped:
+                grouped[day] = {}
+                order.append(day)
+            _set_nested_fact_value(grouped[day], item.get("field_path"), _restore_typed_value(item))
+        return [(day, grouped[day].get(key)) for day in order[: max(_safe_int(limit, 60), 1)]]
+
+    def _merge_report_metric_history(self, end_date, key, rows_key, structured_rows, *, window_days):
+        target_day = _date_obj_or_none(end_date)
+        if target_day is None:
+            return [], []
+        window = max(_safe_int(window_days, 25), 1)
+        # A row count never proves date coverage. Merge every persisted report
+        # in reach before truncating: reading only the nearest one lets a single
+        # trading day that was never persisted turn into a permanent hole, and
+        # stopping early once the count looks full keeps that hole alive.
+        by_date = {}
+        sources = []
+        for _report_day, payload in self._load_daily_report_fact_values_before(
+            target_day.isoformat(), key, limit=window * 4
+        ):
+            history_rows = payload.get(rows_key) or [] if isinstance(payload, dict) else []
+            accepted = False
+            for row in history_rows:
+                day = _date_obj_or_none(row.get("trade_date") or row.get("date")) if isinstance(row, dict) else None
+                if day is None or day >= target_day:
+                    continue
+                if any(row.get(field) and _date_obj_or_none(row[field]) != day
+                       for field in ("source_date", "query_date")):
+                    continue
+                by_date.setdefault(day.isoformat(), {**row, "trade_date": day.isoformat()})
+                accepted = True
+            if accepted:
+                sources.append((payload or {}).get("source") or f"postgres.daily_report_facts.{key}")
+        # The target day's own frozen snapshot outranks older reports, so merge it
+        # last and let it overwrite: history only fills what it cannot prove today.
+        current = self._load_daily_report_fact_value(target_day.isoformat(), key)
+        for row in ((current or {}).get(rows_key) or []) if isinstance(current, dict) else []:
+            day = _date_obj_or_none(row.get("trade_date") or row.get("date")) if isinstance(row, dict) else None
+            if day is None or day > target_day:
+                continue
+            if any(row.get(field) and _date_obj_or_none(row[field]) != day
+                   for field in ("source_date", "query_date")):
+                continue
+            by_date[day.isoformat()] = {**row, "trade_date": day.isoformat()}
+            if not any(day.isoformat() in source for source in sources):
+                sources.append(
+                    (current or {}).get("source") or f"postgres.daily_report_facts.{key}"
+                )
+        for row in structured_rows or []:
+            day = _date_obj_or_none(row.get("trade_date") or row.get("date")) if isinstance(row, dict) else None
+            if day is None or day > target_day:
+                continue
+            if any(row.get(field) and _date_obj_or_none(row[field]) != day
+                   for field in ("source_date", "query_date")):
+                continue
+            by_date[day.isoformat()] = {**row, "trade_date": day.isoformat()}
+        merged = [by_date[day] for day in sorted(by_date)][-window:]
+        if len(merged) < window:
+            # A short window is a real fact gap, so report it instead of letting
+            # the reader assume those trading days never existed.
+            sources.append(f"window_incomplete:{len(merged)}/{window}")
+        return merged, sources
 
     def _query_structured_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
         end_date = _date_or_none(end_date)
@@ -6424,12 +8160,11 @@ class PostgresDailyFactDb:
 
     def query_new_high_feedback_series(self, end_date, *, window_days=25):
         structured = self._query_structured_new_high_feedback_series(end_date, window_days=window_days)
-        if structured:
-            return structured
-        value = self._load_daily_report_fact_value(end_date, "new_high_feedback")
-        if isinstance(value, dict):
-            return list(value.get("trend_rows") or [])
-        return []
+        rows, _ = self._merge_report_metric_history(
+            end_date, "new_high_feedback", "trend_rows", structured,
+            window_days=window_days,
+        )
+        return rows
 
     def upsert_new_high_feedback_daily(self, row):
         row = row or {}
@@ -6599,7 +8334,7 @@ class PostgresDailyFactDb:
             "amount_yi",
         )
         coverage_columns = ("available_trade_days",)
-        history_columns = ("stock_code", "previous_high")
+        history_columns = ("stock_code", "previous_high", "history_trade_days")
         count_columns = ("total_count",)
         with self._connect() as conn:
             with conn.cursor() as cursor:
@@ -6643,7 +8378,9 @@ class PostgresDailyFactDb:
                     placeholders = ", ".join(["%s"] * len(stock_codes))
                     cursor.execute(
                         f"""
-                        SELECT stock_code, MAX(high) AS previous_high
+                        SELECT stock_code,
+                               MAX(high) AS previous_high,
+                               COUNT(DISTINCT trade_date) AS history_trade_days
                         FROM stock_daily_quotes_recent
                         WHERE trade_date < %s
                           AND stock_code IN ({placeholders})
@@ -6653,7 +8390,10 @@ class PostgresDailyFactDb:
                         (trade_date, *stock_codes),
                     )
                     historical_high_by_code = {
-                        _text(item.get("stock_code")): _safe_float(item.get("previous_high"))
+                        _text(item.get("stock_code")): {
+                            "previous_high": _safe_float(item.get("previous_high")),
+                            "history_trade_days": _safe_int(item.get("history_trade_days")),
+                        }
                         for item in (_row_dict(row, history_columns) for row in cursor.fetchall())
                     }
                 cursor.execute(
@@ -6668,7 +8408,8 @@ class PostgresDailyFactDb:
         factor_rows = []
         for row in target_rows:
             stock_code = _text(row.get("stock_code"))
-            previous_high = historical_high_by_code.get(stock_code, 0.0)
+            history = historical_high_by_code.get(stock_code) or {}
+            previous_high = _safe_float(history.get("previous_high"))
             if previous_high <= 0 or _safe_float(row.get("high")) < previous_high:
                 continue
             factor_rows.append(
@@ -6684,6 +8425,7 @@ class PostgresDailyFactDb:
                     "pct_chg": _safe_float(row.get("pct_chg")),
                     "amount_yi": _safe_float(row.get("amount_yi")),
                     "topdays": lookback_days,
+                    "history_trade_days": _safe_int(history.get("history_trade_days")),
                 }
             )
         denominator = _safe_int(count_row.get("total_count")) or all_a_denominator

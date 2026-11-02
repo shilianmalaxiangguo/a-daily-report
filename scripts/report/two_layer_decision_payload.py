@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
+from report.candidate_lifecycle_display import candidate_source_display_label
 from report.execution_wording import (
     PREMARKET_50_EXECUTION_TEXT,
     PREMARKET_50_TRIGGER_TEXT,
@@ -1007,7 +1008,7 @@ def _next_day_action_payload(
             if pending_position_confirmation
             else "旧仓优先时，新机会只观察，不新增参与"
             if has_confirmed_position
-            else "无旧仓需要处理；保持0%不参与"
+            else clean_text(old_position_rows.get("旧仓动作"), "无旧仓需要处理；保持0%不参与")
         ),
         "review_points": ["收盘后复核条件是否命中", "记录失败条件是否触发"],
     }
@@ -1311,6 +1312,16 @@ def build_two_layer_decision_payload(
         "tomorrow_account_action": tomorrow_account_action,
         "account_exposure_plan": dict(exposure_plan),
     }
+    formal_account_decision = (
+        resolution.get("formal_account_decision")
+        if isinstance(resolution.get("formal_account_decision"), dict)
+        else {}
+    )
+    if formal_account_decision:
+        payload["formal_account_decision"] = dict(formal_account_decision)
+        payload["position_lifecycle_records"] = list(
+            resolution.get("position_lifecycle_records") or []
+        )
     if final_empty_without_current_object:
         payload["workflow_zero_position"] = True
     if pending_external_trade:
@@ -1511,11 +1522,13 @@ def render_derivation_audit_layer(payload):
     return lines
 
 
-def _selection_workflow_passes_forward_text(node):
+def _selection_workflow_passes_forward_text(node, final=None):
     node = node if isinstance(node, dict) else {}
+    final = final if isinstance(final, dict) else {}
     passes = node.get("passes_forward") if isinstance(node.get("passes_forward"), dict) else {}
+    node_id = clean_text(node.get("node_id"))
     review = passes.get("premarket_narrative_review") if isinstance(passes.get("premarket_narrative_review"), dict) else {}
-    if clean_text(node.get("node_id")) == "N8_5" and review:
+    if node_id == "N8_5" and review:
         summary = clean_text(review.get("summary"))
         if not summary:
             chain = [clean_text(item) for item in review.get("reason_chain", []) or [] if clean_text(item)]
@@ -1525,14 +1538,114 @@ def _selection_workflow_passes_forward_text(node):
             f"动作上限：{clean_text(review.get('action_effect_label'), '不调整')}；"
             f"{summary}"
         )
-    if review:
-        compact = dict(passes)
-        compact["premarket_narrative_review"] = (
-            f"{clean_text(review.get('status'), '未触发')} / "
-            f"{clean_text(review.get('action_effect_label'), '不调整')}"
+
+    execution_object_known = "execution_object" in passes and isinstance(passes.get("execution_object"), dict)
+    execution_object = passes.get("execution_object") if execution_object_known else {}
+    if node_id == "N8" and not execution_object_known:
+        final_position_pct = _normalized_position_pct(final.get("position_pct", 0))
+        final_execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+        if final_position_pct > 0 and final_execution_object:
+            execution_object = final_execution_object
+            execution_object_known = True
+    execution_label = _stock_label(execution_object) if execution_object else ("无" if execution_object_known else "待确认")
+    market_layer = passes.get("market_layer") if isinstance(passes.get("market_layer"), dict) else {}
+    sector_layer = passes.get("sector_layer") if isinstance(passes.get("sector_layer"), dict) else {}
+    leader_layer = passes.get("leader_layer") if isinstance(passes.get("leader_layer"), dict) else {}
+    sector_proof = passes.get("local_trend_sector_proof")
+    if not isinstance(sector_proof, dict):
+        sector_proof = sector_layer.get("local_trend_sector_proof") if isinstance(sector_layer.get("local_trend_sector_proof"), dict) else {}
+    evidence_gaps = "、".join(
+        clean_text(item) for item in sector_proof.get("evidence_gaps", []) or [] if clean_text(item)
+    )
+
+    if node_id == "N0":
+        return f"目标事实日：{clean_text(passes.get('target_date'), '待确认')}"
+    if node_id == "N1":
+        allow_sector_diagnosis = market_layer.get("allow_sector_diagnosis")
+        if allow_sector_diagnosis is True:
+            continuation = "继续判断板块"
+        elif allow_sector_diagnosis is False:
+            continuation = "停止判断板块"
+        else:
+            continuation = "板块判断资格待确认"
+        return f"{continuation}；市场结论进入资金方向判断"
+    if node_id == "N2":
+        return "；".join(
+            part
+            for part in (
+                f"主线方向：{clean_text(passes.get('mainline'), '待确认')}",
+                clean_text(passes.get("volume_role")),
+            )
+            if part
         )
-        return clean_text(compact, "{}")
-    return clean_text(passes, "{}")
+    if node_id == "N3":
+        path_state = "板块路径已确认" if sector_layer.get("sector_path_selected") is True else "板块路径待确认"
+        if evidence_gaps:
+            proof_state = f"局部趋势板块尚缺：{evidence_gaps}"
+        elif sector_proof.get("complete") is True:
+            proof_state = "局部趋势板块证据已齐"
+        else:
+            proof_state = "局部趋势板块证据待确认"
+        return (
+            f"选择方向：{clean_text(sector_layer.get('selected_direction'), '待确认')}；"
+            f"{path_state}；{proof_state}"
+        )
+    if node_id == "N4":
+        leader = leader_layer.get("leader")
+        leader_text = _stock_label(leader) if isinstance(leader, dict) else clean_text(leader, "暂无")
+        return "；".join(
+            part
+            for part in (
+                f"板块核心：{leader_text}",
+                clean_text(leader_layer.get("market_selection_rule")),
+            )
+            if part
+        )
+    if node_id == "N5":
+        if "candidate_count" not in passes or passes.get("candidate_count") is None:
+            return "候选数量待确认"
+        return f"{clean_text(passes.get('candidate_count'), '0')}只进入对照"
+    if node_id == "N6":
+        return f"保留对象：{execution_label}；下一步继续核对价格行为"
+    if node_id == "N7":
+        price_action = passes.get("brooks_price_action") if isinstance(passes.get("brooks_price_action"), dict) else {}
+        risk_text = (
+            f"风险或分歧{clean_text(price_action.get('risk_or_rejection_count'), '0')}只"
+            if "risk_or_rejection_count" in price_action and price_action.get("risk_or_rejection_count") is not None
+            else "风险或分歧数量待确认"
+        )
+        common_selection_text = (
+            f"{clean_text(passes.get('common_selection_pending'), '0')}只等待共同选择复核"
+            if "common_selection_pending" in passes and passes.get("common_selection_pending") is not None
+            else "等待共同选择复核数量待确认"
+        )
+        return f"保留对象：{execution_label}；{risk_text}；{common_selection_text}"
+    if node_id == "N8":
+        if "position_pct" in passes and passes.get("position_pct") is not None:
+            position_text = clean_text(passes.get("position_pct"), "0")
+        elif "planned_position_pct" in passes and passes.get("planned_position_pct") is not None:
+            position_text = clean_text(passes.get("planned_position_pct"), "0")
+        else:
+            final_position_pct = _normalized_position_pct(final.get("position_pct", 0))
+            position_text = str(final_position_pct) if final_position_pct > 0 else "待确认"
+        proof_text = f"；局部趋势板块尚缺：{evidence_gaps}" if evidence_gaps else ""
+        return f"明日执行对象：{execution_label}；仓位：{position_text}%{proof_text}"
+    if node_id == "N9":
+        return f"最终结论沿用{clean_text(passes.get('source_node'), '上一节点')}"
+
+    visible_values = []
+    for value in passes.values():
+        if isinstance(value, bool) or value in (None, ""):
+            continue
+        if isinstance(value, (str, int, float)):
+            visible_values.append(clean_text(value))
+        elif isinstance(value, (list, tuple)):
+            visible_values.extend(clean_text(item) for item in value if clean_text(item))
+    return "；".join(visible_values) or "沿用本节点结论"
+
+
+def _selection_workflow_table_text(value, default="-"):
+    return clean_text(value, default).replace("|", "/").replace("\n", "<br/>")
 
 
 def render_selection_workflow_derivation_layer(workflow):
@@ -1597,27 +1710,40 @@ def render_selection_workflow_derivation_layer(workflow):
     lines = ["## 推导审计层", "", "### 市场 -> 板块 -> 龙头 -> 价格行为 -> 执行资格", "| 层级 | 节点 | 结论 |", "|---|---|---|"]
     for level, node_ref, conclusion in summary_rows:
         lines.append(f"| {clean_text(level)} | {clean_text(node_ref)} | {clean_text(conclusion, '待确认')} |")
+    mermaid = render_selection_workflow_mermaid(workflow)
     lines.extend(["", "### 主线推导链"])
+    if mermaid:
+        lines.extend(["", "```mermaid", mermaid, "```"])
+    lines.extend(
+        [
+            "",
+            "### 节点结论",
+            "| 节点 | 结论 | 向下传递 | 尚未确认 |",
+            "|---|---|---|---|",
+        ]
+    )
     for node in nodes:
         if not isinstance(node, dict):
             continue
         node_id = clean_text(node.get("node_id"))
         node_name = clean_text(node.get("node_name"))
-        cannot_conclude = "；".join(clean_text(item) for item in node.get("cannot_conclude", []) or [] if clean_text(item))
-        lines.extend(
-            [
-                "",
-                f"#### {node_id} {node_name}",
-                f"- 结论：{clean_text(node.get('judgement'), '待确认')}",
-                f"- 传给下一步：{_selection_workflow_passes_forward_text(node)}",
-                f"- 本节点不能推出：{cannot_conclude or '无'}",
-            ]
+        cannot_conclude = "；".join(
+            clean_text(item) for item in node.get("cannot_conclude", []) or [] if clean_text(item)
         )
-    mermaid = render_selection_workflow_mermaid(workflow)
-    if mermaid:
-        lines.extend(["", "### 流程图", "```mermaid", mermaid, "```"])
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _selection_workflow_table_text(f"{node_id} {node_name}"),
+                    _selection_workflow_table_text(node.get("judgement"), "待确认"),
+                    _selection_workflow_table_text(_selection_workflow_passes_forward_text(node, final=final)),
+                    _selection_workflow_table_text(cannot_conclude, "无"),
+                ]
+            )
+            + " |"
+        )
     lines.extend(["", "### 候选生命周期证据"])
-    lines.append("| 股票 | 首次来源 | 入口处理 | 板块角色 | 反推结论 | 对照结果 | 最终动作 |")
+    lines.append("| 股票 | 发现路径 | 入口处理 | 板块角色 | 反推结论 | 对照结果 | 最终动作 |")
     lines.append("|---|---|---|---|---|---|---|")
     for item in workflow.get("candidate_pool", []) or []:
         if not isinstance(item, dict):
@@ -1628,7 +1754,12 @@ def render_selection_workflow_derivation_layer(workflow):
             + " | ".join(
                 [
                     _stock_label(stock),
-                    "、".join(clean_text(source) for source in item.get("source_pools", []) or [] if clean_text(source)) or "-",
+                    "、".join(
+                        candidate_source_display_label(source)
+                        for source in item.get("source_pools", []) or []
+                        if candidate_source_display_label(source)
+                    )
+                    or "-",
                     clean_text(item.get("entry_basis"), clean_text(item.get("entered_reason"), "-")),
                     clean_text(item.get("sector_role"), "-"),
                     clean_text(item.get("reversal_decision"), "-"),

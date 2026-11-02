@@ -80,6 +80,41 @@ class MarketOverviewNodesTest(unittest.TestCase):
         self.assertEqual(result["turnover_quality"], "做多放量")
         self.assertEqual(result["turnover_quality_desc"], "成交量充沛且上涨家数占优，赚钱效应较强")
 
+    def test_evaluate_turnover_quality_uses_previous_day_expansion_with_strong_breadth(self):
+        result = evaluate_turnover_quality(
+            {
+                "target_date": "2026-07-31",
+                "total_turnover": 25598.98,
+                "market_turnover_history": [
+                    {"date": "2026-07-30", "turnover": 23584.52},
+                ],
+                "market_stats": {"up_count": 4691, "down_count": 728},
+            }
+        )
+
+        self.assertEqual(result["turnover_quality"], "做多放量")
+        self.assertIn("较前一交易日放大", result["turnover_quality_desc"])
+
+    def test_market_base_renders_limit_down_as_pending_when_source_failed(self):
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-07-31",
+                "enabled_node_keys": ["header", "indices"],
+                "data": {
+                    "total_turnover": 25598.98,
+                    "indices": {"上证指数": {"点位": 3832.26, "涨跌幅": 0.72}},
+                    "zt_pool": [{"code": "000001"}] * 99,
+                    "dt_pool": [],
+                    "market_stats": {"up_count": 4691, "down_count": 728},
+                    "data_status": {"涨停池": True, "跌停池": False},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 涨停 / 跌停 | 99 / 待确认 | - | 跌停事实待确认 |", rendered)
+        self.assertNotIn("| 涨停 / 跌停 | 99 / 0 |", rendered)
+
     def test_market_base_renders_etf_turnover_capacity_with_existing_25_day_metrics(self):
         rows = [
             {"trade_date": "2026-05-19", "etf_turnover_yi": 4672.8, "change_pct": "待累计", "covered_etf_count": 1518},

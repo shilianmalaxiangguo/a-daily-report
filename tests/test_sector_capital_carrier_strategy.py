@@ -244,6 +244,48 @@ class SectorCapitalCarrierStrategyTest(unittest.TestCase):
         self.assertEqual(strategy["primary_candidate"]["stock_label"], "太极实业(600667)")
         self.assertEqual(strategy["risk_review_candidates"], [])
 
+    def test_explicit_stock_sector_is_not_overridden_by_research_reason(self):
+        strategy = build_sector_capital_carrier_strategy(
+            "2026-08-17",
+            {
+                "hot_plates": [
+                    {"name": "半导体", "order": 1, "trade_date": "2026-08-17"}
+                ],
+                "hot_rank_top50": [
+                    {
+                        "code": "002081",
+                        "name": "金螳螂",
+                        "rank": 1,
+                        "sector": "装修装饰",
+                        "xuangubao_stock_reason": "电子半导体客户推进芯片项目",
+                        "trade_date": "2026-08-17",
+                    }
+                ],
+                "turnover_rank": [
+                    {
+                        "code": "002081",
+                        "name": "金螳螂",
+                        "rank": 10,
+                        "sector": "装修装饰",
+                        "turnover": 80.0,
+                        "trade_date": "2026-08-17",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(strategy["selected_sectors"][0]["name"], "半导体")
+        self.assertEqual(strategy["paper_candidates"], [])
+        self.assertEqual(strategy["primary_candidate"], {})
+        self.assertEqual(
+            strategy["eliminated_candidates"][0]["stock_label"],
+            "金螳螂(002081)",
+        )
+        self.assertIn(
+            "没有落在当日已被资金选择的板块内",
+            strategy["eliminated_candidates"][0]["reason"],
+        )
+
     def test_treats_none_row_sets_as_empty_facts(self):
         strategy = build_sector_capital_carrier_strategy(
             "2026-06-12",

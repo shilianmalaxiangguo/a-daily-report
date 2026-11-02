@@ -455,43 +455,57 @@ def _tomorrow_decision_section(payload: dict[str, Any]) -> str:
     return "\n  <h2>明日抉择</h2>\n  " + _table(["项目", "值"], rows)
 
 
-def build_sh_index_chanlun_html_path(target_date: str, *, root: str | Path | None = None) -> Path:
+def build_sh_index_chanlun_html_path(
+    target_date: str,
+    *,
+    root: str | Path | None = None,
+    output_root: str | Path | None = None,
+) -> Path:
     base_root = Path(root) if root is not None else _repo_root()
-    return base_root / "reports" / "chanlun-html" / f"{target_date}_上证指数缠论.html"
+    report_root = Path(output_root) if output_root is not None else base_root / "reports"
+    return report_root / "chanlun-html" / f"{target_date}_上证指数缠论.html"
 
 
 def save_sh_index_chanlun_html_report(
     target_date: str,
     *,
     root: str | Path | None = None,
+    output_root: str | Path | None = None,
     index_code: str = DEFAULT_INDEX_CODE,
     runner: Callable[[str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = run_analysis,
     tomorrow_decision: dict[str, Any] | None = None,
     fetch_minute_bars: Callable[..., dict[str, Any]] | None = None,
     sse_loader: Callable[..., Any] | None = None,
     allow_live_fallback: bool = True,
+    rendered_html: str | None = None,
 ) -> Path:
-    runner_kwargs = {}
-    if fetch_minute_bars is not None:
-        runner_kwargs["fetch_minute_bars"] = fetch_minute_bars
-    if sse_loader is not None:
-        runner_kwargs["sse_loader"] = sse_loader
-    if not allow_live_fallback:
-        runner_kwargs["allow_live_fallback"] = False
-    if runner_kwargs:
-        market_zhongshu, rows = runner(target_date, index_code, **runner_kwargs)
-    else:
-        market_zhongshu, rows = runner(target_date, index_code)
-    if not allow_live_fallback and not (market_zhongshu or {}).get("success"):
-        raise ReportCriticalDataMissingError(
-            (market_zhongshu or {}).get("error") or f"{target_date} PostgreSQL指数结构缺失，停止生成缠论HTML"
-        )
-    payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
-    if tomorrow_decision:
-        payload["tomorrow_decision"] = dict(tomorrow_decision)
-    output_path = build_sh_index_chanlun_html_path(target_date, root=root)
+    if rendered_html is None:
+        runner_kwargs = {}
+        if fetch_minute_bars is not None:
+            runner_kwargs["fetch_minute_bars"] = fetch_minute_bars
+        if sse_loader is not None:
+            runner_kwargs["sse_loader"] = sse_loader
+        if not allow_live_fallback:
+            runner_kwargs["allow_live_fallback"] = False
+        if runner_kwargs:
+            market_zhongshu, rows = runner(target_date, index_code, **runner_kwargs)
+        else:
+            market_zhongshu, rows = runner(target_date, index_code)
+        if not allow_live_fallback and not (market_zhongshu or {}).get("success"):
+            raise ReportCriticalDataMissingError(
+                (market_zhongshu or {}).get("error") or f"{target_date} PostgreSQL指数结构缺失，停止生成缠论HTML"
+            )
+        payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
+        if tomorrow_decision:
+            payload["tomorrow_decision"] = dict(tomorrow_decision)
+        rendered_html = render_sh_index_chanlun_html(payload)
+    output_path = build_sh_index_chanlun_html_path(
+        target_date,
+        root=root,
+        output_root=output_root,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_sh_index_chanlun_html(payload), encoding="utf-8")
+    output_path.write_text(rendered_html, encoding="utf-8")
     return output_path
 
 

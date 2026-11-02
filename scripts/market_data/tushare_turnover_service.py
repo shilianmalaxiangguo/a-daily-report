@@ -58,6 +58,27 @@ def _frame_to_records(frame):
     return []
 
 
+_MISSING_TEXT_VALUES = {"", "nan", "nat", "none", "null", "<na>"}
+
+
+def _clean_optional_text(value):
+    if value is None:
+        return ""
+    try:
+        text = str(value).strip()
+    except Exception:
+        return ""
+    return "" if text.lower() in _MISSING_TEXT_VALUES else text
+
+
+def _clean_stock_list_date(value):
+    text = _clean_optional_text(value)
+    compact = text.replace("-", "").replace("/", "")
+    if compact in {"00000000", "19700101"}:
+        return ""
+    return text
+
+
 def _eastmoney_rows(payload):
     if not isinstance(payload, dict):
         return []
@@ -579,9 +600,9 @@ def fetch_stock_basic_map(*, pro=None, ts_module=None):
         if not stock_code:
             continue
         item = {
-            "name": str(row.get("name") or "").strip(),
-            "industry": str(row.get("industry") or "").strip(),
-            "list_date": str(row.get("list_date") or "").strip(),
+            "name": _clean_optional_text(row.get("name")),
+            "industry": _clean_optional_text(row.get("industry")),
+            "list_date": _clean_stock_list_date(row.get("list_date")),
         }
         if not item["name"] and not item["industry"] and not item["list_date"]:
             continue

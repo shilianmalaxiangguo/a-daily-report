@@ -12,22 +12,18 @@ from agent_runner.daily_report_agent_runner import DailyReportAgentRequest, Dail
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the daily report agent once.")
+    parser = argparse.ArgumentParser(description="旧账户日报运行器已停用；请使用当前板块阅读入口。")
     parser.add_argument("target_date")
     parser.add_argument("--root-dir", default=".")
     args = parser.parse_args(argv)
-
-    root_dir = Path(args.root_dir)
-    runner = DailyReportAgentRunner(root_dir=root_dir)
-    result = runner.run(DailyReportAgentRequest(target_date=args.target_date, mode="replay"))
+    runner = DailyReportAgentRunner(root_dir=Path(args.root_dir))
+    result = runner.run(DailyReportAgentRequest(target_date=args.target_date))
     print(f"run_dir: {result.get('run_dir', '')}")
     print(f"status: {result.get('status', '')}")
-
-    if result.get("status") == "error":
-        return 2
-    if result.get("status") == "needs_review":
-        return 1
-    return 0
+    message = (result.get("error") or {}).get("message")
+    if message:
+        print(message)
+    return 2 if result.get("status") == "error" else 0
 
 
 if __name__ == "__main__":

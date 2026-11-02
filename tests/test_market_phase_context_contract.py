@@ -194,6 +194,55 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertGreaterEqual(len(result["module_logs"]), 3)
         self.assertTrue(any(log["step"] == "gate_override" for log in result["module_logs"]))
 
+    def test_breakout_with_failed_limit_down_source_stays_observational(self):
+        result = build_market_phase_context_contract(
+            {
+                "zt_pool": [{"code": "000001"}] * 99,
+                "dt_pool": [],
+                "data_status": {"涨停池": True, "跌停池": False},
+                "indices": {"上证指数": {"涨跌幅": 0.72}},
+                "market_stats": {"up_count": 4691, "down_count": 728},
+            },
+            "2026-07-31",
+            analyze_market_zhongshu=lambda **kwargs: {
+                "success": True,
+                "signal": {"signal_type": "大盘突破", "status": "突破中枢"},
+            },
+            analyze_market_and_sectors=lambda data: {"market_status": "强势上涨"},
+            resolve_market_mainline_context=lambda data, market_analysis: {
+                "main_sectors_info": [],
+                "secondary_sectors_info": [],
+                "main_sectors": [],
+                "secondary_sectors": [],
+                "dragon_stocks": [],
+            },
+            build_mainline_exit_analysis=lambda data, market_analysis, dragon_stocks, main_sectors: {
+                "overall_level": "红灯",
+                "sector_name": "暂无明确主线",
+            },
+            merge_position_gate=lambda position_level, exit_analysis: {
+                "position_level": position_level,
+                "operation_state": "防守态",
+                "can_new_entry": False,
+                "can_hold": True,
+                "should_reduce": False,
+                "gate_reason": "关键数据不完整",
+            },
+            build_market_state_machine_snapshot=lambda **kwargs: {},
+            resolve_environment_display_contract=lambda **kwargs: {
+                "position_level": kwargs["position_level"],
+                "operation_state": kwargs["final_gate"]["operation_state"],
+            },
+            calculate_price_range=lambda item: {},
+        )
+
+        self.assertIsNone(result["dt_count"])
+        self.assertFalse(result["dt_count_available"])
+        self.assertEqual(result["position_level"], "0%不参与")
+        self.assertFalse(result["final_gate"]["can_new_entry"])
+        self.assertIn("跌停事实待确认", result["position_reason"])
+        self.assertFalse(any(log["step"] == "gate_override" for log in result["module_logs"]))
+
     def test_forming_current_zhongshu_does_not_upgrade_breakout_to_attack_gate(self):
         result = build_market_phase_context_contract(
             {

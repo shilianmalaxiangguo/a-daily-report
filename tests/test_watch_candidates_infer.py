@@ -233,7 +233,7 @@ class WatchCandidatesInferTest(unittest.TestCase):
                 "sector_name_matches": lambda sector, mainline: sector == mainline,
                 "_safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
                 "_resolve_abnormal_setup_signal": lambda abnormal_type, follow_state: {
-                    "id": "burst_hold",
+                    "id": "fresh_abnormal_probe",
                     "label": f"{abnormal_type}-{follow_state}",
                     "phase": "观察池",
                 },
@@ -243,13 +243,15 @@ class WatchCandidatesInferTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         item = result[0]
         self.assertEqual(item["code"], "000001")
-        self.assertEqual(item["follow_state"], "跌不下去")
-        self.assertEqual(item["setup_signal_id"], "burst_hold")
+        self.assertEqual(item["follow_state"], "新异动待观察")
+        self.assertEqual(item["setup_signal_id"], "fresh_abnormal_probe")
         self.assertEqual(item["anchor_price"], 12.34)
-        self.assertEqual(item["abnormal_score"], 64)
+        self.assertEqual(item["abnormal_score"], 0)
         self.assertTrue(item["is_mainline"])
         self.assertTrue(item["is_degraded_snapshot"])
         self.assertFalse(item["formal_decision_eligible"])
+        self.assertFalse(item["observation_priority_eligible"])
+        self.assertIn("不形成承接结论", item["abnormal_note"])
 
 
 if __name__ == "__main__":

@@ -9,6 +9,62 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class MarginPressureRuntimeTest(unittest.TestCase):
+    def test_holiday_calendar_survives_storage_and_report_date_check(self):
+        from daily_report_render import margin_pressure_date_failure
+        from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
+        from storage.postgres_daily_fact_db import _compact_margin_pressure
+
+        snapshot = build_margin_pressure_snapshot(
+            [{"trade_date": "2026-09-30", "margin_balance_yi": 25404.57,
+              "market_turnover_yi": 10366.80, "exchange_count": 3}],
+            target_date="2026-10-08",
+            trade_dates=["2026-09-29", "2026-09-30", "2026-10-08", "2026-10-09"],
+        )
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(snapshot["stale_trade_days"], 1)
+        self.assertEqual(snapshot["trade_dates"], ["2026-09-30", "2026-10-08"])
+        self.assertEqual(margin_pressure_date_failure(snapshot, "2026-10-08"), "")
+        compact = _compact_margin_pressure(snapshot)
+        self.assertEqual(compact["trade_dates"], snapshot["trade_dates"])
+        self.assertEqual(margin_pressure_date_failure(compact, "2026-10-08"), "")
+
+    def test_report_date_check_recounts_calendar_instead_of_trusting_lag(self):
+        from daily_report_render import margin_pressure_date_failure
+
+        payload = {"target_date": "2026-10-08", "latest_data_date": "2026-09-29",
+                   "stale_trade_days": 1, "rows": [{"trade_date": "2026-09-29"}],
+                   "trade_dates": ["2026-09-29", "2026-09-30", "2026-10-08"]}
+        self.assertIn("滞后 2个交易日", margin_pressure_date_failure(payload, "2026-10-08"))
+
+    def test_report_date_check_rejects_incomplete_calendar(self):
+        from daily_report_render import margin_pressure_date_failure
+
+        for dates in (["2026-09-30"], ["2026-10-08"], ["bad-date"], "2026-10-08"):
+            with self.subTest(dates=dates):
+                payload = {"target_date": "2026-10-08", "latest_data_date": "2026-09-30",
+                           "stale_trade_days": 1, "rows": [{"trade_date": "2026-09-30"}],
+                           "trade_dates": dates}
+                self.assertTrue(margin_pressure_date_failure(payload, "2026-10-08"))
+
+    def test_report_date_check_without_calendar_does_not_infer_holidays(self):
+        from daily_report_render import margin_pressure_date_failure
+
+        payload = {"target_date": "2026-10-08", "latest_data_date": "2026-09-30",
+                   "stale_trade_days": 1, "rows": [{"trade_date": "2026-09-30"}]}
+        self.assertTrue(margin_pressure_date_failure(payload, "2026-10-08"))
+
+    def test_previous_weekday_without_calendar_remains_usable(self):
+        from daily_report_render import margin_pressure_date_failure
+        from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
+
+        snapshot = build_margin_pressure_snapshot(
+            [{"trade_date": "2026-09-29", "margin_balance_yi": 25404.57,
+              "market_turnover_yi": 10366.80, "exchange_count": 3}],
+            target_date="2026-09-30",
+        )
+        self.assertNotIn("trade_dates", snapshot)
+        self.assertEqual(margin_pressure_date_failure(snapshot, "2026-09-30"), "")
+
     def test_build_margin_pressure_snapshot_calibrates_25_and_250_day_pressure(self):
         from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
 

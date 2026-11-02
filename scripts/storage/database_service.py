@@ -107,6 +107,76 @@ class DatabaseService:
         checker = getattr(self.repository, "is_postgres_backed", None)
         return bool(callable(checker) and checker())
 
+    def append_daily_report_consensus(
+        self,
+        batch,
+        reviews,
+        funnel_records,
+        *,
+        file_hashes=None,
+        allow_postgres=True,
+    ):
+        if not allow_postgres:
+            return {
+                "status": "skipped",
+                "write_performed": False,
+                "reason": "replay_read_only",
+                "run_id": str((batch or {}).get("run_id") or ""),
+                "target_date": str((batch or {}).get("target_date") or ""),
+            }
+        writer = getattr(self.repository, "append_daily_report_consensus", None)
+        if not callable(writer):
+            return {
+                "status": "unavailable",
+                "write_performed": False,
+                "reason": "postgres_unavailable",
+                "run_id": str((batch or {}).get("run_id") or ""),
+                "target_date": str((batch or {}).get("target_date") or ""),
+            }
+        return writer(
+            batch,
+            reviews,
+            funnel_records,
+            file_hashes=file_hashes,
+        )
+
+    def query_daily_report_consensus_batches(
+        self,
+        target_date=None,
+        *,
+        run_id=None,
+        limit=100,
+    ):
+        reader = getattr(
+            self.repository, "query_daily_report_consensus_batches", None
+        )
+        if not callable(reader):
+            return []
+        return reader(target_date, run_id=run_id, limit=limit)
+
+    def query_daily_report_consensus_reviews(self, run_id, *, sequence=None):
+        reader = getattr(
+            self.repository, "query_daily_report_consensus_reviews", None
+        )
+        if not callable(reader):
+            return []
+        return reader(run_id, sequence=sequence)
+
+    def query_daily_report_consensus_funnel_records(
+        self,
+        *,
+        run_id=None,
+        target_date=None,
+    ):
+        reader = getattr(
+            self.repository,
+            "query_daily_report_consensus_funnel_records",
+            None,
+        )
+        if not callable(reader):
+            return []
+        return reader(run_id=run_id, target_date=target_date)
+
     def get_runtime_cache_entry(self, namespace, cache_key, target_date=""):
         reader = getattr(self.repository, "get_runtime_cache_entry", None)
         if not callable(reader):
@@ -150,6 +220,12 @@ class DatabaseService:
             return []
         return reader(trade_date, stock_codes=stock_codes)
 
+    def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+        reader = getattr(self.repository, "query_stock_daily_quote_history", None)
+        if not callable(reader):
+            return []
+        return reader(stock_code, end_date, limit=limit)
+
     def rebuild_market_daily_total(self, trade_date, *, market_scope="all_a", source_run_id=0):
         return self.repository.rebuild_market_daily_total(
             trade_date,
@@ -172,11 +248,71 @@ class DatabaseService:
             return 0
         return writer(index_code, rows, source_policy=source_policy, source_run_id=source_run_id)
 
-    def query_index_daily_bars(self, index_code, end_date, *, window_days=250):
+    def query_index_daily_bars(
+        self,
+        index_code,
+        end_date,
+        *,
+        window_days=250,
+        finite_positive_close_only=False,
+    ):
         reader = getattr(self.repository, "query_index_daily_bars", None)
         if not callable(reader):
             return []
-        return reader(index_code, end_date, window_days=window_days)
+        kwargs = {"window_days": window_days}
+        if finite_positive_close_only:
+            kwargs["finite_positive_close_only"] = True
+        return reader(index_code, end_date, **kwargs)
+
+    def replace_cffex_index_futures_day(
+        self,
+        trade_date,
+        contract_rows,
+        member_rank_rows,
+        *,
+        replace_products=None,
+    ):
+        writer = getattr(self.repository, "replace_cffex_index_futures_day", None)
+        if not callable(writer):
+            return {}
+        kwargs = {}
+        if replace_products is not None:
+            kwargs["replace_products"] = replace_products
+        return writer(trade_date, contract_rows, member_rank_rows, **kwargs)
+
+    def query_cffex_index_futures_day(self, trade_date):
+        reader = getattr(self.repository, "query_cffex_index_futures_day", None)
+        if not callable(reader):
+            return {}
+        return reader(trade_date)
+
+    def query_cffex_index_futures_history(self, end_date, *, window_days=60):
+        reader = getattr(self.repository, "query_cffex_index_futures_history", None)
+        if not callable(reader):
+            return {
+                "end_date": str(end_date or ""),
+                "requested_window": int(window_days or 60),
+                "trade_dates": [],
+                "contract_rows": [],
+                "member_rank_rows": [],
+                "source": "",
+            }
+        return reader(end_date, window_days=window_days)
+
+    def query_cffex_index_futures_history_summaries(self, end_date, *, window_days=60):
+        reader = getattr(
+            self.repository,
+            "query_cffex_index_futures_history_summaries",
+            None,
+        )
+        if not callable(reader):
+            return {
+                "end_date": str(end_date or ""),
+                "requested_window": int(window_days or 60),
+                "summaries": [],
+                "source": "",
+            }
+        return reader(end_date, window_days=window_days)
 
     def upsert_index_minute_bars(self, index_code, trade_date, period, rows, *, source_policy="", source_run_id=0):
         writer = getattr(self.repository, "upsert_index_minute_bars", None)

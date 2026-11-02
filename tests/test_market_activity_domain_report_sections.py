@@ -929,6 +929,35 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 消费三号 | 000003 | 2 | -2.00 | -0.50 | +0.80 | 机构卖、非机构买 |", rendered)
         self.assertNotIn("日期不一致席位", rendered)
 
+    def test_lhb_seat_strength_uses_name_from_inst_detail(self):
+        result = build_market_activity_report_sections(
+            data={
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "lhb_analysis": [],
+                "lhb_inst_detail": [
+                    {
+                        "trade_date": "2026-08-05",
+                        "code": "920045",
+                        "name": "蘅东光",
+                        "exalter": "机构专用",
+                        "seat_type": "机构",
+                        "net_buy_yi": 1.59,
+                    }
+                ],
+            },
+            target_date="2026-08-05",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "北交所",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("普通形态", 0, "中"),
+            enabled_node_keys=["lhb_seat_strength"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 蘅东光 | 920045 | +1.59 | 1 | 机构专用 | - |", rendered)
+        self.assertNotIn("| 920045 | 920045 |", rendered)
+
     def test_turnover_rows_preserve_valid_row_sector_and_replace_unknown(self):
         result = build_market_activity_report_sections(
             data={

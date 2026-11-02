@@ -288,7 +288,8 @@ def _tradability_probe(stock, target_date='', recent_bars=None):
                 return default
             return fn(*args, **kwargs)
 
-        with patch("market_data.daily_price_runtime._fetch_quicktiny_daily_price_bars", return_value=[]), \
+        with patch("market_data.daily_price_runtime._fetch_postgres_recent_price_bars", return_value=[]), \
+             patch("market_data.daily_price_runtime._fetch_quicktiny_daily_price_bars", return_value=[]), \
              patch("market_data.daily_price_runtime._ensure_baostock_login", side_effect=AssertionError("baostock must be reached only inside timeout wrapper")), \
              patch("market_data.daily_price_runtime._run_with_wall_clock_timeout", side_effect=fake_timeout):
             result = runtime.fetch_daily_price_bars("000001", "2026-05-20", "2026-05-28")
@@ -301,19 +302,184 @@ def _tradability_probe(stock, target_date='', recent_bars=None):
         fetcher = getattr(runtime, "fetch_recent_price_bars", None)
         self.assertIsNotNone(fetcher)
 
-        with patch(
-            "market_data.daily_price_runtime.fetch_daily_price_bars",
-            return_value=[
-                {"date": "2026-04-18", "close": 9.6},
-                {"date": "2026-04-21", "close": 10.1},
-                {"date": "2026-04-22", "close": 10.5},
-                {"date": "2026-04-23", "close": 10.8},
-            ],
-        ) as bars_mock:
+        with patch("market_data.daily_price_runtime._fetch_postgres_recent_price_bars", return_value=[]), \
+             patch(
+                 "market_data.daily_price_runtime.fetch_daily_price_bars",
+                 return_value=[
+                     {"date": "2026-04-18", "close": 9.6},
+                     {"date": "2026-04-21", "close": 10.1},
+                     {"date": "2026-04-22", "close": 10.5},
+                     {"date": "2026-04-23", "close": 10.8},
+                 ],
+             ) as bars_mock:
             result = fetcher("000001", "2026-04-22", lookback_days=2)
 
         self.assertEqual(bars_mock.call_args[0][:3], ("000001", "2026-04-12", "2026-04-22"))
         self.assertEqual([bar["date"] for bar in result], ["2026-04-21", "2026-04-22"])
+
+    def test_recent_price_bars_use_complete_postgres_history_without_remote_fetch(self):
+        runtime = self._load_module()
+        runtime._postgres_recent_price_bar_cache.clear()
+        self.addCleanup(runtime._postgres_recent_price_bar_cache.clear)
+
+        class StubService:
+            def __init__(self):
+                self.calls = []
+
+            def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+                self.calls.append((stock_code, end_date, limit))
+                return [
+                    {"date": "2026-08-04", "open": 9.8, "high": 10.2, "low": 9.7, "close": 10.0, "volume": 100.0, "pct_chg": 2.0, "data_source": "postgresql.stock_daily_quotes_recent"},
+                    {"date": "2026-08-05", "open": 10.1, "high": 10.6, "low": 10.0, "close": 10.5, "volume": 120.0, "pct_chg": 5.0, "data_source": "postgresql.stock_daily_quotes_recent"},
+                ]
+
+        service = StubService()
+        with patch("market_data.daily_price_runtime._get_daily_price_database_service", return_value=service), \
+             patch("market_data.daily_price_runtime.fetch_daily_price_bars", side_effect=AssertionError("remote fallback must not run")):
+            first = runtime.fetch_recent_price_bars("000001", "2026-08-05", lookback_days=2)
+            second = runtime.fetch_recent_price_bars("000001", "2026-08-05", lookback_days=2)
+
+        self.assertEqual(service.calls, [("000001", "2026-08-05", 2)])
+        self.assertEqual([bar["date"] for bar in first], ["2026-08-04", "2026-08-05"])
+        self.assertNotIn("pct_chg", first[-1])
+        self.assertEqual(second, first)
+        self.assertIsNot(second[0], first[0])
+
+    def test_query_cache_reset_starts_next_report_with_fresh_database_service(self):
+        runtime = self._load_module()
+        runtime._daily_price_bar_cache[("000001", "2026-08-05")] = [{"close": 10.0}]
+        runtime._postgres_recent_price_bar_cache[("000001", "2026-08-05", 2)] = [
+            {"close": 10.0}
+        ]
+        runtime._daily_price_database_service = object()
+        runtime._daily_price_database_service_initialized = True
+
+        runtime.reset_daily_price_runtime_query_cache()
+
+        self.assertEqual(runtime._daily_price_bar_cache, {})
+        self.assertEqual(runtime._postgres_recent_price_bar_cache, {})
+        self.assertIsNone(runtime._daily_price_database_service)
+        self.assertFalse(runtime._daily_price_database_service_initialized)
+
+    def test_recent_price_bars_reuse_postgres_history_for_equivalent_codes(self):
+        runtime = self._load_module()
+        runtime._postgres_recent_price_bar_cache.clear()
+        self.addCleanup(runtime._postgres_recent_price_bar_cache.clear)
+
+        class StubService:
+            def __init__(self):
+                self.calls = []
+
+            def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+                self.calls.append((stock_code, end_date, limit))
+                return [
+                    {"date": "2026-08-04", "open": 9.8, "high": 10.2, "low": 9.7, "close": 10.0, "volume": 100.0},
+                    {"date": "2026-08-05", "open": 10.1, "high": 10.6, "low": 10.0, "close": 10.5, "volume": 120.0},
+                ]
+
+        service = StubService()
+        with patch("market_data.daily_price_runtime._get_daily_price_database_service", return_value=service), \
+             patch("market_data.daily_price_runtime.fetch_daily_price_bars", side_effect=AssertionError("remote fallback must not run")):
+            first = runtime.fetch_recent_price_bars("sz.000001", "2026-08-05", lookback_days=2)
+            second = runtime.fetch_recent_price_bars("000001.SZ", "2026-08-05", lookback_days=2)
+
+        self.assertEqual(first, second)
+        self.assertEqual(service.calls, [("000001", "2026-08-05", 2)])
+
+    def test_recent_price_bars_fall_back_when_postgres_bar_fields_are_invalid(self):
+        runtime = self._load_module()
+        runtime._postgres_recent_price_bar_cache.clear()
+        self.addCleanup(runtime._postgres_recent_price_bar_cache.clear)
+        fallback = [{"date": "2026-08-05", "close": 10.5}]
+
+        class StubService:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+                return list(self.rows)
+
+        valid_row = {"date": "2026-08-05", "open": 10.1, "high": 10.6, "low": 10.0, "close": 10.5, "volume": 120.0}
+        invalid_rows = [
+            {"date": "2026-08-05", "close": 10.5},
+            {**valid_row, "open": float("nan")},
+            {**valid_row, "high": 10.0},
+            {**valid_row, "volume": 0.0},
+        ]
+        for postgres_row in invalid_rows:
+            runtime._postgres_recent_price_bar_cache.clear()
+            with self.subTest(postgres_row=postgres_row), \
+                 patch("market_data.daily_price_runtime._get_daily_price_database_service", return_value=StubService([postgres_row])), \
+                 patch("market_data.daily_price_runtime.fetch_daily_price_bars", return_value=fallback) as fallback_mock:
+                result = runtime.fetch_recent_price_bars("000001", "2026-08-05", lookback_days=1)
+
+            self.assertEqual(result, fallback)
+            fallback_mock.assert_called_once()
+
+    def test_recent_price_bars_fall_back_when_postgres_history_is_stale_or_short(self):
+        runtime = self._load_module()
+        runtime._postgres_recent_price_bar_cache.clear()
+        self.addCleanup(runtime._postgres_recent_price_bar_cache.clear)
+        fallback = [
+            {"date": "2026-08-04", "close": 10.0},
+            {"date": "2026-08-05", "close": 10.5},
+        ]
+
+        class StubService:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+                return list(self.rows)
+
+        for postgres_rows in (
+            [{"date": "2026-08-04", "close": 10.0}],
+            [{"date": "2026-08-03", "close": 9.8}, {"date": "2026-08-04", "close": 10.0}],
+        ):
+            runtime._postgres_recent_price_bar_cache.clear()
+            with self.subTest(postgres_rows=postgres_rows), \
+                 patch("market_data.daily_price_runtime._get_daily_price_database_service", return_value=StubService(postgres_rows)), \
+                 patch("market_data.daily_price_runtime.fetch_daily_price_bars", return_value=fallback) as fallback_mock:
+                result = runtime.fetch_recent_price_bars("000001", "2026-08-05", lookback_days=2)
+
+            self.assertEqual(result, fallback)
+            fallback_mock.assert_called_once()
+
+    def test_recent_price_bars_preserve_fast_fail_without_database_or_remote_reads(self):
+        runtime = self._load_module()
+
+        with patch("market_data.daily_price_runtime._get_daily_price_database_service") as postgres_mock, \
+             patch("market_data.daily_price_runtime.fetch_daily_price_bars") as fallback_mock:
+            result = runtime.fetch_recent_price_bars(
+                "000001",
+                "2026-08-05",
+                lookback_days=2,
+                fast_fail=True,
+            )
+
+        self.assertEqual(result, [])
+        postgres_mock.assert_not_called()
+        fallback_mock.assert_not_called()
+
+    def test_recent_price_bars_fall_back_when_postgres_query_raises(self):
+        runtime = self._load_module()
+        runtime._postgres_recent_price_bar_cache.clear()
+        self.addCleanup(runtime._postgres_recent_price_bar_cache.clear)
+        fallback = [
+            {"date": "2026-08-04", "close": 10.0},
+            {"date": "2026-08-05", "close": 10.5},
+        ]
+
+        class FailingService:
+            def query_stock_daily_quote_history(self, stock_code, end_date, *, limit=10):
+                raise RuntimeError("postgres unavailable")
+
+        with patch("market_data.daily_price_runtime._get_daily_price_database_service", return_value=FailingService()), \
+             patch("market_data.daily_price_runtime.fetch_daily_price_bars", return_value=fallback) as fallback_mock:
+            result = runtime.fetch_recent_price_bars("000001", "2026-08-05", lookback_days=2)
+
+        self.assertEqual(result, fallback)
+        fallback_mock.assert_called_once()
 
     def test_daily_price_runtime_enriches_stop_plan_with_reference_anchors(self):
         runtime = self._load_module()

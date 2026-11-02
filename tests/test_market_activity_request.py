@@ -559,6 +559,7 @@ class MarketActivityRequestTest(unittest.TestCase):
                     "limit_down_codes": set(),
                     "market_stats": {"up_count": 2600, "down_count": 2400, "zt_count": 2, "dt_count": 0},
                     "provider": "tushare.limit_list_ths",
+                    "direction_status": {"up": True, "down": True},
                 },
             },
             timer=timer,
@@ -570,6 +571,117 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertNotEqual(set(result["results"]["zt_pool_by_sector"]), {"未知"})
         self.assertEqual(result["results"]["zt_pool_by_sector"]["国产芯片"][0]["code"], "603005")
         self.assertTrue(result["data_status"]["涨停股板块分布"])
+
+    def test_collect_market_activity_pool_request_bundle_preserves_confirmed_zero_limit_down_pool(self):
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-08-04",
+            get_limit_up_pool=lambda date_str: (_FrameStub([]), set()),
+            get_limit_down_pool=lambda date_str: (_FrameStub([]), set()),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub([]),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [{"代码": "000001", "名称": "平安银行", "所属行业": "银行"}],
+                    "dt_pool": [],
+                    "market_stats": {"up_count": 2600, "down_count": 2100, "zt_count": 1, "dt_count": 0},
+                    "provider": "tushare.limit_list_ths",
+                    "source_status": "success",
+                    "direction_status": {"up": True, "down": True},
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["跌停股板块分布"])
+        self.assertEqual(result["results"]["dt_pool"], [])
+        self.assertEqual(result["results"]["dt_pool_by_sector"], {})
+        self.assertTrue(any("跌停池: 0 只（来源已确认）" in line for line in emitted))
+
+    def test_collect_market_activity_pool_request_bundle_accepts_confirmed_zero_from_legacy_source(self):
+        timer = _TimerStub()
+        emitted = []
+        confirmed_empty = _FrameStub([])
+        confirmed_empty.attrs = {
+            "source_confirmed": True,
+            "provider": "tushare.stk_limit+tushare.daily",
+        }
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-08-04",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "平安银行", "所属行业": "银行"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (confirmed_empty, set()),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub(
+                [
+                    {"item": "上涨", "value": 2600},
+                    {"item": "下跌", "value": 2100},
+                    {"item": "涨停", "value": 1},
+                    {"item": "跌停", "value": 0},
+                ]
+            ),
+            request_registry={"limit_pool_snapshot": lambda *, target_date: {}},
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["跌停股板块分布"])
+        self.assertTrue(result["step_status"]["涨停跌停数据获取"])
+        self.assertIn(
+            "tushare.stk_limit+tushare.daily",
+            result["module_logs"][-1]["details"]["provider"],
+        )
+        self.assertTrue(any("跌停池: 0 只（来源已确认）" in line for line in emitted))
+
+    def test_pool_snapshot_generic_success_does_not_confirm_empty_down_direction(self):
+        timer = _TimerStub()
+        emitted = []
+        confirmed_empty = _FrameStub([])
+        confirmed_empty.attrs = {
+            "source_confirmed": True,
+            "provider": "tushare.stk_limit+tushare.daily",
+        }
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-08-04",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "平安银行", "所属行业": "银行"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (confirmed_empty, set()),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub(
+                [
+                    {"item": "上涨", "value": 2600},
+                    {"item": "下跌", "value": 2100},
+                    {"item": "涨停", "value": 1},
+                    {"item": "跌停", "value": 0},
+                ]
+            ),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [{"代码": "000001", "名称": "平安银行", "所属行业": "银行"}],
+                    "dt_pool": [],
+                    "market_stats": {"up_count": 2600, "down_count": 2100},
+                    "provider": "tushare.limit_list_ths",
+                    "source_status": "success",
+                }
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["跌停股板块分布"])
+        self.assertIn(
+            "tushare.stk_limit+tushare.daily",
+            result["module_logs"][-1]["details"]["provider"],
+        )
 
     def test_collect_market_activity_hot_rank_request_bundle_builds_hot_rank_and_integrated_snapshot(self):
         timer = _TimerStub()
@@ -1713,6 +1825,47 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(rows[0]["sector"], "光通信")
         self.assertEqual(rows[1]["sector"], "算力")
 
+    def test_lhb_snapshot_enriches_missing_new_stock_industry_before_render(self):
+        resolver_calls = []
+
+        def resolve_stock_sector(name, code, **kwargs):
+            resolver_calls.append((name, code, kwargs))
+            return "通用设备"
+
+        result = collect_market_activity_capital_snapshot_request_bundle(
+            "2026-08-18",
+            limit_up_df=_FrameStub([]),
+            existing_results={},
+            fetch_lhb_rows=lambda target_date: [],
+            resolve_stock_sector=resolve_stock_sector,
+            request_registry={
+                "lhb_snapshot": lambda *, target_date: {
+                    "lhb_net_buy_top10": [],
+                    "lhb_net_sell_top10": [
+                        {
+                            "rank": 1,
+                            "code": "688828",
+                            "name": "国仪公司",
+                            "net_buy_amount_yi": -0.92,
+                            "sector": "未知",
+                        }
+                    ],
+                    "lhb_analysis": [{"代码": "688828", "data_source": "tushare.top_list"}],
+                    "provider": "tushare.top_list",
+                },
+            },
+            timer=_TimerStub(),
+            emit=lambda message: None,
+        )
+
+        row = result["results"]["lhb_net_sell_top10"][0]
+        self.assertEqual(row["sector"], "通用设备")
+        self.assertEqual(len(resolver_calls), 1)
+        self.assertEqual(resolver_calls[0][:2], ("国仪公司", "688828"))
+        self.assertFalse(resolver_calls[0][2]["skip_api_call"])
+        lhb_log = next(log for log in result["module_logs"] if log["step"] == "request.lhb_snapshot")
+        self.assertEqual(lhb_log["details"]["sector_enriched_count"], 1)
+
     def test_collect_market_activity_stock_quote_request_bundle_builds_quote_map_and_backfills_lhb_names(self):
         timer = _TimerStub()
         emitted = []
@@ -2116,6 +2269,60 @@ class MarketActivityRequestTest(unittest.TestCase):
         rows = result["results"]["lhb_net_buy_top10"]
         self.assertEqual(rows[0]["sector"], "通信设备")
         self.assertEqual(rows[1]["sector"], "半导体")
+
+    def test_stock_quote_request_includes_and_repairs_new_high_top_stocks(self):
+        timer = _TimerStub()
+        captured_codes = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "new_high_feedback": {
+                    "available": True,
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                    "new_high_count": 1,
+                    "all_a_share_pct": 0.02,
+                    "leading_sectors": "待补充板块",
+                    "sector_distribution": [{"sector": "待补充板块", "new_high_count": 1}],
+                    "top_stocks": [
+                        {
+                            "code": "600664",
+                            "name": "600664",
+                            "sector": "待补充板块",
+                            "amount_yi": 51.91,
+                        }
+                    ],
+                    "trend_rows": [
+                        {"trade_date": "2026-08-12", "new_high_count": 1, "leading_sectors": "待补充板块"}
+                    ],
+                }
+            },
+            fetch_stock_batch_info=lambda codes: {},
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: (
+                captured_codes.extend(sorted(codes))
+                or {
+                    "600664": {
+                        "name": "哈药股份",
+                        "industry": "化学制药",
+                        "change_pct": 6.53,
+                        "high": 8.96,
+                        "low": 8.27,
+                        "open": 8.27,
+                        "close": 8.81,
+                        "trade_date": target_date,
+                    }
+                }
+            ),
+            target_date="2026-08-12",
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(captured_codes, ["600664"])
+        feedback = result["results"]["new_high_feedback"]
+        self.assertEqual(feedback["top_stocks"][0]["name"], "哈药股份")
+        self.assertEqual(feedback["top_stocks"][0]["sector"], "化学制药")
+        self.assertEqual(feedback["leading_sectors"], "化学制药")
+        self.assertTrue(feedback["identity_check"]["complete"])
 
 
 if __name__ == "__main__":

@@ -55,9 +55,17 @@ def render_ai_market_insight_section(context):
             if mainline_text and mainline_text in focus_text:
                 focus_text = focus_text.replace(mainline_text, display_mainline)
             mainline_text = display_mainline
+    dt_count = context.get("dt_count")
+    if context.get("dt_count_available") is False or dt_count is None:
+        dt_count_text = "待确认"
+    else:
+        try:
+            dt_count_text = f"{int(float(dt_count))}只"
+        except (TypeError, ValueError):
+            dt_count_text = "待确认"
     return [
         "## 十四、市场快照",
-        f"- **核心特征**: {context.get('market_trend', '未知')}，涨停{int(context.get('zt_count', 0) or 0)}只，跌停{int(context.get('dt_count', 0) or 0)}只",
+        f"- **核心特征**: {context.get('market_trend', '未知')}，涨停{int(context.get('zt_count', 0) or 0)}只，跌停{dt_count_text}",
         f"- **能量状态**: {context.get('energy_state', '未知')} - {flow_direction}",
         f"- **资金主线**: {mainline_text}",
         f"- **风险点**: {context.get('risk_text', '暂无明确风险')}",

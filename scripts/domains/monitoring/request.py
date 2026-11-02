@@ -48,6 +48,7 @@ def collect_monitoring_request_bundle(
     fetch_exchange_monitor_payload,
     fetch_stock_batch_info,
     fetch_tushare_stock_batch_info=None,
+    historical_rebuild=False,
     timer,
     emit,
 ):
@@ -60,6 +61,53 @@ def collect_monitoring_request_bundle(
     }
     module_logs = []
 
+    if historical_rebuild:
+        step_status = {}
+        results.update(
+            {
+                "xuangubao_data": {},
+                "wanzhu_top10": [],
+                "exchange_monitor_today": [],
+                "exchange_monitor_nextday": [],
+            }
+        )
+        for step, provider, target_keys, message in (
+            (
+                "request.xuangubao",
+                "historical_rebuild.excluded_current_xuangubao",
+                ["xuangubao_data"],
+                "选股通当前板块与涨停解释未参与历史判断",
+            ),
+            (
+                "request.wanzhu_top10",
+                "historical_rebuild.excluded_current_wanzhu",
+                ["wanzhu_top10"],
+                "顽主杯当前榜单未参与历史判断",
+            ),
+            (
+                "request.exchange_monitor",
+                "historical_rebuild.excluded_current_exchange_monitor",
+                ["exchange_monitor_today", "exchange_monitor_nextday"],
+                "当前异动检测未参与历史判断",
+            ),
+        ):
+            _append_log(
+                module_logs,
+                step,
+                "skipped",
+                message,
+                provider=provider,
+                target_keys=target_keys,
+                target_date=target_date,
+            )
+        emit("  1️⃣1️⃣-1️⃣4️⃣ 当前型监控来源未参与历史重建")
+        return {
+            "results": results,
+            "data_status": data_status,
+            "step_status": step_status,
+            "module_logs": module_logs,
+        }
+
     emit("  1️⃣1️⃣ 获取选股通盘中异动（可选）...")
     try:
         analyzer = analyzer_factory()
@@ -71,8 +119,12 @@ def collect_monitoring_request_bundle(
         plate_count = len((xuangubao_data or {}).get("xuangubao_plates", []) or [])
         limit_up_reason_count = len((xuangubao_data or {}).get("xuangubao_limit_up_reasons", []) or [])
         diagnostics = (xuangubao_data or {}).get("diagnostics", {}) or {}
+        request_counts = dict(diagnostics.get("request_counts") or {})
+        request_timings_ms = dict(diagnostics.get("request_timings_ms") or {})
         diagnostic_note = "; ".join(
-            f"{key}={value}" for key, value in diagnostics.items() if value not in (None, "", {})
+            f"{key}={value}"
+            for key, value in diagnostics.items()
+            if key not in {"request_counts", "request_timings_ms"} and value not in (None, "", {})
         )
         if xuangubao_data and (news_count or plate_count or limit_up_reason_count):
             results["xuangubao_data"] = xuangubao_data
@@ -98,6 +150,8 @@ def collect_monitoring_request_bundle(
             limit_up_reason_count=len((results.get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []) or []),
             diagnostic_note=diagnostic_note,
             diagnostics=diagnostics,
+            request_counts=request_counts,
+            request_timings_ms=request_timings_ms,
         )
     except Exception as error:
         results["xuangubao_data"] = {}

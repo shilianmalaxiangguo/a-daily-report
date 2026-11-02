@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import mmap
 import os
 import re
 import traceback
@@ -199,6 +200,8 @@ _COMPACT_METRIC_HISTORY_KEYS = (
     "mainline_turnover_summary",
     "new_high_feedback",
 )
+_MAX_COMPACT_METRIC_FIELD_CHARS = 8 * 1024 * 1024
+_MAX_COMPACT_METRIC_FULL_SCAN_BYTES = 128 * 1024 * 1024
 _DEFAULT_REBUILD_WINDOW_CACHE = {}
 
 
@@ -207,54 +210,71 @@ def _decode_json_value(value_text):
 
 
 def _decode_top_level_data_field_from_text(text, field_name):
+    source_text = str(text or "")
     marker = f'\n    "{field_name}":'
-    index = str(text or "").find(marker)
-    if index < 0 and str(text or "").startswith(marker.lstrip("\n")):
-        index = 0
-    if index < 0:
-        return None, False
-    colon_index = str(text).find(":", index + len(marker))
-    if colon_index < 0:
-        return None, False
+    index = source_text.find(marker)
+    if index >= 0:
+        value_start = index + len(marker)
+    else:
+        start_marker = marker.lstrip("\n")
+        if not source_text.startswith(start_marker):
+            return None, False
+        value_start = len(start_marker)
+    while value_start < len(source_text) and source_text[value_start].isspace():
+        value_start += 1
     try:
-        return _decode_json_value(str(text)[colon_index + 1 :]), True
+        return json.JSONDecoder().raw_decode(source_text, value_start)[0], True
     except (json.JSONDecodeError, ValueError):
         return None, False
 
 
-def _extract_top_level_data_fields_from_file(snapshot_path, field_names):
+def _extract_top_level_data_fields_from_file(
+    snapshot_path,
+    field_names,
+    *,
+    max_value_chars=_MAX_COMPACT_METRIC_FIELD_CHARS,
+):
     wanted = {str(field_name or "").strip() for field_name in field_names or [] if str(field_name or "").strip()}
     found = {}
     if not wanted:
         return found
 
-    collecting_key = ""
-    value_lines = []
     try:
-        with Path(snapshot_path).open("r", encoding="utf-8") as file_obj:
-            for line in file_obj:
-                if not collecting_key:
-                    matched_key = ""
-                    for field_name in wanted - set(found):
-                        marker = f'"{field_name}":'
-                        if line.startswith(f"    {marker}"):
-                            matched_key = field_name
-                            break
-                    if not matched_key:
+        with Path(snapshot_path).open("rb") as file_obj:
+            if os.fstat(file_obj.fileno()).st_size <= 0:
+                return found
+            with mmap.mmap(file_obj.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+                key_prefix = b'\n    "'
+                search_start = 0
+                while search_start < len(mapped):
+                    key_start = mapped.find(key_prefix, search_start)
+                    if key_start < 0:
+                        break
+                    name_start = key_start + len(key_prefix)
+                    name_end = mapped.find(b'"', name_start, name_start + 256)
+                    if name_end < 0:
+                        search_start = name_start
                         continue
-                    collecting_key = matched_key
-                    value_lines = [line.split(":", 1)[1]]
-                else:
-                    value_lines.append(line)
-                try:
-                    found[collecting_key] = _decode_json_value("".join(value_lines))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                collecting_key = ""
-                value_lines = []
-                if wanted <= set(found):
-                    break
-    except OSError:
+                    colon_index = mapped.find(b":", name_end, name_end + 16)
+                    search_start = name_end + 1
+                    if colon_index < 0:
+                        continue
+                    field_name = mapped[name_start:name_end].decode("utf-8", errors="replace")
+                    if field_name not in wanted:
+                        continue
+                    value_start = colon_index + 1
+                    while value_start < len(mapped) and mapped[value_start] in b" \t\r\n":
+                        value_start += 1
+                    value_end = min(
+                        len(mapped),
+                        value_start + max(int(max_value_chars), 1) + 1,
+                    )
+                    value_text = mapped[value_start:value_end].decode("utf-8", errors="replace")
+                    try:
+                        found[field_name] = _decode_json_value(value_text)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+    except (OSError, ValueError):
         return found
     return found
 
@@ -307,8 +327,9 @@ def _load_compact_snapshot_file(snapshot_path):
             missing_keys.append(key)
         else:
             compact[key] = value
-    for key, value in _extract_top_level_data_fields_from_file(snapshot_path, missing_keys).items():
-        compact[key] = value
+    if missing_keys and file_size <= _MAX_COMPACT_METRIC_FULL_SCAN_BYTES:
+        for key, value in _extract_top_level_data_fields_from_file(snapshot_path, missing_keys).items():
+            compact[key] = value
     return compact if compact else None, ""
 
 

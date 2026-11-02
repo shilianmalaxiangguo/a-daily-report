@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from collections import Counter
@@ -9,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
+from report.candidate_decision_evidence import build_sector_tournament_three_axis
 import report.report_acceptance_audit as report_acceptance_audit
 from report.report_acceptance_audit import audit_new_stock_visibility, audit_report_markdown
 from report.markdown_report_html import render_markdown_report_html
@@ -185,6 +187,17 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 当前状态 | 0%无合格标的 |\n"
             "| 备用观察 | 暂无 |\n"
             "| 今日不买原因 | 没有观察对象，完整候选仅保留在附录和快照 |\n",
+        )
+
+    def test_audit_rejects_placeholder_sector_in_bear_html(self):
+        result = audit_report_markdown(
+            GOOD_MARKDOWN,
+            position_companion_html="<html><body>待补充板块</body></html>",
+        )
+
+        self.assertIn(
+            "placeholder_sector_fact",
+            {finding["code"] for finding in result["findings"]},
         )
 
     def test_audit_accepts_valid_front_page_contract(self):
@@ -634,6 +647,54 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("selection_workflow_mismatch", {finding["code"] for finding in result["findings"]})
 
+    def test_audit_flags_selection_workflow_node_table_mismatch(self):
+        markdown = (
+            "# 2026-06-04 a股市场分析\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 明日执行对象 | 豫能控股(001896) |\n\n"
+            "## 推导审计层\n"
+            "### 主线推导链\n"
+            "```mermaid\n"
+            "flowchart TD\n"
+            "N8[仓位与执行条件] --> FINAL[最终结果]\n"
+            "```\n"
+            "### 节点结论\n"
+            "| 节点 | 结论 | 向下传递 | 尚未确认 |\n"
+            "|---|---|---|---|\n"
+            "| N8 仓位与执行条件 | 50%条件执行 | 明日执行对象：上海石化(600688)；仓位：50% | 无 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn("selection_workflow_mismatch", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_prefers_empty_final_row_under_appendix_heading_over_positive_n8(self):
+        markdown = (
+            "# 2026-06-04 a股市场分析\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 明日执行对象 | 太极实业(600667) |\n\n"
+            '<!-- {"selection_workflow": {"schema_version": "selection_workflow.v1", '
+            '"final": {"execution_object": {"name": "太极实业", "code": "600667"}, "position_pct": 0}}} -->\n'
+            "#### 附录：主线推导链\n"
+            "| 层级 | 节点 | 结论 |\n"
+            "|---|---|---|\n"
+            "| 最终结果 | N9 / final | 无；0%不参与；0% |\n\n"
+            "#### 附录：节点结论\n"
+            "| 节点 | 结论 | 向下传递 | 尚未确认 |\n"
+            "|---|---|---|---|\n"
+            "| N8 仓位与执行条件 | 50%条件执行 | 明日执行对象：太极实业(600667)；仓位：50% | 无 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn("selection_workflow_mismatch", {finding["code"] for finding in result["findings"]})
+
     def test_audit_flags_final_object_identity_conflict_across_closing_action(self):
         markdown = (
             "# 2026-06-04 a股市场分析\n\n"
@@ -1055,6 +1116,36 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
 
         self.assertNotIn("empty_final_object_appendix_current_object_conflict", codes)
+
+    def test_audit_allows_process_replay_line_with_explicit_replay_wording(self):
+        markdown = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：过程候选回看（过程证据）\n"
+            "- ⏳ 中关村(000931) - 仅保留过程回看，不保留未来观察价\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertNotIn(
+            "empty_final_object_appendix_current_object_conflict",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_rejects_current_object_labels_with_process_replay_wording(self):
+        markdown = self.zero_position_report_with_decision_attribution() + (
+            "\n##### 附录：过程候选回看（过程证据）\n"
+            "| 明日执行对象 | 中关村(000931)；仅保留过程回看 |\n"
+            "最终对象=中关村(000931) 身份=执行对象；仅保留过程回看\n"
+            "- ⏳ 中关村(000931) - 明日执行对象，仅保留过程回看\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        matching = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "empty_final_object_appendix_current_object_conflict"
+        ]
+
+        self.assertEqual(3, len(matching), result["findings"])
 
     def test_audit_allows_final_execution_object_in_history_table_when_not_downgraded(self):
         markdown = GOOD_MARKDOWN.replace(
@@ -2917,6 +3008,25 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("known_old_position_conflicts_with_unknown_holding", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_flags_old_position_exit_action_when_holding_is_unknown(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n## 明日账户建议\n"
+            + "| 项目 | 结论 |\n"
+            + "|------|------|\n"
+            + "| 旧仓事实 | 持仓未输入 |\n\n"
+            + "## 附录：交易纪律细则\n"
+            + "- 禁止恋战：若你有旧仓，只做退出，不做摊平和自救\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        self.assertIn(
+            "unknown_position_old_position_action_conflict",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
     def test_audit_allows_unknown_history_before_confirmed_current_position(self):
         markdown = (
             "## 账户日序表\n"
@@ -4253,6 +4363,95 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertNotIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
         self.assertTrue(result["passed"], result["findings"])
 
+    def test_audit_accepts_three_axis_ten_question_decision_list(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}'
+        )
+        script_start = '<script type="application/json" id="sector-capital-preflight-payload">\n'
+        payload_text, suffix = html.split(script_start, 1)[1].split("\n        </script>", 1)
+        payload = json.loads(payload_text)
+        payload["trade_date"] = "2026-06-12"
+        payload["sector_tournament_three_axis"] = build_sector_tournament_three_axis(
+            target_date="2026-06-12",
+            sector_diffusion_stage_evidence={},
+            local_trend_sector_proof={},
+            market_participation_limit={},
+        )
+        questions = [
+            row["question"]
+            for row in payload["sector_tournament_three_axis"]["ten_questions"]
+        ]
+        payload["decision_list"] = [
+            {
+                "item": question,
+                "conclusion": "事实不足",
+                "evidence": "事实不足",
+                "counter_evidence": "暂无明确反方证据",
+                "tomorrow_check": "明日验证",
+                "action": "观察并验证",
+            }
+            for question in questions
+        ]
+        html = (
+            html.split(script_start, 1)[0]
+            + script_start
+            + json.dumps(payload, ensure_ascii=False)
+            + "\n        </script>"
+            + suffix
+        )
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertNotIn(
+            "sector_capital_preflight_decision_list_missing",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_rejects_invalid_three_axis_evidence_instead_of_using_its_questions(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}'
+        )
+        script_start = '<script type="application/json" id="sector-capital-preflight-payload">\n'
+        payload_text, suffix = html.split(script_start, 1)[1].split("\n        </script>", 1)
+        payload = json.loads(payload_text)
+        payload["trade_date"] = "2026-06-12"
+        artifact = build_sector_tournament_three_axis(
+            target_date="2026-06-12",
+            sector_diffusion_stage_evidence={},
+            local_trend_sector_proof={},
+            market_participation_limit={},
+        )
+        artifact["artifact_hash"] = "broken"
+        payload["sector_tournament_three_axis"] = artifact
+        payload["decision_list"] = [
+            {
+                "item": row["question"],
+                "conclusion": "事实不足",
+                "evidence": "事实不足",
+                "counter_evidence": "暂无明确反方证据",
+                "tomorrow_check": "明日验证",
+                "action": "观察并验证",
+            }
+            for row in artifact["ten_questions"]
+        ]
+        html = (
+            html.split(script_start, 1)[0]
+            + script_start
+            + json.dumps(payload, ensure_ascii=False)
+            + "\n        </script>"
+            + suffix
+        )
+
+        result = audit_report_markdown(report, companion_html=html)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("sector_capital_preflight_three_axis_invalid", codes)
+        self.assertIn("sector_capital_preflight_decision_list_missing", codes)
+        self.assertFalse(result["passed"])
+
     def test_audit_allows_zero_position_final_action_note_with_zero_input_count(self):
         report = self.zero_position_report_with_decision_attribution()
         html = self._sector_capital_preflight_html(
@@ -5575,7 +5774,6 @@ class BayesianDiagnosisAuditTest(unittest.TestCase):
         result = audit_report_markdown(self._report_with_diagnosis(diagnosis, final_target="上海石化(600688)"))
 
         self.assertNotIn("bayesian_final_object_conflict_hidden", {finding["code"] for finding in result["findings"]})
-
 
 if __name__ == "__main__":
     unittest.main()

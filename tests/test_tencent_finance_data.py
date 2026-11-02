@@ -106,6 +106,103 @@ class TencentFinanceDataTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["title"], "目标日事件")
         self.assertEqual(result[0]["date"], "2026-06-18")
+        self.assertEqual(data.session.headers_arg["Referer"], "https://www.cls.cn/investkalendar")
+
+    def test_get_calendar_events_keeps_all_cls_days_without_target_date(self):
+        module = __import__("tencent_finance_data", fromlist=["tencent_finance_data"])
+
+        class _Legacy:
+            def get_calendar_events(self, target_date=None):
+                raise AttributeError("legacy calendar unavailable")
+
+        class _Response:
+            def json(self):
+                return {
+                    "code": 200,
+                    "data": [
+                        {
+                            "calendar_day": "2026-08-05",
+                            "week": "星期三",
+                            "items": [
+                                {
+                                    "calendar_time": "2026-08-05 00:00:00",
+                                    "type": 2,
+                                    "event": {"title": "当日事件", "star": 5, "country": "中国"},
+                                }
+                            ],
+                        },
+                        {
+                            "calendar_day": "2026-08-28",
+                            "week": "星期五",
+                            "items": [
+                                {
+                                    "calendar_time": "2026-08-28 00:00:00",
+                                    "type": 2,
+                                    "event": {"title": "月末事件", "star": 4, "country": "中国"},
+                                }
+                            ],
+                        },
+                    ],
+                }
+
+        class _Session:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, headers=None, timeout=0):
+                return _Response()
+
+        data = module.TencentFinanceData()
+        data._legacy = _Legacy()
+        data.session = _Session()
+
+        result = data.get_calendar_events()
+
+        self.assertEqual([event["date"] for event in result], ["2026-08-05", "2026-08-28"])
+        self.assertEqual([event["title"] for event in result], ["当日事件", "月末事件"])
+
+    def test_get_calendar_events_uses_cls_fallback_when_legacy_returns_empty(self):
+        module = __import__("tencent_finance_data", fromlist=["tencent_finance_data"])
+
+        class _Legacy:
+            def get_calendar_events(self, target_date=None):
+                return []
+
+        class _Response:
+            def json(self):
+                return {
+                    "code": 200,
+                    "data": [
+                        {
+                            "calendar_day": "2026-08-05",
+                            "week": "星期三",
+                            "items": [
+                                {
+                                    "calendar_time": "2026-08-05 00:00:00",
+                                    "type": 2,
+                                    "event": {"title": "本地回补事件", "star": 5, "country": "中国"},
+                                }
+                            ],
+                        }
+                    ],
+                }
+
+        class _Session:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, headers=None, timeout=0):
+                self.headers_arg = headers
+                return _Response()
+
+        data = module.TencentFinanceData()
+        data._legacy = _Legacy()
+        data.session = _Session()
+
+        result = data.get_calendar_events()
+
+        self.assertEqual([event["title"] for event in result], ["本地回补事件"])
+        self.assertEqual(data.session.headers_arg["Referer"], "https://www.cls.cn/investkalendar")
 
 
 if __name__ == "__main__":

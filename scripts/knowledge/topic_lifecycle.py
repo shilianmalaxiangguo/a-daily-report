@@ -732,7 +732,7 @@ def build_topic_lifecycle_knowledge_update(snapshot):
     suggested_nodes.extend(["data/topic-lifecycle/index.json", "wiki/交易思想/AI摩擦与知识复利.md"])
     return {
         "topic": "题材生命周期证据层",
-        "source_path": "docs/trellis/specs/2026-06-14-topic-lifecycle-evidence-layer-design.md",
+        "source_path": "docs/specs/2026-06-14-topic-lifecycle-evidence-layer-design.md",
         "new_insight": summary,
         "fact_basis": "；".join(basis[:4]),
         "suggested_nodes": _dedupe(suggested_nodes),

@@ -24,7 +24,7 @@ from knowledge.llm_wiki_router import (
 )
 
 
-WIKI_VERSION = "2026-07-20"
+WIKI_VERSION = "2026-08-30"
 WIKI_SOURCE = "llm_wiki"
 WIKI_LANGUAGE = "zh-CN"
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +38,17 @@ _AVAILABILITY_CONFIDENCE = {
     "historical_trace_missing": 0.0,
     "decision_mismatch": 0.0,
 }
+_LEGACY_DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE = tuple(
+    field
+    for field in DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE
+    if field
+    not in {
+        "execution_nature",
+        "planned_participation",
+        "account_action",
+        "tomorrow_account_action",
+    }
+)
 
 
 def llm_wiki_confidence_for_availability(availability: object) -> float:
@@ -61,6 +72,8 @@ SOURCE_PATHS = [
     "wiki/板块补充/板块中枢与主线延续.md",
     "wiki/交易思想/创新高扩散、核心独强与补跌.md",
     "wiki/交易思想/历史先验、实时结构与可用窗口.md",
+    "wiki/交易思想/系统性下跌后的剩余风险.md",
+    "wiki/交易思想/企业估值与价格执行的双周期框架.md",
     "wiki/交易思想/缠论体系.md",
     "wiki/交易思想/缠论-日报使用边界.md",
     "wiki/交易思想/日报术语契约.md",
@@ -69,6 +82,33 @@ SOURCE_PATHS = [
     "wiki/交易思想/缠论-级别联立.md",
     "wiki/资料库/缠论原文索引.md",
     "wiki/资料库/时空乐道0704早信与周期.md",
+]
+
+DATED_SOURCE_PATHS = [
+    {
+        "knowledge_id": "market.new-high-core-trend-anchor",
+        "path": "wiki/交易思想/2026-08-18核心新高趋势锚补充.md",
+    },
+    {
+        "knowledge_id": "market.rotation-focus-carrier-separation",
+        "path": "wiki/板块补充/2026-08-18轮动聚焦与资金载体分周期补充.md",
+    },
+    {
+        "knowledge_id": "market.auction-delayed-sell-pressure-bayesian",
+        "path": "wiki/交易思想/2026-08-28竞价未充分定价与延迟卖盘.md",
+    },
+    {
+        "knowledge_id": "market.polarization-negative-alliance-energy",
+        "path": "wiki/交易思想/2026-08-29共同排斥、双峰聚集与市场能量.md",
+    },
+    {
+        "knowledge_id": "market.polarization-negative-alliance-energy",
+        "path": "wiki/资料库/2026-08-28V2EX同质性网络、虚假共识与双峰形成讨论整理.md",
+    },
+    {
+        "knowledge_id": "market.august-hot-stock-double-cluster-migration",
+        "path": "wiki/交易思想/2026-08-30八月热门股双群聚与动态极点迁移.md",
+    },
 ]
 
 FIELD_MAPPINGS = [
@@ -359,6 +399,33 @@ FIELD_MAPPINGS = [
     "背驰 -> 动能衰减、转折风险、承接验证",
 ]
 
+DATED_FIELD_MAPPINGS = [
+    {
+        "knowledge_id": "research.enterprise-valuation-price-dual-cycle",
+        "text": "企业估值与价格执行双周期 -> 企业前提决定研究价值，估值位置决定是否值得等待，当前价格证据决定能否参与，仓位身份决定旧交易如何处理；长期机会只能进入新的T0评估",
+    },
+    {
+        "knowledge_id": "market.new-high-core-trend-anchor",
+        "text": "核心新高趋势锚 -> 全市场新高宽度、板块新高群和少数核心新高分开解释；核心新高不承诺次日延续，价格接受区必须按目标日行情复算",
+    },
+    {
+        "knowledge_id": "market.rotation-focus-carrier-separation",
+        "text": "轮动后聚焦 -> 普遍修复转向分化时只跟踪1至2个反复获跨日资金反馈的方向；核心锚、20cm弹性载体和情绪后排分周期，高切低不自动产生资格",
+    },
+    {
+        "knowledge_id": "market.auction-delayed-sell-pressure-bayesian",
+        "text": "竞价未充分定价与延迟卖盘 -> 已知利空、竞价反应有限且开盘后立即下跌时，把竞价覆盖不足和开盘后条件式卖盘作为优先工作假设；可复用机制提供方向性更新，独立样本和事前预测继续校准，不确认量化或机构身份",
+    },
+    {
+        "knowledge_id": "market.polarization-negative-alliance-energy",
+        "text": "共同排斥与双峰聚集 -> 同质性网络可能先把稀疏边缘点连接成双群聚外观和局部虚假共识；只有同一量尺下出现两个局部峰和中间低谷，才称样本双峰；再由中间层收缩、价格、成交和跨日反馈共同支持，才提高为行为或市场双峰，极化能量不等于判断正确或参与资格",
+    },
+    {
+        "knowledge_id": "market.august-hot-stock-double-cluster-migration",
+        "text": "8月热门股双群聚与动态迁移 -> 18份热门榜呈持续核心端与动态冲击端的双群聚外观，端点角色相对稳定但成员随事件和板块迁移；全市场两日形态未确认稳定双峰，不识别参与者身份，也不产生参与资格",
+    },
+]
+
 REPORT_BOUNDARIES = [
     "原文不直接进入日报主链",
     "MACD只能作为辅助",
@@ -588,12 +655,190 @@ def _existing_source_paths(root: Path = ROOT) -> List[str]:
     return [path for path in SOURCE_PATHS if (root / path).exists()]
 
 
+def _knowledge_available_on(entry: Mapping[str, object], query_date: str) -> bool:
+    available_from = str(entry.get("available_from") or "").strip()
+    if not available_from:
+        return True
+    return is_iso_calendar_date(query_date) and available_from <= query_date
+
+
+def _effective_knowledge_index(query_date: str) -> list[Mapping[str, object]]:
+    return [entry for entry in KNOWLEDGE_INDEX if _knowledge_available_on(entry, query_date)]
+
+
+def _knowledge_availability_date(target_date: str, query_date: str) -> str:
+    dates = []
+    for value in (target_date, query_date):
+        normalized = str(value or "").strip()
+        if normalized and is_iso_calendar_date(normalized):
+            dates.append(normalized)
+    if dates:
+        return min(dates)
+    if not str(target_date or "").strip() and not str(query_date or "").strip():
+        return datetime.now(_SHANGHAI_TZ).date().isoformat()
+    return ""
+
+
+def _effective_source_paths(entries: list[Mapping[str, object]]) -> list[str]:
+    dated_paths = {
+        str(entry.get("source_path") or "").strip()
+        for entry in KNOWLEDGE_INDEX
+        if str(entry.get("available_from") or "").strip()
+    }
+    active_paths = {
+        str(entry.get("source_path") or "").strip()
+        for entry in entries
+    }
+    paths = [
+        path
+        for path in SOURCE_PATHS
+        if path not in dated_paths or path in active_paths
+    ]
+    active_ids = {
+        str(entry.get("id") or entry.get("knowledge_id") or "").strip()
+        for entry in entries
+    }
+    paths.extend(
+        str(item["path"])
+        for item in DATED_SOURCE_PATHS
+        if str(item["knowledge_id"]) in active_ids
+    )
+    return list(dict.fromkeys(paths))
+
+
+def _effective_field_mappings(entries: list[Mapping[str, object]]) -> list[str]:
+    active_ids = {
+        str(entry.get("id") or entry.get("knowledge_id") or "").strip()
+        for entry in entries
+    }
+    mappings = list(FIELD_MAPPINGS)
+    mappings.extend(
+        str(item["text"])
+        for item in DATED_FIELD_MAPPINGS
+        if str(item["knowledge_id"]) in active_ids
+    )
+    return mappings
+
+
 def _manifest_list(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
 
 
 def _manifest_string_list(value: object) -> list[str]:
     return [str(item) for item in _manifest_list(value)]
+
+
+def _filter_manifest_by_availability(
+    manifest: Mapping[str, object],
+    availability_date: str,
+) -> dict[str, object]:
+    """Remove dated entries that were not available at the requested boundary."""
+    compiled = deepcopy(dict(manifest))
+    raw_entries = compiled.get("entries")
+    if not isinstance(raw_entries, list):
+        return compiled
+
+    retained_entries: list[object] = []
+    excluded_source_paths: set[str] = set()
+    retained_source_paths: set[str] = set()
+    excluded_knowledge_ids: set[str] = set()
+    retained_knowledge_ids: set[str] = set()
+    filtered = False
+    for entry in raw_entries:
+        if not isinstance(entry, Mapping) or _knowledge_available_on(entry, availability_date):
+            retained_entries.append(entry)
+            if isinstance(entry, Mapping):
+                knowledge_id = str(entry.get("knowledge_id") or entry.get("id") or "").strip()
+                if knowledge_id:
+                    retained_knowledge_ids.add(knowledge_id)
+                source_ref = entry.get("source_ref")
+                if isinstance(source_ref, Mapping):
+                    source_path = str(source_ref.get("path") or "").strip()
+                    if source_path:
+                        retained_source_paths.add(source_path)
+            continue
+        filtered = True
+        knowledge_id = str(entry.get("knowledge_id") or entry.get("id") or "").strip()
+        if knowledge_id:
+            excluded_knowledge_ids.add(knowledge_id)
+        source_ref = entry.get("source_ref")
+        if isinstance(source_ref, Mapping):
+            source_path = str(source_ref.get("path") or "").strip()
+            if source_path:
+                excluded_source_paths.add(source_path)
+
+    if not filtered:
+        return compiled
+
+    excluded_source_paths.update(
+        str(item.get("path") or "").strip()
+        for item in DATED_SOURCE_PATHS
+        if str(item.get("knowledge_id") or "").strip() in excluded_knowledge_ids
+    )
+    excluded_source_paths.difference_update(retained_source_paths)
+    excluded_knowledge_ids.difference_update(retained_knowledge_ids)
+    compiled["entries"] = retained_entries
+
+    sources = compiled.get("sources")
+    if isinstance(sources, list):
+        compiled["sources"] = [
+            source
+            for source in sources
+            if not isinstance(source, Mapping)
+            or str(source.get("path") or "").strip() not in excluded_source_paths
+        ]
+
+    for field in (
+        "expected_source_paths",
+        "available_source_paths",
+        "missing_source_paths",
+        "invalid_source_paths",
+    ):
+        values = compiled.get(field)
+        if isinstance(values, list):
+            compiled[field] = [
+                value
+                for value in values
+                if str(value or "").strip() not in excluded_source_paths
+            ]
+
+    filtered_sources = compiled.get("sources")
+    if isinstance(filtered_sources, list) and all(
+        isinstance(source, Mapping) for source in filtered_sources
+    ):
+        compiled["available_source_paths"] = [
+            str(source.get("path") or "").strip()
+            for source in filtered_sources
+            if source.get("availability") == "available"
+        ]
+        compiled["missing_source_paths"] = [
+            str(source.get("path") or "").strip()
+            for source in filtered_sources
+            if source.get("availability") == "missing"
+        ]
+        compiled["invalid_source_paths"] = [
+            str(source.get("path") or "").strip()
+            for source in filtered_sources
+            if source.get("availability") == "invalid"
+        ]
+
+    declared_errors = _manifest_string_list(compiled.get("errors"))
+    invalid_paths = _manifest_string_list(compiled.get("invalid_source_paths"))
+    missing_paths = _manifest_string_list(compiled.get("missing_source_paths"))
+    warnings = _manifest_string_list(compiled.get("warnings"))
+    if str(manifest.get("availability") or "").strip() == "invalid" or declared_errors or invalid_paths:
+        compiled["availability"] = "invalid"
+    elif missing_paths:
+        compiled["availability"] = "missing_sources"
+    elif warnings:
+        compiled["availability"] = "partial"
+    else:
+        compiled["availability"] = "ready"
+    compiled["manifest_hash"] = stable_json_hash(
+        compiled,
+        excluded_keys={"manifest_hash"},
+    )
+    return compiled
 
 
 def build_llm_wiki_context(
@@ -604,12 +849,20 @@ def build_llm_wiki_context(
     source_root: Path | str | None = None,
 ) -> Dict[str, object]:
     root = Path(source_root) if source_root is not None else ROOT
-    compiled_manifest = dict(manifest) if isinstance(manifest, Mapping) else build_knowledge_manifest(
-        KNOWLEDGE_INDEX,
-        root=root,
-        wiki_version=WIKI_VERSION,
-        language=WIKI_LANGUAGE,
-        expected_source_paths=SOURCE_PATHS,
+    normalized_query_date = str(query_date or "").strip()
+    availability_date = _knowledge_availability_date(target_date, normalized_query_date)
+    effective_index = _effective_knowledge_index(availability_date)
+    effective_source_paths = _effective_source_paths(effective_index)
+    compiled_manifest = (
+        _filter_manifest_by_availability(manifest, availability_date)
+        if isinstance(manifest, Mapping)
+        else build_knowledge_manifest(
+            effective_index,
+            root=root,
+            wiki_version=WIKI_VERSION,
+            language=WIKI_LANGUAGE,
+            expected_source_paths=effective_source_paths,
+        )
     )
     validation_errors = list(
         dict.fromkeys(
@@ -646,7 +899,7 @@ def build_llm_wiki_context(
         "manifest_hash": str(compiled_manifest.get("manifest_hash") or ""),
         "expected_source_paths": (
             _manifest_string_list(compiled_manifest.get("expected_source_paths"))
-            or list(SOURCE_PATHS)
+            or list(effective_source_paths)
         ),
         "available_source_paths": _manifest_string_list(
             compiled_manifest.get("available_source_paths")
@@ -657,8 +910,8 @@ def build_llm_wiki_context(
         "availability": availability,
         "confidence": llm_wiki_confidence_for_availability(availability),
         "warnings": _manifest_string_list(compiled_manifest.get("warnings")),
-        "source_paths": _existing_source_paths(root),
-        "field_mappings": list(FIELD_MAPPINGS),
+        "source_paths": _manifest_string_list(compiled_manifest.get("available_source_paths")),
+        "field_mappings": _effective_field_mappings(effective_index),
         "report_boundaries": list(REPORT_BOUNDARIES),
         "daily_discipline_lines": list(DAILY_DISCIPLINE_LINES),
         "write_boundaries": list(WRITE_BOUNDARIES),
@@ -777,11 +1030,34 @@ def _trace_fact_sources_are_complete(trace: Mapping[str, object]) -> bool:
     return True
 
 
+def _trace_knowledge_is_available_on(
+    hits: list[object],
+    manifest_entries: Mapping[str, Mapping[str, object]],
+    availability_date: str,
+) -> bool:
+    if not is_iso_calendar_date(availability_date):
+        return False
+    for hit in hits:
+        if not isinstance(hit, Mapping):
+            return False
+        entry = manifest_entries.get(str(hit.get("knowledge_id") or "").strip())
+        if not isinstance(entry, Mapping):
+            return False
+        available_from = str(entry.get("available_from") or "").strip()
+        if available_from and (
+            not is_iso_calendar_date(available_from)
+            or available_from > availability_date
+        ):
+            return False
+    return True
+
+
 def _is_complete_frozen_trace(
     existing: Mapping[str, object],
     trace: Mapping[str, object],
     *,
     target_date: str,
+    query_date: str = "",
 ) -> bool:
     manifest = existing.get("manifest")
     hits = trace.get("hits")
@@ -835,6 +1111,28 @@ def _is_complete_frozen_trace(
     trace_target_date = str(trace.get("target_date") or "")
     existing_query_date = str(existing.get("query_date") or "")
     trace_query_date = str(trace.get("query_date") or "")
+    requested_query_date = str(query_date or "")
+    normalized_requested_query_date = requested_query_date.strip()
+    requested_query_date_is_valid = not requested_query_date or (
+        requested_query_date == normalized_requested_query_date
+        and is_iso_calendar_date(normalized_requested_query_date)
+    )
+    availability_dates = [
+        value
+        for value in (
+            expected_target_date,
+            existing_query_date,
+            trace_query_date,
+            normalized_requested_query_date,
+        )
+        if value
+    ]
+    availability_date = min(availability_dates) if availability_dates else ""
+    trace_not_used_for = trace.get("not_used_for")
+    decision_boundary_is_supported = isinstance(trace_not_used_for, list) and trace_not_used_for in (
+        list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE),
+        list(_LEGACY_DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE),
+    )
     return bool(
         trace.get("schema_version") == "knowledge_trace.v1"
         and is_iso_calendar_date(expected_target_date)
@@ -845,11 +1143,11 @@ def _is_complete_frozen_trace(
         and trace_query_date == existing_query_date
         and is_iso_calendar_date(trace_query_date)
         and is_iso_calendar_date(existing_query_date)
+        and requested_query_date_is_valid
         and str(trace.get("scenario") or "").strip()
         and str(trace.get("facts_source") or "").strip()
         and trace.get("decision_scope") == "explanation_only"
-        and trace.get("not_used_for")
-        == list(DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE)
+        and decision_boundary_is_supported
         and trace_availability in VALID_MANIFEST_AVAILABILITIES
         and trace_availability == manifest_availability
         and trace_availability == existing_availability
@@ -858,6 +1156,11 @@ def _is_complete_frozen_trace(
         and is_sha256(trace_hash)
         and trace.get("manifest_hash") == existing.get("manifest_hash")
         and trace.get("manifest_hash") == manifest.get("manifest_hash")
+        and _trace_knowledge_is_available_on(
+            hits,
+            manifest_entries,
+            availability_date,
+        )
         and trace_hash == stable_json_hash(trace, excluded_keys={"trace_hash"})
     )
 
@@ -866,6 +1169,7 @@ def is_complete_frozen_llm_wiki_context(
     frozen_context: Mapping[str, object] | None,
     *,
     target_date: str,
+    query_date: str = "",
 ) -> bool:
     """Return whether a fresh context contains a complete replay-safe trace."""
     if not isinstance(frozen_context, Mapping):
@@ -877,6 +1181,7 @@ def is_complete_frozen_llm_wiki_context(
         frozen_context,
         trace,
         target_date=str(target_date or ""),
+        query_date=str(query_date or ""),
     )
 
 
@@ -920,6 +1225,7 @@ def build_replay_llm_wiki_context(
     trace_is_frozen = is_complete_frozen_llm_wiki_context(
         existing,
         target_date=requested_target_date,
+        query_date=query_date,
     )
     if trace_is_frozen:
         existing["analysis_mode"] = "replay"

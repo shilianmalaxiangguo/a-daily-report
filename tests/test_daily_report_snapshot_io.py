@@ -11,6 +11,37 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class DailyReportSnapshotIOTest(unittest.TestCase):
+    def test_snapshot_rejects_mode_that_conflicts_with_selected_source(self):
+        import daily_report_snapshot_io as snapshot_io
+
+        for mode, declared in (('frozen', 'replay'), ('replay', 'frozen')):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as folder, patch.object(
+                snapshot_io, '_snapshot_root', return_value=Path(folder)
+            ):
+                path = Path(snapshot_io._get_snapshot_path('2026-10-20', mode=mode))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({'date': '2026-10-20', 'mode': declared, 'data': {'test': True}}))
+                with self.assertRaisesRegex(ValueError, '快照.*来源'):
+                    snapshot_io.load_data_snapshot('2026-10-20', mode=mode)
+
+    def test_snapshot_source_is_explicit_and_never_silently_replaced(self):
+        import daily_report_snapshot_io as snapshot_io
+
+        with tempfile.TemporaryDirectory() as folder, patch.object(
+            snapshot_io, '_snapshot_root', return_value=Path(folder)
+        ):
+            snapshot_io._save_data_snapshot({'version': 'rebuild'}, '2026-10-20', mode='replay')
+            self.assertEqual(snapshot_io.load_data_snapshot('2026-10-20'), (None, None))
+            rebuilt, _ = snapshot_io.load_data_snapshot('2026-10-20', mode='replay')
+            self.assertEqual(rebuilt['version'], 'rebuild')
+            snapshot_io._save_data_snapshot({'version': 'official'}, '2026-10-20')
+            official, _ = snapshot_io.load_data_snapshot('2026-10-20')
+            rebuilt, _ = snapshot_io.load_data_snapshot('2026-10-20', mode='replay')
+            self.assertEqual(official['version'], 'official')
+            self.assertEqual(rebuilt['version'], 'rebuild')
+            with self.assertRaises(ValueError):
+                snapshot_io.load_data_snapshot('2026-10-20', mode='unknown')
+
     def test_make_serializable_stops_cycles_and_preserves_shared_values(self):
         import daily_report_snapshot_io as snapshot_io
 
@@ -46,6 +77,93 @@ class DailyReportSnapshotIOTest(unittest.TestCase):
                 loaded_data, perspective = snapshot_io.load_data_snapshot("2026-07-29")
             self.assertEqual(loaded_data, {"rows": [{"value": 1}]})
             self.assertEqual(perspective, "")
+
+    def test_snapshot_round_trip_preserves_decision_freeze_and_trace(self):
+        import daily_report_snapshot_io as snapshot_io
+
+        target_date = "2026-08-04"
+        decision_freeze = {
+            "schema_version": "decision_product_freeze.v1",
+            "target_date": target_date,
+            "availability": "complete",
+            "decision_projection": {
+                "schema_version": "decision_projection.v1",
+                "target_date": target_date,
+                "account_action": "hold",
+                "formal_object": {"code": "000533", "name": "顺钠股份"},
+            },
+            "read_only_evidence": {
+                "volume_price_evidence": {
+                    "price_acceptance": "unconfirmed",
+                    "source_date": target_date,
+                }
+            },
+            "knowledge_explanation": {
+                "target_date": target_date,
+                "knowledge_trace": {"trace_hash": "trace-hash"},
+            },
+            "source_dates": {
+                "target_date": target_date,
+                "formal_account": target_date,
+                "knowledge_explanation": target_date,
+            },
+            "freeze_hash": "freeze-hash",
+        }
+        data = {
+            "decision_product_freeze": decision_freeze,
+            "tomorrow_account_action": {"action": "hold"},
+            "knowledge": {
+                "llm_wiki": decision_freeze["knowledge_explanation"],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_root = Path(tmp) / "snapshots"
+            with patch.object(snapshot_io, "_snapshot_root", return_value=snapshot_root):
+                snapshot_path = snapshot_io._save_data_snapshot(
+                    data,
+                    target_date,
+                    mode=snapshot_io.LEDGER_MODE_FROZEN,
+                )
+
+            payload = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
+            self.assertEqual(payload["date"], target_date)
+            self.assertEqual(payload["mode"], snapshot_io.LEDGER_MODE_FROZEN)
+            self.assertEqual(payload["decision_product_freeze"], decision_freeze)
+            self.assertEqual(
+                payload["data"]["decision_product_freeze"],
+                decision_freeze,
+            )
+            with patch.object(snapshot_io, "_snapshot_root", return_value=snapshot_root):
+                loaded_data, perspective = snapshot_io.load_data_snapshot(target_date)
+
+            self.assertEqual(loaded_data, data)
+            self.assertEqual(perspective, "")
+
+    def test_snapshot_load_rejects_envelope_date_mismatch(self):
+        import daily_report_snapshot_io as snapshot_io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_root = Path(tmp) / "snapshots"
+            snapshot_root.mkdir(parents=True)
+            snapshot_path = snapshot_root / "2026-08-04.json"
+            snapshot_path.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-08-05",
+                        "mode": snapshot_io.LEDGER_MODE_FROZEN,
+                        "data": {"rows": []},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(snapshot_io, "_snapshot_root", return_value=snapshot_root):
+                with self.assertRaises(
+                    snapshot_io.SnapshotEnvelopeDateMismatchError
+                ):
+                    snapshot_io.load_data_snapshot("2026-08-04")
 
     def test_size_limited_writer_counts_utf8_bytes(self):
         import daily_report_snapshot_io as snapshot_io
@@ -218,6 +336,41 @@ class DailyReportSnapshotIOTest(unittest.TestCase):
             replay_payload = json.loads(Path(replay_path).read_text(encoding="utf-8"))
             self.assertEqual(replay_payload["mode"], snapshot_io.LEDGER_MODE_REPLAY)
             self.assertEqual(replay_payload["supplementary_perspective"], "perspective line")
+
+    def test_explicit_frozen_overwrite_replaces_official_and_preserves_perspective(self):
+        import daily_report_snapshot_io as snapshot_io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot_root = Path(tmp) / "snapshots"
+            snapshot_root.mkdir(parents=True)
+            official_path = snapshot_root / "2026-08-04.json"
+            official_path.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-08-04",
+                        "mode": snapshot_io.LEDGER_MODE_FROZEN,
+                        "data": {"dt_pool": []},
+                        "supplementary_perspective": "保留原有补充视角",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(snapshot_io, "_snapshot_root", return_value=snapshot_root):
+                saved_path = snapshot_io._save_data_snapshot(
+                    {"dt_pool": [{"代码": "600530", "名称": "ST交昂"}]},
+                    "2026-08-04",
+                    mode=snapshot_io.LEDGER_MODE_FROZEN,
+                    overwrite_existing=True,
+                )
+
+            payload = json.loads(official_path.read_text(encoding="utf-8"))
+            self.assertEqual(Path(saved_path), official_path)
+            self.assertEqual(payload["mode"], snapshot_io.LEDGER_MODE_FROZEN)
+            self.assertEqual(payload["data"]["dt_pool"][0]["代码"], "600530")
+            self.assertEqual(payload["supplementary_perspective"], "保留原有补充视角")
+            self.assertFalse((snapshot_root / "replay" / "2026-08-04_replay.json").exists())
 
 
 if __name__ == "__main__":

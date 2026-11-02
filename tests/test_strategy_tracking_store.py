@@ -91,6 +91,88 @@ class StrategyTrackingStoreTest(unittest.TestCase):
         except ModuleNotFoundError as error:
             self.fail(f"report.strategy_tracking_store should exist: {error}")
 
+    def test_report_scoped_read_cache_reuses_by_mode_and_resets_after_scope(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def __init__(self):
+                self.read_count = 0
+
+            def is_postgres_backed(self):
+                return True
+
+            def load_strategy_performance_ledger(self, mode="frozen"):
+                self.read_count += 1
+                return {
+                    "mode": mode,
+                    "records": [{"report_date": "2026-08-05"}],
+                }
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        cache = {}
+        with patch.object(store, "DatabaseService", StubDatabaseService, create=True), patch.dict(
+            "os.environ",
+            {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"},
+            clear=False,
+        ):
+            with store.strategy_performance_ledger_read_cache(cache):
+                first = store.load_strategy_performance_ledger(mode="frozen")
+                first["records"].append({"report_date": "mutated"})
+                second = store.load_strategy_performance_ledger(mode="frozen")
+                replay = store.load_strategy_performance_ledger(mode="replay")
+            third = store.load_strategy_performance_ledger(mode="frozen")
+
+        self.assertEqual(service.read_count, 3)
+        self.assertEqual(second["records"], [{"report_date": "2026-08-05"}])
+        self.assertEqual(replay["mode"], "replay")
+        self.assertEqual(third["mode"], "frozen")
+
+    def test_report_scoped_read_cache_invalidates_matching_mode_after_save(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def __init__(self):
+                self.read_count = 0
+                self.ledger = {"version": 1}
+
+            def is_postgres_backed(self):
+                return True
+
+            def load_strategy_performance_ledger(self, mode="frozen"):
+                self.read_count += 1
+                return {**self.ledger, "mode": mode}
+
+            def save_strategy_performance_ledger(self, ledger, mode="frozen"):
+                self.ledger = dict(ledger)
+                return {"saved": True, "mode": mode}
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        with patch.object(store, "DatabaseService", StubDatabaseService, create=True), patch.dict(
+            "os.environ",
+            {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"},
+            clear=False,
+        ):
+            with store.strategy_performance_ledger_read_cache({}):
+                first = store.load_strategy_performance_ledger(mode="frozen")
+                store.save_strategy_performance_ledger({"version": 2}, mode="frozen")
+                second = store.load_strategy_performance_ledger(mode="frozen")
+
+        self.assertEqual(first["version"], 1)
+        self.assertEqual(second["version"], 2)
+        self.assertEqual(service.read_count, 2)
+
     def test_postgres_configured_ledger_load_and_save_use_database_service(self):
         store = self._load_store_module()
 

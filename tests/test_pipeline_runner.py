@@ -30,6 +30,11 @@ def stub_report(ctx):
 
 
 class PipelineRunnerTest(unittest.TestCase):
+    def test_legacy_bridge_accepts_text_only_and_never_rebuilds_old_advice(self):
+        with self.assertRaisesRegex(RuntimeError, '已有历史文本'):
+            build_legacy_sections({'source': 'legacy'}, '2026-04-21')
+        self.assertEqual(build_legacy_sections(''), {})
+
     def test_run_pipeline_merges_patches_and_collects_trace(self):
         ctx = run_pipeline(
             request={"target_date": "2026-04-21"},
@@ -48,7 +53,7 @@ class PipelineRunnerTest(unittest.TestCase):
 
     def test_run_pipeline_supports_legacy_new_mixed_hooks(self):
         def legacy_sections_hook(ctx):
-            sections = build_legacy_sections({"source": "legacy"}, ctx["request"]["target_date"])
+            sections = build_legacy_sections(legacy_markdown, ctx["request"]["target_date"])
             return {
                 "value": {},
                 "patches": {"sections": sections},
@@ -70,13 +75,12 @@ class PipelineRunnerTest(unittest.TestCase):
             "Legacy summary body"
         )
 
-        with patch("daily_report_entry_demo.generate_markdown_report", return_value=legacy_markdown):
-            ctx = run_pipeline(
-                request={"target_date": "2026-04-21"},
-                hooks=[
-                    ("legacy.bridge", legacy_sections_hook),
-                    ("report.markdown_document", run_markdown_document),
-                ],
+        ctx = run_pipeline(
+            request={"target_date": "2026-04-21"},
+            hooks=[
+                ("legacy.bridge", legacy_sections_hook),
+                ("report.markdown_document", run_markdown_document),
+            ],
         )
 
         self.assertEqual(ctx["sections"]["preamble"], "# Legacy Preamble")

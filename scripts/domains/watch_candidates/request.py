@@ -239,6 +239,14 @@ def collect_watch_candidate_history_request_bundle(
             "cache_hits": 0,
             "cache_partial": 0,
         },
+        "candidate_history_coverage": {
+            "requested_codes": [],
+            "covered_codes": [],
+            "missing_codes": [],
+            "requested_count": 0,
+            "covered_count": 0,
+            "coverage_complete": True,
+        },
     }
 
     emit(
@@ -492,6 +500,31 @@ def collect_watch_candidate_history_request_bundle(
             for context in candidate_contexts:
                 _process_candidate_context(context)
 
+        requested_codes = list(
+            dict.fromkeys(
+                context["code_for_lookup"]
+                for context in candidate_contexts
+                if context.get("code_for_lookup")
+            )
+        )
+        covered_codes = list(
+            dict.fromkeys(
+                _normalize_candidate_code(item.get("code"))
+                for item in results["stocks_with_history"]
+                if _normalize_candidate_code(item.get("code"))
+            )
+        )
+        missing_codes = [code for code in requested_codes if code not in set(covered_codes)]
+        coverage = {
+            "requested_codes": requested_codes,
+            "covered_codes": covered_codes,
+            "missing_codes": missing_codes,
+            "requested_count": len(requested_codes),
+            "covered_count": len(covered_codes),
+            "coverage_complete": not missing_codes,
+        }
+        results["candidate_history_coverage"] = coverage
+
         elapsed, _ = timer.record("候选股历史成交额获取", 15)
         emit(
             "   📈 数据源统计: Tushare成功{tushare_success}只/失败{tushare_fail}只, QuickTiny成功{quicktiny_success}只/失败{quicktiny_fail}只, "
@@ -509,7 +542,7 @@ def collect_watch_candidate_history_request_bundle(
         _append_log(
             logs,
             "request.candidate_history",
-            "success",
+            "success" if coverage["coverage_complete"] else "error",
             "已获取候选股历史成交额快照",
             provider=_resolve_history_provider(results["history_fetch_stats"]),
             target_keys=["stocks_with_history", "history_fetch_stats"],
@@ -524,11 +557,30 @@ def collect_watch_candidate_history_request_bundle(
             tushare_history_max_workers=worker_count,
             tushare_history_empty_retries=tushare_history_empty_retries,
             tushare_empty_rate_rescue_threshold=tushare_empty_rate_rescue_threshold,
+            requested_codes=requested_codes,
+            covered_codes=covered_codes,
+            missing_codes=missing_codes,
+            coverage_complete=coverage["coverage_complete"],
             **results["history_fetch_stats"],
         )
     except Exception as error:
         timer.record("候选股历史成交额获取(失败)", 15)
         results["stocks_with_history"] = []
+        requested_codes = list(
+            dict.fromkeys(
+                _normalize_candidate_code(stock.get("code"))
+                for stock in candidates[:limit]
+                if _normalize_candidate_code(stock.get("code"))
+            )
+        )
+        results["candidate_history_coverage"] = {
+            "requested_codes": requested_codes,
+            "covered_codes": [],
+            "missing_codes": requested_codes,
+            "requested_count": len(requested_codes),
+            "covered_count": 0,
+            "coverage_complete": not requested_codes,
+        }
         emit(f"   ⚠️ 候选股历史成交额获取失败: {error}")
         _append_log(
             logs,

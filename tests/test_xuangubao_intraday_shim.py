@@ -121,6 +121,7 @@ class XuangubaoIntradayShimTest(unittest.TestCase):
             data = module.XuangubaoIntradayAnalyzer().fetch_xuangubao_data()
 
         news_call = next(call for call in captured["calls"] if "newsflash" in call[0])
+        self.assertEqual(news_call[1]["limit"], 100)
         self.assertEqual(news_call[1]["subj_ids"], "10,35")
         self.assertEqual(news_call[1]["has_explain"], "false")
         self.assertEqual(news_call[2]["x-ivanka-token"], "token-value")
@@ -185,6 +186,126 @@ class XuangubaoIntradayShimTest(unittest.TestCase):
         self.assertEqual(len(news_calls), 1)
         self.assertEqual(data["xuangubao_news"][0]["title"], "本地新实现新闻")
         self.assertEqual(data["xuangubao_plates"][0]["name"], "旧实现板块")
+
+    def test_fetch_xuangubao_data_skips_legacy_when_direct_facts_are_complete_and_records_requests(self):
+        module = __import__("xuangubao_intraday", fromlist=["xuangubao_intraday"])
+        legacy_calls = []
+
+        class _LegacyAnalyzer:
+            def fetch_xuangubao_data(self, target_date=None):
+                legacy_calls.append(target_date)
+                return {"xuangubao_news": [{"title": "旧实现不应调用"}]}
+
+        module._load_legacy_analyzer_class = lambda: _LegacyAnalyzer
+
+        class _Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        class _Session:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=0):
+                if "newsflash" in url:
+                    return _Response(
+                        {
+                            "code": 20000,
+                            "data": {
+                                "messages": [
+                                    {
+                                        "title": "原生资讯",
+                                        "summary": "",
+                                        "created_at": _shanghai_ms("2026-05-18", 10, 0),
+                                        "stocks": [],
+                                    }
+                                ],
+                                "next_cursor": "",
+                            },
+                        }
+                    )
+                if "pool/detail" in url:
+                    return _Response(
+                        {
+                            "code": 20000,
+                            "data": [
+                                {
+                                    "symbol": "600676.SS",
+                                    "stock_chi_name": "交运股份",
+                                    "surge_reason": {"stock_reason": "资产重组"},
+                                }
+                            ],
+                        }
+                    )
+                return _Response(
+                    {
+                        "code": 20000,
+                        "data": {"items": [{"id": 1, "name": "国产芯片", "description": "盘中走强"}]},
+                    }
+                )
+
+        class _Requests:
+            Session = _Session
+
+        module.requests = _Requests
+        with patch.dict("os.environ", {"XUANGUBAO_IVANKA_TOKEN": "token-value"}), patch.object(
+            module,
+            "monotonic",
+            side_effect=[0.0, 0.1, 0.1, 0.3, 0.3, 0.6],
+        ):
+            data = module.XuangubaoIntradayAnalyzer().fetch_xuangubao_data(target_date="2026-05-18")
+
+        self.assertEqual(legacy_calls, [])
+        self.assertEqual(data["xuangubao_news"][0]["title"], "原生资讯")
+        self.assertEqual(data["xuangubao_plates"][0]["name"], "国产芯片")
+        self.assertEqual(data["xuangubao_limit_up_reasons"][0]["symbol"], "600676.SS")
+        self.assertEqual(
+            data["diagnostics"]["request_counts"],
+            {"newsflash": 1, "plates": 1, "limit_up_reasons": 1},
+        )
+        self.assertEqual(
+            data["diagnostics"]["request_timings_ms"],
+            {"newsflash": 100.0, "plates": 200.0, "limit_up_reasons": 300.0},
+        )
+
+    def test_fetch_xuangubao_data_uses_legacy_news_when_direct_news_is_partial(self):
+        module = __import__("xuangubao_intraday", fromlist=["xuangubao_intraday"])
+
+        for diagnostic in (
+            "newsflash second page failed",
+            "newsflash page limit reached before target date window ended",
+        ):
+            with self.subTest(diagnostic=diagnostic):
+                legacy_calls = []
+
+                class _LegacyAnalyzer:
+                    def fetch_xuangubao_data(self, target_date=None):
+                        legacy_calls.append(target_date)
+                        return {
+                            "xuangubao_news": [{"title": "兼容来源完整资讯"}],
+                            "xuangubao_plates": [],
+                            "xuangubao_limit_up_reasons": [],
+                        }
+
+                module._load_legacy_analyzer_class = lambda: _LegacyAnalyzer
+                analyzer = module.XuangubaoIntradayAnalyzer()
+                analyzer._fetch_direct_xuangubao_data = lambda target_date=None: {
+                    "xuangubao_news": [{"title": "原生来源部分资讯"}],
+                    "xuangubao_plates": [{"name": "国产芯片"}],
+                    "xuangubao_limit_up_reasons": [{"symbol": "600676.SS"}],
+                    "diagnostics": {"newsflash": diagnostic},
+                }
+
+                data = analyzer.fetch_xuangubao_data(target_date="2026-05-18")
+
+                self.assertEqual(legacy_calls, ["2026-05-18"])
+                self.assertEqual(data["xuangubao_news"], [{"title": "兼容来源完整资讯"}])
+                self.assertEqual(data["xuangubao_plates"], [{"name": "国产芯片"}])
+                self.assertEqual(data["xuangubao_limit_up_reasons"], [{"symbol": "600676.SS"}])
+                self.assertEqual(data["diagnostics"]["newsflash"], diagnostic)
 
     def test_fetch_xuangubao_news_uses_next_cursor_for_next_page(self):
         module = __import__("xuangubao_intraday", fromlist=["xuangubao_intraday"])

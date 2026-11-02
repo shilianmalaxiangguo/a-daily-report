@@ -710,6 +710,13 @@ def _build_lhb_stock_context(data, stock_full_info):
         if "net_buy_amount_yi" in row:
             bucket["list_net_yi"] += _safe_float(row.get("net_buy_amount_yi"))
 
+    for row in data.get("lhb_inst_detail", []) or []:
+        code = _lhb_row_code(row)
+        if not code:
+            continue
+        bucket = ensure(code)
+        bucket["name"] = bucket["name"] or _lhb_row_name(row)
+
     occurrences = {}
     for row in data.get("lhb_analysis", []) or []:
         code = _lhb_row_code(row)

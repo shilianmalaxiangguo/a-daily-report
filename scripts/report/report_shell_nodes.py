@@ -94,6 +94,7 @@ def _build_prohibition_payload(
     display_operation_state,
     environment_headline="",
     has_personal_positions=False,
+    position_context_provided=True,
     final_gate=None,
     main_sectors=None,
     exit_analysis=None,
@@ -115,6 +116,9 @@ def _build_prohibition_payload(
         if has_personal_positions:
             payload["prohibition_items"].append("- ✅ 不新增参与：先处理旧仓，不新增仓位")
             payload["prohibition_items"].append("- ✅ 禁止恋战：你的现有仓位只做退出，不做摊平和自救")
+        elif not position_context_provided:
+            payload["prohibition_items"].append("- ✅ 先确认持仓：持仓未输入，先核对实际旧仓；明日不新增参与")
+            payload["prohibition_items"].append("- ✅ 旧仓动作待定：未确认前不生成卖出、持有或日内回转动作")
         else:
             payload["prohibition_items"].append("- ✅ 保持空仓：当前不新增参与")
             payload["prohibition_items"].append("- ✅ 禁止恋战：若你有旧仓，只做退出，不做摊平和自救")

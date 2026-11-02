@@ -220,6 +220,229 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(new_power["sample_status"], "待累计")
         self.assertIn("不跨板块解释涨跌", result["hot_sector_turnover_watch_summary"])
 
+    def test_hot_sector_watch_keeps_strong_high_anchor_when_recent_directions_fill_limit(self):
+        runtime = self._load_module()
+        recent_sectors = [
+            "国产芯片替代",
+            "通信设备",
+            "光通信/CPO",
+            "软件开发",
+            "白酒",
+            "半导体",
+            "元件",
+            "电气设备",
+        ]
+        recent_rows = [
+            {
+                "date": f"2026-07-{index + 20:02d}",
+                "sector_name": sector,
+                "sector_turnover": 1000.0 + index,
+                "total_turnover": 26000.0,
+                "turnover_share_pct": 4.0 + index / 10,
+            }
+            for index, sector in enumerate(recent_sectors)
+        ]
+
+        rows = runtime._build_hot_sector_turnover_watch_rows(
+            target_date="2026-08-07",
+            current_mainline="国产芯片替代",
+            current_snapshot={
+                "date": "2026-08-07",
+                "sector_name": "国产芯片替代",
+                "sector_turnover": 7647.70,
+                "total_turnover": 26834.02,
+                "turnover_share_pct": 28.5,
+            },
+            recent_sector_turnover_history=recent_rows,
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "小金属",
+                    "sector_turnover": 1046.72,
+                    "total_turnover": 26834.02,
+                    "turnover_share_pct": 3.9,
+                    "limit_up_count": 2,
+                    "high_anchor_height": 4,
+                    "high_anchor_name": "云南锗业",
+                    "net_inflow_amount": 7.62,
+                },
+                {
+                    "sector_name": "电气设备",
+                    "sector_turnover": 1498.26,
+                    "total_turnover": 26834.02,
+                    "turnover_share_pct": 5.6,
+                    "limit_up_count": 1,
+                    "high_anchor_height": 1,
+                },
+            ],
+        )
+
+        small_metal = next(row for row in rows if row["sector_name"] == "小金属")
+        sector_names = {row["sector_name"] for row in rows}
+        self.assertEqual(len(sector_names), 8)
+        self.assertIn("电气设备", sector_names)
+        self.assertEqual(small_metal["sector_turnover"], "1046.72亿")
+        self.assertEqual(small_metal["total_turnover"], "26834.02亿")
+        self.assertEqual(small_metal["share"], "3.9%")
+        self.assertEqual(small_metal["sample_status"], "待累计")
+
+    def test_hot_sector_candidates_do_not_prioritize_incomplete_or_single_limit_up_high_anchor(self):
+        runtime = self._load_module()
+        recent_sectors = [
+            "国产芯片替代",
+            "通信设备",
+            "光通信/CPO",
+            "软件开发",
+            "白酒",
+            "半导体",
+            "元件",
+            "电气设备",
+        ]
+
+        names = runtime._hot_sector_candidate_names(
+            target_date="2026-08-07",
+            current_mainline="国产芯片替代",
+            current_snapshot={"sector_name": "国产芯片替代"},
+            recent_sector_turnover_history=[
+                {"sector_name": sector}
+                for sector in recent_sectors
+            ],
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "成交事实缺失方向",
+                    "sector_turnover": 0.0,
+                    "turnover_share_pct": 3.2,
+                    "limit_up_count": 3,
+                    "high_anchor_height": 5,
+                },
+                {
+                    "sector_name": "单只涨停方向",
+                    "sector_turnover": 1200.0,
+                    "turnover_share_pct": 4.5,
+                    "limit_up_count": 1,
+                    "high_anchor_height": 4,
+                },
+                {
+                    "sector_name": "占比缺失方向",
+                    "sector_turnover": 1200.0,
+                    "turnover_share_pct": 0.0,
+                    "limit_up_count": 2,
+                    "high_anchor_height": 4,
+                },
+                {
+                    "date": "2026-08-06",
+                    "sector_name": "错日强势方向",
+                    "sector_turnover": 1200.0,
+                    "turnover_share_pct": 4.5,
+                    "limit_up_count": 2,
+                    "high_anchor_height": 4,
+                },
+                {
+                    "date": "2026-08-07",
+                    "sector_name": "非有限值方向",
+                    "sector_turnover": "inf",
+                    "total_turnover": "inf",
+                    "turnover_share_pct": "inf",
+                    "limit_up_count": "inf",
+                    "high_anchor_height": "inf",
+                },
+            ],
+        )
+
+        self.assertEqual(len(names), 8)
+        self.assertNotIn("成交事实缺失方向", names)
+        self.assertNotIn("单只涨停方向", names)
+        self.assertNotIn("占比缺失方向", names)
+        self.assertNotIn("错日强势方向", names)
+        self.assertNotIn("非有限值方向", names)
+
+    def test_hot_sector_candidates_derive_turnover_from_share_and_market_total(self):
+        runtime = self._load_module()
+        recent_sectors = [
+            "国产芯片替代",
+            "通信设备",
+            "光通信/CPO",
+            "软件开发",
+            "白酒",
+            "半导体",
+            "元件",
+            "电气设备",
+        ]
+
+        rows = runtime._build_hot_sector_turnover_watch_rows(
+            target_date="2026-08-07",
+            current_mainline="国产芯片替代",
+            current_snapshot={"date": "2026-08-07", "sector_name": "国产芯片替代"},
+            recent_sector_turnover_history=[
+                {"date": "2026-08-06", "sector_name": sector}
+                for sector in recent_sectors
+            ],
+            sector_attack_evidence_rows=[
+                {
+                    "date": "2026-08-07",
+                    "sector_name": "小金属",
+                    "total_turnover": 10000.0,
+                    "turnover_share_pct": 3.9,
+                    "limit_up_count": 2,
+                    "high_anchor_height": 4,
+                }
+            ],
+        )
+
+        small_metal = next(row for row in rows if row["sector_name"] == "小金属")
+        self.assertEqual(small_metal["sector_turnover"], "390.00亿")
+        self.assertEqual(small_metal["share"], "3.9%")
+
+    def test_hot_sector_candidates_keep_all_selected_target_day_turnover_sectors(self):
+        runtime = self._load_module()
+        selected_sectors = [
+            "国产芯片替代",
+            "通信设备",
+            "光通信/CPO",
+            "软件开发",
+            "白酒",
+            "半导体",
+            "元件",
+            "电气设备",
+        ]
+        target_day_rows = [
+            {
+                "date": "2026-08-07",
+                "sector_name": sector,
+                "sector_turnover": 1000.0 + index,
+                "total_turnover": 26000.0,
+                "turnover_share_pct": 4.0 + index / 10,
+                "limit_up_count": 1,
+                "high_anchor_height": 1,
+            }
+            for index, sector in enumerate(selected_sectors[1:])
+        ]
+        target_day_rows.append(
+            {
+                "date": "2026-08-07",
+                "sector_name": "小金属",
+                "sector_turnover": 1046.72,
+                "total_turnover": 26834.02,
+                "turnover_share_pct": 3.9,
+                "limit_up_count": 2,
+                "high_anchor_height": 4,
+            }
+        )
+
+        names = runtime._hot_sector_candidate_names(
+            target_date="2026-08-07",
+            current_mainline="国产芯片替代",
+            current_snapshot={"date": "2026-08-07", "sector_name": "国产芯片替代"},
+            recent_sector_turnover_history=[
+                {"date": "2026-08-06", "sector_name": sector}
+                for sector in selected_sectors
+            ],
+            sector_attack_evidence_rows=target_day_rows,
+        )
+
+        self.assertEqual(len(names), 8)
+        self.assertEqual(set(names), set(selected_sectors))
+        self.assertNotIn("小金属", names)
+
     def test_build_mainline_turnover_summary_exports_turnover_share_table_rows_even_when_share_missing(self):
         runtime = self._load_module()
 

@@ -10,6 +10,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from report.candidate_decision_evidence import validate_sector_tournament_three_axis
 from report.surface_wording import find_legacy_surface_wording
 
 
@@ -860,7 +861,33 @@ def _audit_sector_capital_preflight_payload_contract(payload):
                 )
     decision_list = payload.get("decision_list") if isinstance(payload.get("decision_list"), list) else []
     decision_items = [str(item.get("item") or "") for item in decision_list if isinstance(item, dict)]
-    missing_decisions = [item for item in REQUIRED_SECTOR_CAPITAL_PREFLIGHT_DECISIONS if item not in decision_items]
+    three_axis = payload.get("sector_tournament_three_axis") if isinstance(payload.get("sector_tournament_three_axis"), dict) else {}
+    three_axis_target_date = str(payload.get("trade_date") or "")
+    three_axis_is_valid = bool(
+        three_axis
+        and validate_sector_tournament_three_axis(
+            three_axis,
+            target_date=three_axis_target_date,
+        )
+    )
+    if three_axis and not three_axis_is_valid:
+        findings.append(
+            _finding(
+                "sector_capital_preflight_three_axis_invalid",
+                "板块资金复核三坐标事实未通过校验，暂不采用十问清单",
+            )
+        )
+    three_axis_questions = [
+        str(row.get("question") or "")
+        for row in (three_axis.get("ten_questions") or [])
+        if three_axis_is_valid and isinstance(row, dict) and str(row.get("question") or "")
+    ]
+    required_decisions = (
+        three_axis_questions
+        if len(three_axis_questions) == 10
+        else list(REQUIRED_SECTOR_CAPITAL_PREFLIGHT_DECISIONS)
+    )
+    missing_decisions = [item for item in required_decisions if item not in decision_items]
     if missing_decisions:
         findings.append(
             _finding(
@@ -1618,6 +1645,11 @@ def _audit_position_context_contradictions(lines):
     )
     unknown_position_markers = ("未输入持仓", "持仓未输入")
     unknown_conflict_markers = no_holding_markers + current_empty_account_markers
+    unknown_old_position_action_markers = (
+        "若你有旧仓，只做退出",
+        "若你有仓位，只做退出",
+        "你的现有仓位只做退出",
+    )
     findings = []
     if any(marker in full_text for marker in unknown_position_markers) and any(
         marker in full_text for marker in unknown_conflict_markers
@@ -1628,6 +1660,19 @@ def _audit_position_context_contradictions(lines):
                     _finding(
                         "unknown_position_rendered_as_no_holding",
                         "未输入持仓时不能渲染成无持仓结论",
+                        line=index,
+                    )
+                )
+                break
+    if any(marker in full_text for marker in unknown_position_markers) and any(
+        marker in full_text for marker in unknown_old_position_action_markers
+    ):
+        for index, line in current_lines:
+            if any(marker in str(line or "") for marker in unknown_old_position_action_markers):
+                findings.append(
+                    _finding(
+                        "unknown_position_old_position_action_conflict",
+                        "持仓未输入时不能生成旧仓卖出或持有动作",
                         line=index,
                     )
                 )
@@ -2854,12 +2899,43 @@ def _mainline_turnover_row_has_unconfirmed_label_with_real_amount(cells):
     return _has_real_mainline_turnover_value(cells[2]) or _has_real_mainline_turnover_value(cells[4])
 
 
+def _audit_trading_day_continuity(front, header, slug):
+    """Flag windows that skipped a real trading day inside their own span."""
+    rows = _extract_table_rows_after_header(front, header)
+    dates = [cells[0] for cells in rows if cells and re.match(r"\d{4}-\d{2}-\d{2}$", cells[0])]
+    if len(dates) < 2:
+        return []
+    present = set(dates)
+    try:
+        from market_data.tushare_market_activity_service import fetch_tushare_open_trade_dates
+
+        start, end = min(dates), max(dates)
+        calendar = set(fetch_tushare_open_trade_dates(start, end) or [])
+    except Exception:
+        return []
+    if not calendar:
+        return []
+    expected = sorted(day for day in calendar if start <= day <= end)
+    missing = [day for day in expected if day not in present]
+    if not missing:
+        return []
+    return [
+        _finding(
+            f"{slug}_trading_day_gap",
+            f"{header.strip()} 窗口内缺失交易日{'、'.join(missing)}，行数达标不等于覆盖完整",
+        )
+    ]
+
+
 def _audit_market_base_freshness(lines):
     target_date = _report_target_date(lines)
     if not target_date:
         return []
     front = _front_page_lines(lines)
     findings = []
+    # A 25-row window is only complete if it also spans 25 trading days. Count
+    # alone hid a skipped session, so verify the span against the trade calendar.
+    findings.extend(_audit_trading_day_continuity(front, TOP50_TURNOVER_HEADER, "top50_trend"))
     top50_rows = _extract_table_rows_after_header(front, TOP50_TURNOVER_HEADER)
     if top50_rows:
         row_dates = [cells[0] for cells in top50_rows if cells and re.match(r"\d{4}-\d{2}-\d{2}$", cells[0])]
@@ -4674,6 +4750,12 @@ def _audit_sniper_target_derivation_consistency(lines):
 
 
 def _extract_selection_workflow_final_identity(lines):
+    for line in lines:
+        cells = _split_md_row(line)
+        if len(cells) < 3 or cells[0] != "最终结果" or cells[1] != "N9 / final":
+            continue
+        final_object_text = re.split(r"[；;]", cells[2], maxsplit=1)[0]
+        return _target_identity(final_object_text)
     text = "\n".join(str(line or "") for line in lines or [])
     if "selection_workflow.v1" in text:
         match = re.search(
@@ -4690,18 +4772,24 @@ def _extract_selection_workflow_final_identity(lines):
             name_match = re.search(r'"name"\s*:\s*"(?P<name>[^"]+)"', object_text)
             if name_match:
                 return name_match.group("name")
-    workflow_headings = (
-        "### 工作流链条",
-        "### 主线推导链",
-        "### 候选流水账",
-        "### 候选生命周期证据",
+    workflow_heading_pattern = re.compile(
+        r"^#{2,6}\s+(?:附录：)?(?:工作流链条|主线推导链|候选流水账|候选生命周期证据)\s*$",
+        re.MULTILINE,
     )
-    if not any(heading in text for heading in workflow_headings):
+    if not workflow_heading_pattern.search(text):
         return ""
+    for line in lines:
+        cells = _split_md_row(line)
+        if not cells or cells[0] != "N8 仓位与执行条件" or len(cells) < 3:
+            continue
+        identity = _target_identity(cells[2])
+        if identity:
+            return identity
     n8_match = re.search(
-        r"####\s+N8\s+仓位与执行条件(?P<body>.*?)(?:\n####\s+N9|\n###\s+候选流水账|\n###\s+候选生命周期证据|\Z)",
+        r"^#{2,6}\s+(?:附录：)?N8\s+仓位与执行条件(?P<body>.*?)"
+        r"(?:\n#{2,6}\s+(?:附录：)?(?:N9|候选流水账|候选生命周期证据)|\Z)",
         text,
-        re.DOTALL,
+        re.DOTALL | re.MULTILINE,
     )
     if n8_match:
         code_match = re.search(r"['\"]code['\"]\s*:\s*['\"](?P<code>\d{6})['\"]", n8_match.group("body"))
@@ -4710,10 +4798,13 @@ def _extract_selection_workflow_final_identity(lines):
     in_candidate_table = False
     for line in lines:
         raw = str(line or "")
-        if raw.strip() in ("### 候选流水账", "### 候选生命周期证据"):
+        if re.fullmatch(
+            r"#{2,6}\s+(?:附录：)?(?:候选流水账|候选生命周期证据)",
+            raw.strip(),
+        ):
             in_candidate_table = True
             continue
-        if in_candidate_table and raw.startswith("### "):
+        if in_candidate_table and re.match(r"^#{2,6}\s+", raw.strip()):
             break
         if not in_candidate_table or "最终执行对象" not in raw:
             continue
@@ -4728,6 +4819,12 @@ def _extract_selection_workflow_final_identity(lines):
 
 def _selection_workflow_declares_empty_final(lines):
     text = "\n".join(str(line or "") for line in lines or [])
+    for line in lines or []:
+        cells = _split_md_row(line)
+        if len(cells) < 3 or cells[0] != "最终结果" or cells[1] != "N9 / final":
+            continue
+        final_object_text = re.split(r"[；;]", cells[2], maxsplit=1)[0]
+        return _is_empty_target(final_object_text)
     empty_markers = (
         "FINAL[\"最终：暂无<br/>仓位：0%\"]",
         "FINAL[&quot;最终：暂无&lt;br/&gt;仓位：0%&quot;]",
@@ -4950,6 +5047,11 @@ def _line_names_current_object_when_front_empty(text):
         "- **确认后怎么做**:",
     )
     if not stripped.startswith(current_line_prefixes):
+        return ""
+    if re.fullmatch(
+        r"- ⏳ .+?\(\d{6}\) - 仅保留过程回看，不保留未来观察价",
+        stripped,
+    ):
         return ""
     if any(marker in stripped for marker in process_markers):
         return ""
@@ -5271,6 +5373,16 @@ def audit_report_markdown(
         }
     lines = _lines(markdown)
     findings = []
+    if any(
+        "待补充板块" in str(content or "")
+        for content in (markdown, companion_html, position_companion_html)
+    ):
+        findings.append(
+            _finding(
+                "placeholder_sector_fact",
+                "日报仍含未补齐的所属板块事实",
+            )
+        )
     findings.extend(_audit_legacy_daily_report_terms(lines))
     findings.extend(_audit_front_page_headings(lines))
     findings.extend(_audit_monthly_rhythm_section(lines))

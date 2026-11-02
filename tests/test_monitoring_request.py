@@ -51,6 +51,17 @@ class _TargetDateAnalyzerStub:
         return {"xuangubao_news": [{"title": f"{target_date} 盘中异动"}]}
 
 
+class _TimedAnalyzerStub:
+    def fetch_xuangubao_data(self, target_date=None):
+        return {
+            "xuangubao_news": [{"title": f"{target_date} 盘中异动"}],
+            "diagnostics": {
+                "request_counts": {"newsflash": 1},
+                "request_timings_ms": {"newsflash": 123.4},
+            },
+        }
+
+
 class MonitoringRequestTest(unittest.TestCase):
     def test_collect_monitoring_request_bundle_builds_monitoring_payloads(self):
         timer = _TimerStub()
@@ -138,6 +149,24 @@ class MonitoringRequestTest(unittest.TestCase):
 
         self.assertEqual(analyzer.target_date, "2026-05-18")
         self.assertEqual(result["results"]["xuangubao_data"]["xuangubao_news"][0]["title"], "2026-05-18 盘中异动")
+
+    def test_xuangubao_request_timing_is_structured_without_becoming_failure_note(self):
+        timer = _TimerStub()
+
+        result = collect_monitoring_request_bundle(
+            "2026-05-18",
+            analyzer_factory=_TimedAnalyzerStub,
+            fetch_wanzhu_top10=lambda target_date: [],
+            fetch_exchange_monitor_payload=lambda: {"data": []},
+            fetch_stock_batch_info=lambda codes: {},
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        xgb_log = next(log for log in result["module_logs"] if log["step"] == "request.xuangubao")
+        self.assertEqual(xgb_log["details"]["request_counts"], {"newsflash": 1})
+        self.assertEqual(xgb_log["details"]["request_timings_ms"], {"newsflash": 123.4})
+        self.assertEqual(xgb_log["details"]["diagnostic_note"], "")
 
     def test_xuangubao_limit_up_reasons_count_as_success(self):
         timer = _TimerStub()

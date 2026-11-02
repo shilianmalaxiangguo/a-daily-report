@@ -61,10 +61,16 @@ def build_decision_board_positioning_section_node(context, node_meta=None, node_
     exit_analysis = context.get("exit_analysis", {}) or {}
     final_gate = context.get("final_gate", {}) or {}
     price_info = context.get("price_info")
+    overall_action = str(exit_analysis.get("overall_action", "未知") or "未知")
+    if final_gate.get("can_new_entry") is False and overall_action in {
+        "主线健康，可继续做",
+        "主升强化，优先做核心",
+    }:
+        overall_action = "局部主线偏强，仅作研究证据"
     lines = [
         "### 💰 仓位决策",
         f"- **市场环境档位**: {context.get('position_level', '')}",
-        f"- **主线状态**: {context.get('overall_level', '红灯')}（{exit_analysis.get('overall_action', '未知')}）",
+        f"- **主线状态**: {context.get('overall_level', '红灯')}（{overall_action}）",
     ]
     if exit_analysis.get("overall_score") is not None and exit_analysis.get("mainline_score_pct") is not None:
         lines.append(
@@ -105,6 +111,7 @@ def build_decision_board_positioning_section_node(context, node_meta=None, node_
 def build_decision_board_risk_section_node(context, node_meta=None, node_lookup=None):
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
+    dt_count_available = context.get("dt_count_available", context.get("dt_count") is not None)
     dt_count = int(context.get("dt_count", 0) or 0)
     turnover = _safe_float(context.get("turnover", 0))
     rise_fall_ratio = _safe_float(context.get("rise_fall_ratio", 0))
@@ -117,7 +124,10 @@ def build_decision_board_risk_section_node(context, node_meta=None, node_lookup=
     if high_board_count > 5:
         lines.append(f"- 🔴 高位连板股占比过高（{high_board_count}只），需警惕分歧风险")
         risk_count += 1
-    if dt_count > 5:
+    if not dt_count_available:
+        lines.append("- 🟡 跌停事实待确认，不能据此判断亏钱端压力已经解除")
+        risk_count += 1
+    elif dt_count > 5:
         lines.append(f"- 🔴 跌停数较多（{dt_count}只），市场风险偏好下降")
         risk_count += 1
     if turnover < 7000:

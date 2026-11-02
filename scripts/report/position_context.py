@@ -122,11 +122,11 @@ def position_fact_status(summary: Any, *, context_provided: bool = False) -> str
         return "confirmed"
     if summary.get("has_pending_position") is True:
         return "pending_confirmation"
-    if summary.get("has_position") is False:
-        return "none"
     text = _position_text(summary)
     if any(marker in text for marker in ("持仓未输入", "未输入持仓", "待确认持仓")):
         return "unknown"
+    if summary.get("has_position") is False:
+        return "none"
     if any(marker in text for marker in ("已确认无旧仓", "无旧仓", "已清仓")):
         return "none"
     if any(

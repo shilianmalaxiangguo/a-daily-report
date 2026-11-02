@@ -45,7 +45,14 @@ PK_DECISION_NODE_BUILDERS = {
 }
 
 
-def build_pk_decision_runtime(stage_context, stage_meta, stage_lookup=None, enabled_node_keys=None):
+def build_pk_decision_runtime(
+    stage_context,
+    stage_meta,
+    stage_lookup=None,
+    enabled_node_keys=None,
+    *,
+    capture_timings=False,
+):
     stage_context = stage_context or {}
     stage_meta = stage_meta or {}
     node_context = {
@@ -54,18 +61,34 @@ def build_pk_decision_runtime(stage_context, stage_meta, stage_lookup=None, enab
         "stage_title": str(stage_meta.get("title", "") or "PK决胜局（期望值模型）").strip() or "PK决胜局（期望值模型）",
     }
     node_specs = build_pk_decision_node_specs(PK_DECISION_NODE_BUILDERS, enabled_node_keys=enabled_node_keys)
-    runtime_result = run_pk_decision_nodes(node_specs, node_context)
+    timing_options = {"capture_timings": True} if capture_timings else {}
+    runtime_result = run_pk_decision_nodes(
+        node_specs,
+        node_context,
+        **timing_options,
+    )
     return {
         "lines": runtime_result["lines"],
         "exports": dict(runtime_result.get("context", {}).get("stage_exports", {}) or {}),
         "module_logs": list(runtime_result.get("module_logs") or []),
+        "timing_rows": list(runtime_result.get("node_timing_rows") or []),
     }
 
 
 def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
     stage_context = stage_context or {}
     logs = []
-    result = build_pk_decision_runtime(stage_context, stage_meta, stage_lookup=stage_lookup)
+    timing_options = (
+        {"capture_timings": True}
+        if bool(stage_context.get("_capture_timings"))
+        else {}
+    )
+    result = build_pk_decision_runtime(
+        stage_context,
+        stage_meta,
+        stage_lookup=stage_lookup,
+        **timing_options,
+    )
     exports = dict(result.get("exports") or {})
     _append_log(
         logs,
@@ -81,4 +104,5 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
         "lines": list(result.get("lines") or []),
         "exports": exports,
         "module_logs": list(result.get("module_logs") or []) + logs,
+        "timing_rows": list(result.get("timing_rows") or []),
     }

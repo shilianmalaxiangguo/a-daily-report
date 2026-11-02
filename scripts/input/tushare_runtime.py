@@ -7,7 +7,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
 
-from domains.market_activity.new_high_runtime import build_new_high_feedback_snapshot
+from domains.market_activity.new_high_runtime import (
+    build_new_high_feedback_snapshot,
+    is_missing_new_high_sector,
+    new_high_feedback_has_invalid_content,
+)
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
 from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_client import create_tushare_pro_api
@@ -180,7 +184,14 @@ def _new_high_record_from_report_markdown(markdown_text, trade_date):
         date_index = header_indexes.get("日期", -1)
         count_index = header_indexes.get("新高数", -1)
         share_index = header_indexes.get("全A占比", -1)
-        sector_index = header_indexes.get("主导板块", -1)
+        sector_index = next(
+            (
+                header_indexes[header]
+                for header in ("板块分布前列", "主导板块")
+                if header in header_indexes
+            ),
+            -1,
+        )
         if min(date_index, count_index, share_index, sector_index) < 0:
             continue
         if len(cells) <= max(date_index, count_index, share_index, sector_index):
@@ -547,13 +558,14 @@ def _build_new_high_snapshot_from_fact_rows(rows, target_date, *, source=""):
 
 
 def _is_missing_new_high_sector(value):
-    text = _clean_text(value)
-    return not text or text in {"-", "未知", "未归类", "待补充板块", "待补事实", "暂无"}
+    return is_missing_new_high_sector(value)
 
 
 def _new_high_snapshot_needs_rebuild(snapshot):
     if not isinstance(snapshot, dict) or not snapshot.get("available"):
         return False
+    if new_high_feedback_has_invalid_content(snapshot):
+        return True
     top_stocks = [row for row in (snapshot.get("top_stocks") or []) if isinstance(row, dict)]
     if not top_stocks:
         return False
@@ -1126,6 +1138,7 @@ def get_new_high_feedback_from_tushare_first(
     db_path=None,
     database_service_cls=None,
     ensure_daily_metric_history_index_fn=None,
+    persist_facts=True,
 ):
     factor_fetcher = fetch_stock_factor_pro_rows_fn or fetch_stock_factor_pro_rows
     basic_fetcher = fetch_stock_basic_map_fn or fetch_stock_basic_map
@@ -1149,7 +1162,7 @@ def get_new_high_feedback_from_tushare_first(
         return rows, last_error
 
     def _refill_recent_quote_history(service, *, start_date, end_date):
-        if service is None or not start_date or not end_date:
+        if not persist_facts or service is None or not start_date or not end_date:
             return 0
         range_fetcher = fetch_stock_daily_turnover_records_range_fn or fetch_stock_daily_turnover_records_range
         try:
@@ -1268,7 +1281,7 @@ def get_new_high_feedback_from_tushare_first(
         )
         akshare_snapshot["message"] = "Tushare 技术因子未返回且本地日线历史不足，使用 AkShare 同花顺一年新高榜补齐阶段新高反馈。"
         upsert_new_high = getattr(service, "upsert_new_high_feedback_daily", None) if service is not None else None
-        if callable(upsert_new_high):
+        if persist_facts and callable(upsert_new_high) and not new_high_feedback_has_invalid_content(akshare_snapshot):
             try:
                 upsert_new_high(akshare_snapshot)
             except Exception:
@@ -1390,7 +1403,7 @@ def get_new_high_feedback_from_tushare_first(
                     if factor_error is not None:
                         rebuilt_snapshot.setdefault("factor_error", str(factor_error))
                     upsert_new_high = getattr(local_service, "upsert_new_high_feedback_daily", None)
-                    if callable(upsert_new_high):
+                    if persist_facts and callable(upsert_new_high) and not new_high_feedback_has_invalid_content(rebuilt_snapshot):
                         try:
                             upsert_new_high(rebuilt_snapshot)
                         except Exception:
@@ -1485,7 +1498,7 @@ def get_new_high_feedback_from_tushare_first(
                     or missing_expected_trade_dates
                 )
             )
-            if should_rebuild_history:
+            if should_rebuild_history and persist_facts:
                 if ensure_daily_metric_history_index_fn is None:
                     try:
                         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
@@ -1577,6 +1590,7 @@ def get_top50_turnover_share_series_from_tushare_first(
     db_path=None,
     database_service_cls=None,
     fetch_stock_daily_turnover_records_fn=None,
+    persist_facts=True,
 ):
     try:
         service = _create_fact_database_service(database_service_cls, db_path)
@@ -1605,24 +1619,53 @@ def get_top50_turnover_share_series_from_tushare_first(
             except Exception:
                 daily_rows = []
             if daily_rows:
-                run_id = service.save_provider_source_run(
-                    {
+                if persist_facts:
+                    run_id = service.save_provider_source_run(
+                        {
+                            "trade_date": query_date,
+                            "provider": "tushare",
+                            "endpoint": "daily",
+                            "status": "success",
+                            "row_count": len(daily_rows),
+                        }
+                    )
+                    service.upsert_stock_daily_quotes_recent(daily_rows, source_run_id=run_id)
+                    service.rebuild_market_daily_total(query_date, source_run_id=run_id)
+                    service.rebuild_turnover_rank_daily(
+                        query_date,
+                        rank_limit=max(int(limit or 50), 100),
+                        source_run_id=run_id,
+                        rank_scope="all_a",
+                    )
+                    payload = _query_series()
+                else:
+                    amounts = sorted(
+                        (
+                            _safe_float((row or {}).get("amount_yi"))
+                            for row in daily_rows
+                        ),
+                        reverse=True,
+                    )
+                    market_amount = sum(amounts)
+                    top_amount = sum(amounts[: max(int(limit or 50), 1)])
+                    target_row = {
                         "trade_date": query_date,
-                        "provider": "tushare",
-                        "endpoint": "daily",
-                        "status": "success",
-                        "row_count": len(daily_rows),
+                        "source_date": query_date,
+                        "query_date": query_date,
+                        "top_amount_yi": top_amount,
+                        "market_amount_yi": market_amount,
+                        "share_pct": top_amount / market_amount * 100.0 if market_amount > 0 else 0.0,
                     }
-                )
-                service.upsert_stock_daily_quotes_recent(daily_rows, source_run_id=run_id)
-                service.rebuild_market_daily_total(query_date, source_run_id=run_id)
-                service.rebuild_turnover_rank_daily(
-                    query_date,
-                    rank_limit=max(int(limit or 50), 100),
-                    source_run_id=run_id,
-                    rank_scope="all_a",
-                )
-                payload = _query_series()
+                    by_date = {
+                        normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date")): dict(row or {})
+                        for row in (previous_payload or {}).get("rows", [])
+                        if normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+                    }
+                    by_date[query_date] = target_row
+                    payload = {
+                        "source": "storage.turnover_rank_daily+tushare.daily.read_only",
+                        "rows": [by_date[date] for date in sorted(by_date)][-required_window_rows:],
+                    }
             elif isinstance(previous_payload, dict):
                 payload = previous_payload
     except Exception:
@@ -3027,6 +3070,7 @@ def get_price_band_style_series_from_tushare_first(
     low_price_code=PRICE_BAND_LOW_PRICE_CODE,
     db_path=None,
     database_service_cls=None,
+    persist_facts=True,
 ):
     target_date_text = normalize_kline_date_str(target_date)
     if not target_date_text:
@@ -3102,7 +3146,7 @@ def get_price_band_style_series_from_tushare_first(
                     "style_label": _price_band_style_label(spread_pct),
                 }
             )
-            if service is not None:
+            if service is not None and persist_facts:
                 source_run_id = service.save_provider_source_run(
                     {
                         "trade_date": trade_date,
@@ -3148,15 +3192,23 @@ def get_price_band_style_series_from_tushare_first(
                 if not refresh_error:
                     refresh_error = str(error)
             if history_rows:
-                _save_price_band_style_rows(
-                    service,
-                    history_rows,
-                    source_policy="ths.history_line.price_band_style",
-                    high_price_code=high_price_code,
-                    low_price_code=low_price_code,
-                )
+                if persist_facts:
+                    _save_price_band_style_rows(
+                        service,
+                        history_rows,
+                        source_policy="ths.history_line.price_band_style",
+                        high_price_code=high_price_code,
+                        low_price_code=low_price_code,
+                    )
                 rows.extend(history_rows)
-        if service is not None:
+        if not persist_facts and fact_rows:
+            rows_by_date = {
+                normalize_kline_date_str((row or {}).get("trade_date")): dict(row or {})
+                for row in [*fact_rows, *rows]
+                if normalize_kline_date_str((row or {}).get("trade_date"))
+            }
+            rows = [rows_by_date[date] for date in sorted(rows_by_date)][-max(int(window_days or 25), 1):]
+        if service is not None and persist_facts:
             try:
                 refreshed = service.query_price_band_style_series(target_date_text, window_days=window_days)
                 refreshed_rows = (refreshed or {}).get("rows") if isinstance(refreshed, dict) else []
@@ -3334,6 +3386,7 @@ def get_margin_pressure_from_tushare_first(
     fetch_market_margin_balance_rows_fn=None,
     db_path=None,
     database_service_cls=None,
+    persist_facts=True,
 ):
     target_date_text = normalize_kline_date_str(target_date)
     if not target_date_text:
@@ -3435,7 +3488,7 @@ def get_margin_pressure_from_tushare_first(
             except Exception as fallback_error:
                 if not margin_error:
                     margin_error = str(fallback_error)
-        if service is not None:
+        if service is not None and persist_facts:
             try:
                 source_run_id = service.save_provider_source_run(
                     {
@@ -3646,8 +3699,17 @@ def get_stock_hot_rank_from_tushare_first(
 ):
     fetcher = fetch_tushare_ths_hot_fn or fetch_tushare_ths_hot
     market = "热股"
+    target_date_text = normalize_kline_date_str(target_date)
     try:
-        rows = [row for row in (fetcher(target_date, market=market) or []) if _is_new_high_hot_row(row)]
+        rows = [
+            row
+            for row in (fetcher(target_date, market=market) or [])
+            if _is_new_high_hot_row(row)
+            and (
+                not target_date_text
+                or normalize_kline_date_str((row or {}).get("trade_date")) == target_date_text
+            )
+        ]
         normalized = []
         for fallback_rank, row in enumerate(rows, start=1):
             item = _normalize_tushare_hot_rank_row(row or {}, fallback_rank, market=market)
@@ -4240,6 +4302,12 @@ def _normalize_sector_flow_row(row):
     if not name:
         return None
     net_amount = _safe_float(_pick(row, "net_amount", "zljlr", "net_inflow", default=0.0))
+    raw_stock_count = _pick(row, "company_num", "stock_count", default=None)
+    try:
+        stock_number = None if isinstance(raw_stock_count, bool) else float(raw_stock_count)
+        stock_count = int(stock_number) if stock_number is not None and stock_number >= 0 and stock_number.is_integer() else None
+    except (TypeError, ValueError, OverflowError):
+        stock_count = None
     return {
         "name": name,
         "code": str(_pick(row, "ts_code", "code", default="")).strip().upper(),
@@ -4252,6 +4320,7 @@ def _normalize_sector_flow_row(row):
         "net_sell_amount": _safe_float(_pick(row, "net_sell_amount", default=0.0)),
         "turnover_yi": _safe_float(_pick(row, "net_buy_amount", default=0.0)) + _safe_float(_pick(row, "net_sell_amount", default=0.0)),
         "lead_stock": _clean_text(_pick(row, "lead_stock", default="")),
+        "stock_count": stock_count,
         "data_source": "tushare.moneyflow_ind_ths",
         "trade_date": normalize_kline_date_str(_pick(row, "trade_date", default="")),
     }
@@ -4397,7 +4466,7 @@ def _ts_code_from_clean_code(code):
     return f"{clean}.{suffix}" if clean and suffix else clean
 
 
-def _normalize_tushare_lhb_inst_rows(rows, target_date=None):
+def _normalize_tushare_lhb_inst_rows(rows, target_date=None, *, name_by_code=None):
     normalized = []
     target_date_text = normalize_kline_date_str(target_date)
     seen = set()
@@ -4418,6 +4487,7 @@ def _normalize_tushare_lhb_inst_rows(rows, target_date=None):
         sell_yi = round(sell / 1e8, 6)
         net_buy_yi = round(net_buy / 1e8, 6)
         reason = _clean_text(_pick(row, "reason", default=""))
+        name = _clean_text((name_by_code or {}).get(code))
         dedupe_key = (code, exalter, buy_yi, sell_yi, net_buy_yi, reason)
         if dedupe_key in seen:
             continue
@@ -4427,6 +4497,10 @@ def _normalize_tushare_lhb_inst_rows(rows, target_date=None):
                 "trade_date": trade_date,
                 "code": code,
                 "ts_code": str(_pick(row, "ts_code", default="")).strip().upper() or _ts_code_from_clean_code(code),
+                "name": name,
+                "name_source": "tushare.top_list" if name else "",
+                "source_date": trade_date,
+                "query_date": target_date_text or trade_date,
                 "exalter": exalter,
                 "seat_type": "机构" if "机构" in exalter else "非机构",
                 "side": _clean_text(_pick(row, "side", default="")),
@@ -4447,15 +4521,36 @@ def get_lhb_snapshot_from_tushare_first(
     *,
     fetch_tushare_top_list_fn=None,
     fetch_tushare_top_inst_fn=None,
+    fetch_stock_basic_map_fn=None,
     fetch_stock_industry_map_fn=None,
     legacy_get_lhb_snapshot_fn=None,
 ):
     fetcher = fetch_tushare_top_list_fn or fetch_tushare_top_list
     try:
         source_rows = list(fetcher(target_date) or [])
+        all_grouped_rows = _normalize_tushare_lhb_group(source_rows)
+        basic_map_loader = fetch_stock_basic_map_fn or fetch_stock_basic_map
+        basic_map = basic_map_loader() if callable(basic_map_loader) else {}
+        listed_stock_codes = {
+            _clean_code(code)
+            for code in (basic_map or {})
+            if _clean_code(code)
+        }
+        if not listed_stock_codes:
+            raise ValueError("Tushare 上市股票全集为空")
+        all_grouped_rows = [
+            row
+            for row in all_grouped_rows
+            if _clean_code(row.get("代码")) in listed_stock_codes
+        ]
+        name_by_code = {
+            row["代码"]: row.get("name", "")
+            for row in all_grouped_rows
+            if row.get("代码") and row.get("name")
+        }
         grouped_rows = [
             row
-            for row in _normalize_tushare_lhb_group(source_rows)
+            for row in all_grouped_rows
             if row.get("net_amount_available")
         ]
         if grouped_rows:
@@ -4463,7 +4558,16 @@ def get_lhb_snapshot_from_tushare_first(
             inst_status = "empty"
             try:
                 inst_fetcher = fetch_tushare_top_inst_fn or fetch_tushare_top_inst
-                inst_detail = _normalize_tushare_lhb_inst_rows(inst_fetcher(target_date) or [], target_date=target_date)
+                inst_detail = _normalize_tushare_lhb_inst_rows(
+                    inst_fetcher(target_date) or [],
+                    target_date=target_date,
+                    name_by_code=name_by_code,
+                )
+                inst_detail = [
+                    row
+                    for row in inst_detail
+                    if _clean_code(row.get("code") or row.get("ts_code")) in listed_stock_codes
+                ]
                 inst_status = "available" if inst_detail else "empty"
             except Exception:
                 inst_detail = []
@@ -4716,7 +4820,14 @@ def _market_stats_from_daily_rows(rows, zt_count, dt_count, *, target_date=None)
     return result
 
 
-def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None, *, target_date=None):
+def _build_limit_pool_snapshot(
+    rows,
+    daily_rows,
+    industry_map=None,
+    *,
+    target_date=None,
+    direction_status=None,
+):
     zt_pool = []
     dt_pool = []
     for row in rows or []:
@@ -4730,6 +4841,9 @@ def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None, *, target_da
                 dt_pool.append(normalized)
     zt_pool.sort(key=lambda item: (-_safe_int(item.get("连板数"), 1), item.get("首次封板时间") or "99:99:99", item.get("代码") or ""))
     dt_pool.sort(key=lambda item: (item.get("代码") or ""))
+    resolved_direction_status = dict(direction_status or {})
+    resolved_direction_status["up"] = bool(zt_pool) or resolved_direction_status.get("up") is True
+    resolved_direction_status["down"] = bool(dt_pool) or resolved_direction_status.get("down") is True
     return {
         "zt_pool": zt_pool,
         "dt_pool": dt_pool,
@@ -4745,6 +4859,7 @@ def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None, *, target_da
         "fallback_used": False,
         "source_status": "success",
         "source_error": "",
+        "direction_status": resolved_direction_status,
     }
 
 
@@ -4826,6 +4941,7 @@ def get_limit_pool_snapshot_from_tushare_first(
     db_path=None,
 ):
     limit_fetcher = fetch_tushare_limit_rows_fn or fetch_tushare_limit_rows
+    uses_default_limit_fetcher = fetch_tushare_limit_rows_fn is None
     daily_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
     daily_rows = []
     partial_snapshot = {}
@@ -4834,6 +4950,7 @@ def get_limit_pool_snapshot_from_tushare_first(
         rows = list(limit_fetcher(target_date) or [])
         has_limit_up = any(_is_limit_up_row(row) for row in rows)
         has_limit_down = any(_is_limit_down_row(row) for row in rows)
+        retry_completed = False
         if not rows or not has_limit_up or not has_limit_down:
             if callable(retry_sleep_fn):
                 try:
@@ -4849,6 +4966,7 @@ def get_limit_pool_snapshot_from_tushare_first(
                     pass
             try:
                 retry_rows = list(limit_fetcher(target_date) or [])
+                retry_completed = True
             except Exception as error:
                 retry_rows = []
                 retry_error = str(error)
@@ -4859,7 +4977,15 @@ def get_limit_pool_snapshot_from_tushare_first(
                     rows.extend(row for row in retry_rows if _is_limit_up_row(row))
                 if not has_limit_down:
                     rows.extend(row for row in retry_rows if _is_limit_down_row(row))
-        if rows:
+        has_limit_up = any(_is_limit_up_row(row) for row in rows)
+        has_limit_down = any(_is_limit_down_row(row) for row in rows)
+        direction_status = {
+            "up": has_limit_up,
+            "down": has_limit_down,
+        }
+        if uses_default_limit_fetcher and retry_completed and not retry_error:
+            direction_status = {"up": True, "down": True}
+        if rows or (direction_status["up"] and direction_status["down"]):
             try:
                 daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
             except Exception:
@@ -4874,6 +5000,7 @@ def get_limit_pool_snapshot_from_tushare_first(
                 daily_rows,
                 industry_map=industry_map,
                 target_date=target_date,
+                direction_status=direction_status,
             )
             if not _market_stats_complete(snapshot.get("market_stats")):
                 storage_stats = _market_stats_from_storage_breadth(
@@ -4885,7 +5012,11 @@ def get_limit_pool_snapshot_from_tushare_first(
                 )
                 if storage_stats:
                     snapshot["market_stats"] = storage_stats
-            if snapshot["zt_pool"] and snapshot["dt_pool"]:
+            directions_complete = all((snapshot.get("direction_status") or {}).values())
+            trading_day_confirmed = bool(snapshot.get("zt_pool") or snapshot.get("dt_pool")) or _market_stats_complete(
+                snapshot.get("market_stats")
+            )
+            if directions_complete and trading_day_confirmed:
                 return snapshot
             if snapshot["zt_pool"] or snapshot["dt_pool"]:
                 partial_snapshot = {

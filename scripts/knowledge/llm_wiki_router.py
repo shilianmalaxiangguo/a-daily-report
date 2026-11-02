@@ -37,10 +37,14 @@ DECISION_FIELDS_EXCLUDED_FROM_KNOWLEDGE = (
     "selection_workflow",
     "final_target_resolution",
     "execution_object",
+    "execution_nature",
     "position_plan",
+    "planned_participation",
     "b1_b2",
     "old_position_handling",
     "exit_action",
+    "account_action",
+    "tomorrow_account_action",
 )
 
 
@@ -139,6 +143,111 @@ KNOWLEDGE_INDEX = [
         "impact": "创新高绝对水位分为极致扩散、有效扩散、扩散偏冷、极低扩散和扩散断层；绝对水位还要与变化方向、板块成群度、核心板块同步性及来源质量一起解释。首次个位数、快速收缩和板块碎片化只构成结构预警，不直接改变候选、明日对象、仓位、B1/B2或退出动作。",
     },
     {
+        "id": "market.new-high-core-trend-anchor",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/资料库/2026-08-18新高票趋势锚与轮动聚焦文章评论整理.md",
+        "source_date": "2026-08-18",
+        "capture_date": "2026-08-18",
+        "available_from": "2026-08-18",
+        "anchor": "《新高票的意义》正文、三张行情图与用户补充评论；黄色箭头含义、评论网页出处和部分市场判断保留待核实",
+        "url": "https://mp.weixin.qq.com/s/EFPtghF355XuQuBiGOeUlA",
+        "author_or_publisher": "争气2026（安静拆主线）与用户补充评论",
+        "title": "板块新高群与核心趋势锚分层",
+        "topics": [
+            "全市场新高宽度",
+            "板块新高群",
+            "核心趋势锚",
+            "价格接受区",
+            "观察时效",
+        ],
+        "trigger_terms": [
+            "创新高板块",
+            "板块新高群",
+            "核心新高",
+            "核心趋势锚",
+            "历史新高",
+            "价格接受区",
+            "新高支撑",
+            "少数核心新高",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.sector_grid",
+                    "contains_any": [
+                        "创新高板块",
+                        "板块新高群",
+                        "创新高板块形成清晰集群",
+                        "创新高板块暂未形成清晰集群",
+                        "创新高板块碎片化",
+                    ],
+                    "label": "创新高板块分布",
+                },
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "板块新高群",
+                        "少数核心新高",
+                        "核心趋势锚",
+                        "板块碎片化",
+                    ],
+                    "label": "新高宽度与核心分层",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "创新高趋势反馈",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "先分开全市场新高宽度、板块新高群和少数核心新高；板块相关核心新高只作为时效递减的中期趋势观察锚，不保证次日延续。价格接受区必须由带目标日和复权口径的前高、突破位、均线、缺口或成交结构复算，图片箭头不直接定义支撑，也不改变候选、明日对象、仓位、B1/B2或退出动作。",
+    },
+    {
+        "id": "market.rotation-focus-carrier-separation",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/资料库/2026-08-18新高票趋势锚与轮动聚焦文章评论整理.md",
+        "source_date": "2026-08-18",
+        "capture_date": "2026-08-18",
+        "available_from": "2026-08-18",
+        "anchor": "《新高票的意义》正文、三张行情图与用户补充评论；黄色箭头含义、评论网页出处和部分市场判断保留待核实",
+        "url": "https://mp.weixin.qq.com/s/EFPtghF355XuQuBiGOeUlA",
+        "author_or_publisher": "争气2026（安静拆主线）与用户补充评论",
+        "title": "强势轮动后的聚焦与资金载体分周期",
+        "topics": [
+            "强势轮动",
+            "分化聚焦",
+            "核心锚",
+            "20cm弹性载体",
+            "情绪后排",
+            "高切低边界",
+        ],
+        "trigger_terms": [
+            "强势轮动",
+            "分化聚焦",
+            "观察聚焦",
+            "1至2个板块",
+            "专注1至2个板块",
+            "20cm弹性",
+            "高切低",
+            "资金载体错配",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "轮动分化与跨日资金反馈已确认",
+                    ],
+                    "label": "轮动分化与跨日反馈组合",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "普遍修复转向分化时，把研究注意力收缩到1至2个反复获得跨日资金反馈的方向，并分开核心锚、20cm弹性载体和情绪后排；降低日内波动预期不等于取消认错线。低位、没涨和高切低本身不产生参与资格，也不改变候选、明日对象、仓位、B1/B2或退出动作。",
+    },
+    {
         "id": "market.historical-prior-live-structure",
         "prior": "market-structure-prior",
         "source_path": "wiki/交易思想/历史先验、实时结构与可用窗口.md",
@@ -216,6 +325,379 @@ KNOWLEDGE_INDEX = [
         "confidence": "reviewed",
         "decision_scope": "explanation_only",
         "impact": "历史样本只限定可能范围，来源明确的指数、宽度、成交分布与板块同步决定当前解释；先区分短促反弹、首次收复与稳定修复，保留竞争解释、主要反证和下一观察窗口，不改变候选、明日对象、仓位、B1/B2、旧仓动作或退出动作。",
+    },
+    {
+        "id": "market.systemic-drawdown-residual-risk",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/交易思想/系统性下跌后的剩余风险.md",
+        "capture_date": "2026-08-02",
+        "available_from": "2026-08-02",
+        "anchor": "《一点都不新鲜》正文与2026-07-31行情图；个股深跌统计口径和文章发布日期待核实",
+        "url": "https://mp.weixin.qq.com/s/fcsZkXpY59mlm33Ex3i2Sw",
+        "author_or_publisher": "海里的小龙龙与本地市场合同",
+        "title": "系统性下跌后的剩余风险",
+        "topics": [
+            "系统性下跌",
+            "已释放风险",
+            "剩余风险",
+            "指数与宽度",
+            "竞争解释",
+            "区分证据",
+        ],
+        "trigger_terms": [
+            "系统性下跌",
+            "大范围深跌",
+            "跌幅已经很大",
+            "已释放风险",
+            "剩余风险",
+            "还有什么利空",
+            "整体可控",
+            "会不会像2015年",
+            "继续普跌",
+            "杠杆释放",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "系统性下跌",
+                        "大范围深跌",
+                        "整体可控",
+                        "继续出清",
+                        "会不会像2015年",
+                    ],
+                    "label": "系统性下跌路径",
+                },
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "大范围深跌",
+                        "跌幅已经很大",
+                        "宽度未修复",
+                        "继续普跌",
+                        "核心补跌",
+                    ],
+                    "label": "深跌后的宽度结构",
+                },
+                {
+                    "path": "market.turnover_distribution",
+                    "contains_any": [
+                        "杠杆释放",
+                        "流动性压力",
+                        "证券修复",
+                        "权重修复",
+                    ],
+                    "label": "卖压与修复力量",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "大范围深跌只降低继续同量级普跌的先验，不把剩余风险写成零；固定核对已释放风险、剩余风险、指数与宽度、竞争解释和下一窗口区分证据。证券或权重是可能的修复工具，不证明修复已经发生，也不改变候选、仓位、B1/B2、旧仓处理或退出动作。",
+    },
+    {
+        "id": "market.auction-delayed-sell-pressure-bayesian",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/资料库/2026-08-28竞价未充分定价与开盘后延迟卖盘文章整理.md",
+        "capture_date": "2026-08-28",
+        "available_from": "2026-08-28",
+        "anchor": "微信文章《肘墨鱼块》正文关于竞价不弱、开盘后瀑布、前置/后置策略的段落；页面发布日期和完整作者元数据未确认",
+        "url": "https://mp.weixin.qq.com/s/7dZ_W1AWumPRuyYVj_QgHg",
+        "author_or_publisher": "爱在冰川（页面署名，作者元数据未独立确认）",
+        "title": "竞价未充分定价与开盘后延迟卖盘的竞争解释",
+        "topics": [
+            "集合竞价",
+            "开盘路径",
+            "延迟卖盘",
+            "前置博弈",
+            "后置策略",
+            "贝叶斯竞争解释",
+            "账户身份边界",
+            "竞价选择性样本",
+            "竞价覆盖盲区",
+            "异步策略时钟",
+        ],
+        "trigger_terms": [
+            "竞价未充分定价",
+            "开盘后延迟卖盘",
+            "竞价与开盘后路径错位",
+            "竞价不弱开盘下跌",
+            "首五分钟卖压放大",
+            "开盘后成交放大",
+            "前置博弈与后置策略",
+            "延迟卖压竞争解释",
+            "竞价选择性样本",
+            "竞价覆盖盲区",
+            "异步策略时钟",
+            "量化",
+            "机构",
+            "游资",
+            "集合竞价",
+            "开盘瀑布",
+            "前置博弈",
+            "后置策略",
+        ],
+        "weak_trigger_terms": [
+            "量化",
+            "机构",
+            "游资",
+            "集合竞价",
+            "开盘瀑布",
+            "前置博弈",
+            "后置策略",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "竞价未充分定价",
+                        "开盘后延迟卖盘",
+                        "竞价与开盘后路径错位",
+                        "竞价不弱开盘下跌",
+                        "竞价选择性样本",
+                        "竞价覆盖盲区",
+                        "异步策略时钟",
+                    ],
+                    "label": "竞价与开盘路径错位",
+                },
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "首五分钟卖压放大",
+                        "开盘后快速下跌",
+                        "开盘后瀑布",
+                        "开盘后单边下跌",
+                        "开盘后同步转弱",
+                    ],
+                    "label": "开盘后宽度转弱",
+                },
+                {
+                    "path": "market.turnover_distribution",
+                    "contains_any": [
+                        "开盘后成交放大",
+                        "开盘后卖压放大",
+                        "延迟卖盘",
+                        "竞价后放量下跌",
+                        "首五分钟成交放大",
+                    ],
+                    "label": "开盘后成交与卖压",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "已知利空、竞价反应有限且开盘后立即下跌时，把竞价覆盖不足和开盘后条件式卖盘作为当前优先工作假设，同时保留普通供需失衡和个股冲击。可复用的策略时钟机制已经提供方向性更新，独立样本、事前预测和反证继续校准权重；曲线、成交额或单篇文章不能确认量化/机构身份，也不改变候选、明日对象、仓位、执行性质、B1/B2、旧仓处理或退出动作。",
+    },
+    {
+        "id": "market.polarization-negative-alliance-energy",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/资料库/2026-08-29共同排斥、两极分化与博弈层级对话整理.md",
+        "source_date": "2026-08-29",
+        "capture_date": "2026-08-29",
+        "available_from": "2026-08-29",
+        "anchor": "公开豆包共享对话中关于低中高三层博弈、同频伙伴筛选和两极分化的段落，以及用户本轮关于共同排斥、同类聚集和双峰分布的补充",
+        "url": "https://www.doubao.com/thread/xKWWvM1sTRJnpfWpQ",
+        "author_or_publisher": "用户与豆包（公开共享对话）",
+        "title": "共同排斥、双峰聚集与市场能量",
+        "topics": [
+            "共同排斥",
+            "负向同盟",
+            "两极分化",
+            "双峰分布",
+            "长期市场双峰化",
+            "长期市场极化",
+            "中间层收缩",
+            "中间层收缩指标",
+            "同类筛选",
+            "阵营反馈",
+            "主线能量",
+            "同质性网络",
+            "虚假共识",
+            "虚假共识效应",
+            "可见两极",
+            "双群聚外观",
+            "可见双峰",
+            "样本双峰",
+            "市场双峰",
+            "贝叶斯竞争解释",
+        ],
+        "trigger_terms": [
+            "共同排斥",
+            "负向同盟",
+            "负向认同",
+            "共同敌人",
+            "两极分化",
+            "双峰分布",
+            "双峰聚集",
+            "长期市场双峰化",
+            "长期市场极化",
+            "中间层收缩指标",
+            "可见双峰",
+            "行为双峰",
+            "市场双峰",
+            "真实双峰",
+            "同质性网络",
+            "虚假共识",
+            "虚假共识效应",
+            "可见两极",
+            "双群聚外观",
+            "样本双峰",
+            "中间层收缩",
+            "阵营内强化",
+            "同类筛选",
+            "资金向两端集中",
+            "主线与对立线同时强化",
+            "中庸",
+            "极端",
+            "争议",
+            "分化",
+            "对立",
+            "信息茧房",
+            "回音室",
+            "同质化",
+            "臭味相投",
+        ],
+        "weak_trigger_terms": [
+            "中庸",
+            "极端",
+            "争议",
+            "分化",
+            "对立",
+            "信息茧房",
+            "回音室",
+            "同质化",
+            "臭味相投",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "共同排斥",
+                        "负向同盟",
+                        "负向认同",
+                        "两极分化",
+                        "双峰分布",
+                        "双峰聚集",
+                        "长期市场双峰化",
+                        "长期市场极化",
+                        "可见双峰",
+                        "行为双峰",
+                        "市场双峰",
+                        "真实双峰",
+                        "同质性网络",
+                        "虚假共识",
+                        "虚假共识效应",
+                        "可见两极",
+                        "双群聚外观",
+                        "样本双峰",
+                        "中间层收缩",
+                    ],
+                    "label": "共同排斥与分布极化",
+                },
+                {
+                    "path": "market.sector_grid",
+                    "contains_any": [
+                        "主线与对立线同时强化",
+                        "对立方向同时强化",
+                        "阵营内强化",
+                        "同类聚集",
+                        "两端集中",
+                    ],
+                    "label": "板块阵营与两端聚集",
+                },
+                {
+                    "path": "market.breadth",
+                    "contains_any": [
+                        "中间层收缩",
+                        "中间层收缩指标",
+                        "收益分布双峰",
+                        "行为双峰",
+                        "市场双峰",
+                        "真实双峰",
+                        "强弱两端扩张",
+                        "中位样本减少",
+                    ],
+                    "label": "宽度两端扩张",
+                },
+                {
+                    "path": "market.turnover_distribution",
+                    "contains_any": [
+                        "资金向两端集中",
+                        "成交向两端集中",
+                        "极化成交",
+                        "争议放量并跨日延续",
+                    ],
+                    "label": "两端资金集中",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "长期研究先把 H_bimodal 作为首要工作假设；在缺少反证时，它也是当前优先工作假设，但单日结果只允许支持、削弱或暂不能判断，不预设双峰输出。同质性网络可能先把稀疏边缘点连接成双群聚外观和局部虚假共识；只有同一量尺、明确分母、两个局部峰、中间低谷和两侧支持对合理带宽变化保持稳定时，才称样本双峰，即本次样本支持双峰形态，正式单峰检验仍未运行。若总体价格、成交和宽度没有两个稳定端点，优先保留观察样本偏差；当中间层收缩、两端资金集中和跨日内部反馈共同出现时，再比较共同排斥、普通动量、单边集中、厚尾、一次性事件和采样偏差。极化提高的是协调强度和尾部风险，不证明方向正确、参与者身份或后续收益；研究上优先比较两端核心而不在中间层寻找虚假安全感，但不改变候选、明日对象、仓位、执行性质、B1/B2、旧仓处理或退出动作。",
+    },
+    {
+        "id": "market.august-hot-stock-double-cluster-migration",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/资料库/2026-08-30八月A股热门股双群聚证据记录.md",
+        "source_date": "2026-08-28",
+        "capture_date": "2026-08-30",
+        "available_from": "2026-08-30",
+        "anchor": "18份2026年8月本地热门榜快照、2026-08-28成交额与涨停高度事实，以及两日全市场横截面反证",
+        "author_or_publisher": "用户与日报仓库",
+        "title": "八月热门股双群聚与动态极点迁移",
+        "topics": [
+            "8月热门股双群聚",
+            "持续核心端",
+            "动态冲击端",
+            "动态极点迁移",
+            "角色稳定成员迁移",
+            "热门集合双机制",
+            "全市场反证",
+        ],
+        "trigger_terms": [
+            "8月热门股双群聚",
+            "八月热门股双群聚",
+            "动态极点迁移",
+            "持续核心端与冲击端",
+            "持续核心端与动态冲击端",
+            "持续核心端和动态冲击端",
+            "持续核心端 + 动态冲击端",
+            "动态冲击端迁移",
+            "热门集合双机制",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "market.market_form",
+                    "contains_any": [
+                        "8月热门股双群聚",
+                        "八月热门股双群聚",
+                        "动态极点迁移",
+                        "持续核心端与冲击端",
+                        "持续核心端与动态冲击端",
+                        "持续核心端和动态冲击端",
+                        "持续核心端 + 动态冲击端",
+                        "动态冲击端迁移",
+                        "热门集合双机制",
+                    ],
+                    "label": "八月热门集合双群聚与动态迁移",
+                }
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "2026年8月局部样本支持热门集合存在持续核心端与动态冲击端的双群聚外观：核心端反复占位，冲击端角色相对稳定而成员随事件、行业和连板高度迁移。18份热门榜、目标日成交与涨停高度提高这套双机制解释的权重，但两日全市场横截面仍为单峰或尚不能区分，因此不能推出全市场稳定双峰、中间层长期消失、参与者身份、去散户化因果或后续收益优势。本知识只用于解释、研究和复盘，不改变候选、明日对象、仓位、执行性质、账户动作、B1/B2、旧仓处理或退出动作。",
     },
     {
         "id": "market.sector-grid-first-selection",
@@ -1362,6 +1844,98 @@ KNOWLEDGE_INDEX = [
         "impact": "早信只提高观察优先级，不替代买入资格；龙头或分支二次发力后，再看固定交易窗口、板块同步、个股承接和亏损边界。鱼身只吃信号确认后到人声鼎沸前的中段，先涨者转弱、补涨扩散或权重拉指数时主动降风险。",
     },
     {
+        "id": "research.enterprise-valuation-price-dual-cycle",
+        "prior": "research-framework-prior",
+        "source_path": "wiki/交易思想/企业估值与价格执行的双周期框架.md",
+        "capture_date": "2026-08-02",
+        "available_from": "2026-08-02",
+        "anchor": "《一点都不新鲜》正文和2026-07-31行情图、《点三三》用户提供总结及其中14张配图解读与本地交易合同；《点三三》原文、配图和链接待独立复核，文章发布日期待核实",
+        "url": "https://mp.weixin.qq.com/s/fcsZkXpY59mlm33Ex3i2Sw",
+        "author_or_publisher": "海里的小龙龙、爱在冰川与本地交易合同",
+        "title": "企业估值与价格执行的双周期框架",
+        "topics": [
+            "企业前提",
+            "估值位置",
+            "当前价格证据",
+            "仓位身份",
+            "长周期研究",
+            "短周期执行",
+            "跌多了买",
+            "越跌越减",
+        ],
+        "trigger_terms": [
+            "双周期",
+            "企业前提",
+            "企业假设",
+            "估值位置",
+            "投资企业",
+            "当前价格证据",
+            "仓位身份",
+            "长周期研究",
+            "短周期执行",
+            "长期值得研究",
+            "当前交易失效",
+            "启动前逻辑",
+            "启动后看图",
+            "跌多了买",
+            "越跌越减",
+            "要信早信",
+        ],
+        "fact_conditions": {
+            "must_any": [
+                {
+                    "path": "candidate.quality",
+                    "contains_any": [
+                        "企业前提",
+                        "企业假设",
+                        "估值位置",
+                        "当前价格证据",
+                    ],
+                    "label": "企业估值与当前价格证据",
+                },
+                {
+                    "path": "position.capital_priority_reason",
+                    "contains_any": [
+                        "企业前提",
+                        "估值位置",
+                        "新的T0评估",
+                    ],
+                    "label": "双周期冲突处理",
+                },
+                {
+                    "path": "decision.response_script",
+                    "contains_any": [
+                        "双周期",
+                        "企业前提",
+                        "估值位置",
+                        "当前价格证据",
+                        "新的T0评估",
+                    ],
+                    "label": "双周期复核剧本",
+                },
+            ],
+            "prefer_any": [
+                {
+                    "path": "position.state",
+                    "contains_any": [
+                        "研究观察",
+                        "趋势观察仓",
+                        "短线失败仓",
+                        "已失效旧仓",
+                        "当前交易失效",
+                        "仓位身份",
+                    ],
+                    "label": "仓位身份",
+                },
+            ]
+        },
+        "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
+        "report_slot": "研究与执行分层",
+        "confidence": "reviewed",
+        "decision_scope": "explanation_only",
+        "impact": "企业前提只决定是否保留研究价值，估值位置只决定是否值得等待，当前价格证据决定能否取得参与资格，仓位身份决定旧交易如何处理。同一标的可以长周期值得研究但当前交易已经失效；旧交易先按原计划处理，长期机会只能进入新的T0评估。",
+    },
+    {
         "id": "research.supply-chain-bottleneck",
         "prior": "research-framework-prior",
         "source_path": "wiki/板块补充/供应链瓶颈研究法.md",
@@ -1533,6 +2107,11 @@ def _first_dict(*values: Any) -> Dict[str, Any]:
 
 def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     judgement = _first_dict(data.get("market_structure_judgement"))
+    selection_workflow = _first_dict(data.get("selection_workflow"))
+    local_trend_sector_proof = _first_dict(
+        data.get("local_trend_sector_proof"),
+        selection_workflow.get("local_trend_sector_proof"),
+    )
     summary_text = str(judgement.get("summary_text") or "")
     fact_basis_text = " ".join(str(item or "") for item in judgement.get("fact_basis") or [])
     index_relation = str(judgement.get("index_profit_relation") or "")
@@ -1546,6 +2125,39 @@ def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
         market_facts["turnover_distribution"] = "成交集中"
     if "结构性行情" in combined_text:
         market_facts["market_form"] = "结构性行情"
+    market_form_parts = []
+    for field in ("rotation_nature", "tomorrow_rhythm"):
+        value = str(judgement.get(field) or "").strip()
+        if value and any(term in value for term in ("轮动", "聚焦", "分化")):
+            market_form_parts.append(value)
+    target_date = str(data.get("target_date") or "").strip()
+    proof_source_date = str(local_trend_sector_proof.get("source_date") or "").strip()
+    proof_date_matches = bool(
+        local_trend_sector_proof.get("source_date_matches_target") is True
+        and target_date
+        and proof_source_date == target_date
+    )
+    competition_state = str(local_trend_sector_proof.get("competition_state") or "").strip()
+    competition_confirmed = bool(
+        local_trend_sector_proof.get("competition_comparison") is True
+        and competition_state
+        in {"强势轮动", "多方向竞争", "双主线竞争", "单主线聚焦", "分化聚焦"}
+    )
+    cross_day_feedback_confirmed = bool(
+        local_trend_sector_proof.get("cross_day_continuity_status") == "confirmed"
+        and local_trend_sector_proof.get("capital_return_status") == "confirmed"
+    )
+    if proof_date_matches and competition_confirmed and cross_day_feedback_confirmed:
+        market_form_parts.append("轮动分化与跨日资金反馈已确认")
+    if market_form_parts:
+        existing_market_form = str(market_facts.get("market_form") or "").strip()
+        market_facts["market_form"] = "；".join(
+            dict.fromkeys(
+                item
+                for item in (existing_market_form, *market_form_parts)
+                if item
+            )
+        )
     if "九宫格" in combined_text or "网格化" in combined_text or "板块格子" in combined_text:
         market_facts["sector_grid"] = "水池九宫格"
     if "先选板块" in combined_text or "板块先行" in combined_text:
@@ -1558,6 +2170,28 @@ def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
             new_high_snapshot,
             str(data.get("target_date") or ""),
         )
+        if (
+            new_high_structure.get("available") is True
+            and new_high_structure.get("target_date_match") is True
+            and new_high_structure.get("sector_data_available") is True
+        ):
+            if new_high_structure.get("sector_fragmented") is True:
+                sector_grid_text = "创新高板块碎片化"
+            elif new_high_structure.get("sector_clustered") is True:
+                sector_grid_text = "创新高板块形成清晰集群"
+            else:
+                sector_grid_text = "创新高板块暂未形成清晰集群"
+            top_sector = str(new_high_structure.get("top_sector") or "").strip()
+            if top_sector:
+                sector_grid_text = f"{sector_grid_text}；头部板块{top_sector}"
+            existing_sector_grid = str(market_facts.get("sector_grid") or "").strip()
+            market_facts["sector_grid"] = "；".join(
+                dict.fromkeys(
+                    item
+                    for item in (existing_sector_grid, sector_grid_text)
+                    if item
+                )
+            )
         if new_high_structure.get("state") in {"扩散断层预警", "扩散收缩", "低位修复"}:
             breadth_text = str(new_high_structure.get("summary") or "").strip()
             if breadth_text:
@@ -2355,6 +2989,7 @@ def _manifest_entry_as_router_entry(entry: Mapping[str, Any]) -> Dict[str, Any]:
         "impact": str(entry.get("decision_effect") or "").strip(),
         "decision_effect": str(entry.get("decision_effect") or "").strip(),
         "decision_scope": str(entry.get("decision_scope") or "").strip(),
+        "available_from": str(entry.get("available_from") or "").strip(),
     }
 
 
@@ -2448,7 +3083,15 @@ def route_llm_wiki_knowledge_trace(
         manifest_entries = [
             _manifest_entry_as_router_entry(entry)
             for entry in manifest_data.get("entries") or []
-            if isinstance(entry, Mapping) and entry.get("available") is True
+            if (
+                isinstance(entry, Mapping)
+                and entry.get("available") is True
+                and (
+                    not str(entry.get("available_from") or "").strip()
+                    or str(entry.get("available_from") or "").strip()
+                    <= normalized_query_date
+                )
+            )
         ]
     ranked_matches = _rank_knowledge_entries(
         routed_facts,
@@ -2519,9 +3162,13 @@ def route_llm_wiki_knowledge(
     *,
     scenario: str = "daily_report",
     limit: int = 3,
+    query_date: str = "",
 ) -> List[Dict[str, Any]]:
     """Return compatibility hits from registered fact roots or a free-text question."""
     if not isinstance(facts, Mapping):
+        return []
+    normalized_query_date = str(query_date or "").strip()
+    if normalized_query_date and not is_iso_calendar_date(normalized_query_date):
         return []
     routed_facts = {
         key: value
@@ -2533,7 +3180,18 @@ def route_llm_wiki_knowledge(
         return []
     ranked_matches = _rank_knowledge_entries(
         routed_facts,
-        entries=KNOWLEDGE_INDEX,
+        entries=[
+            entry
+            for entry in KNOWLEDGE_INDEX
+            if (
+                not str(entry.get("available_from") or "").strip()
+                or (
+                    bool(normalized_query_date)
+                    and str(entry.get("available_from") or "").strip()
+                    <= normalized_query_date
+                )
+            )
+        ],
         scenario=scenario,
     )
     hits = []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -124,6 +125,15 @@ def stable_json_hash(value: Mapping[str, Any], *, excluded_keys: Iterable[str] =
 def is_sha256(value: Any) -> bool:
     text = str(value or "").strip().lower()
     return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
+
+
+def _is_iso_calendar_date(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
 
 
 def _as_string_list(value: Any) -> list[str]:
@@ -260,6 +270,7 @@ def _normalize_entry(
         "report_slots": report_slots,
         "decision_effect": decision_effect,
         "decision_scope": decision_scope,
+        "available_from": str(raw_entry.get("available_from") or "").strip(),
         "source_ref": source_ref,
     }
 
@@ -277,6 +288,13 @@ def _normalize_entry(
         errors.append(f"decision_scope_missing:{knowledge_id or '<missing>'}")
     elif decision_scope not in VALID_DECISION_SCOPES:
         errors.append(f"decision_scope_invalid:{knowledge_id or '<missing>'}:{decision_scope}")
+    if normalized["available_from"] and not _is_iso_calendar_date(
+        normalized["available_from"]
+    ):
+        errors.append(
+            "available_from_invalid:"
+            f"{knowledge_id or '<missing>'}:{normalized['available_from']}"
+        )
     if normalized["kind"] == "knowledge_rule" and not _has_structured_confirmation(normalized):
         errors.append(f"fact_conditions_missing:{knowledge_id or '<missing>'}")
     elif normalized["kind"] == "knowledge_rule":
@@ -563,6 +581,15 @@ def validate_knowledge_manifest(manifest: Any) -> list[str]:
             decision_scope = str(entry.get("decision_scope") or "").strip()
             if decision_scope and decision_scope not in VALID_DECISION_SCOPES:
                 errors.append(f"decision_scope_invalid:{knowledge_id or index}:{decision_scope}")
+            available_from = entry.get("available_from")
+            if available_from not in (None, "") and (
+                not isinstance(available_from, str)
+                or not _is_iso_calendar_date(available_from)
+            ):
+                errors.append(
+                    "available_from_invalid:"
+                    f"{knowledge_id or index}:{available_from}"
+                )
             source_ref = entry.get("source_ref")
             if not isinstance(source_ref, Mapping):
                 errors.append(f"source_ref_missing:{knowledge_id or index}")

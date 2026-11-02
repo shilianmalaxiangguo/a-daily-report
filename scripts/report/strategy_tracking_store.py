@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import os
 
 from daily_report_snapshot_io import _make_serializable
@@ -15,9 +18,25 @@ __all__ = [
     "load_strategy_performance_ledger",
     "save_factor_snapshot",
     "save_strategy_performance_ledger",
+    "strategy_performance_ledger_read_cache",
 ]
 
 _MISSING = object()
+_STRATEGY_PERFORMANCE_LEDGER_READ_CACHE = ContextVar(
+    "strategy_performance_ledger_read_cache",
+    default=None,
+)
+
+
+@contextmanager
+def strategy_performance_ledger_read_cache(cache):
+    token = _STRATEGY_PERFORMANCE_LEDGER_READ_CACHE.set(
+        cache if isinstance(cache, dict) else None
+    )
+    try:
+        yield
+    finally:
+        _STRATEGY_PERFORMANCE_LEDGER_READ_CACHE.reset(token)
 
 
 def _install_runtime_bindings(bindings):
@@ -70,15 +89,24 @@ def _configured_postgres_service():
 def load_strategy_performance_ledger(*, mode="frozen", helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        read_cache = _STRATEGY_PERFORMANCE_LEDGER_READ_CACHE.get()
+        cache_key = ("strategy_performance_ledger.read.v1", str(mode or "frozen"))
+        if isinstance(read_cache, dict) and cache_key in read_cache:
+            return deepcopy(read_cache[cache_key])
         service = _configured_postgres_service()
         if service is not None:
             reader = getattr(service, "load_strategy_performance_ledger", None)
             if callable(reader):
                 result = reader(mode=mode)
                 if isinstance(result, dict):
+                    if isinstance(read_cache, dict):
+                        read_cache[cache_key] = deepcopy(result)
                     return result
             raise RuntimeError("PostgreSQL strategy performance ledger reader is unavailable")
-        return _load_strategy_performance_ledger_legacy_body(mode=mode)
+        result = _load_strategy_performance_ledger_legacy_body(mode=mode)
+        if isinstance(read_cache, dict) and isinstance(result, dict):
+            read_cache[cache_key] = deepcopy(result)
+        return result
     finally:
         _restore_runtime_bindings(previous)
 
@@ -86,13 +114,21 @@ def load_strategy_performance_ledger(*, mode="frozen", helpers=None):
 def save_strategy_performance_ledger(ledger, *, mode="frozen", helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        read_cache = _STRATEGY_PERFORMANCE_LEDGER_READ_CACHE.get()
+        cache_key = ("strategy_performance_ledger.read.v1", str(mode or "frozen"))
         service = _configured_postgres_service()
         if service is not None:
             writer = getattr(service, "save_strategy_performance_ledger", None)
             if callable(writer):
-                return writer(ledger, mode=mode)
+                result = writer(ledger, mode=mode)
+                if isinstance(read_cache, dict):
+                    read_cache.pop(cache_key, None)
+                return result
             raise RuntimeError("PostgreSQL strategy performance ledger writer is unavailable")
-        return _save_strategy_performance_ledger_legacy_body(ledger, mode=mode)
+        result = _save_strategy_performance_ledger_legacy_body(ledger, mode=mode)
+        if isinstance(read_cache, dict):
+            read_cache.pop(cache_key, None)
+        return result
     finally:
         _restore_runtime_bindings(previous)
 

@@ -24,7 +24,10 @@ __all__ = [
     "fetch_tushare_stock_st_rows",
     "fetch_tushare_ths_daily",
     "fetch_tushare_ths_hot",
+    "fetch_tushare_ths_index_history",
     "fetch_tushare_ths_index_map",
+    "fetch_tushare_ths_concept_board",
+    "is_a_share_concept_index",
     "fetch_tushare_ths_member",
     "fetch_tushare_top_inst",
     "fetch_tushare_top_list",
@@ -33,6 +36,12 @@ __all__ = [
 CYBERFININVEST_NEWS_URL = "https://cyberfininvest.com/api/news/list"
 CYBERFININVEST_AUTH_ENV = "CYBERFININVEST_AUTHORIZATION"
 INVESTOR_QA_ENDPOINT_ENV = "INVESTOR_QA_ENDPOINT_URL"
+
+# 同花顺指数分类：I=行业指数，N=概念指数。概念指数此前从未采集。
+THS_CONCEPT_INDEX_TYPE = "N"
+THS_INDUSTRY_INDEX_TYPE = "I"
+# A 股概念指数的代码族；配合 exchange="A" 后正好 390 条，与问财“同花顺概念指数 (390)”一致。
+THS_A_SHARE_CONCEPT_PREFIXES = ("885", "886")
 
 
 def _load_local_env_file():
@@ -303,15 +312,97 @@ def fetch_tushare_ths_daily(trade_date, *, pro=None, ts_module=None):
     return _frame_to_records(pro.ths_daily(trade_date=compact, fields=fields))
 
 
-def fetch_tushare_ths_index_map(*, pro=None, ts_module=None):
+def fetch_tushare_ths_index_map(*, pro=None, ts_module=None, index_type="I"):
     pro = pro or create_tushare_pro_api(ts_module=ts_module)
-    frame = pro.ths_index(type="I")
+    frame = pro.ths_index(type=index_type)
     mapping = {}
     for row in _frame_to_records(frame):
         ts_code = str((row or {}).get("ts_code") or "").strip().upper()
         if ts_code:
             mapping[ts_code] = dict(row or {})
     return mapping
+
+
+def fetch_tushare_ths_index_history(ts_code, start_date, end_date, *, pro=None, ts_module=None):
+    code = str(ts_code or "").strip().upper()
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+    if not code or not start or not end:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,trade_date,close,open,high,low,pre_close,avg_price,change,pct_change,vol,turnover_rate"
+    return _frame_to_records(
+        pro.ths_daily(ts_code=code, start_date=start, end_date=end, fields=fields)
+    )
+
+
+def is_a_share_concept_index(meta, *, index_type=THS_CONCEPT_INDEX_TYPE):
+    """A 股概念指数的判定：type=N、exchange=A、885/886 代码族。
+
+    `ths_index(type="N")` 共 899 条，其中 A 股 395、美股 285（865xxx）、港股 219（875xxx）；
+    883xxx 是沪深300/上证50 等样本股指数，不是概念。取 type=N 背后的 A 股 885/886
+    正好 390 条，与问财“同花顺概念指数 (390)”一致。
+    """
+    meta = meta or {}
+    if str(meta.get("type") or "").strip().upper() != index_type:
+        return False
+    if str(meta.get("exchange") or "").strip().upper() != "A":
+        return False
+    return str(meta.get("ts_code") or "").strip().upper()[:3] in THS_A_SHARE_CONCEPT_PREFIXES
+
+
+def fetch_tushare_ths_concept_board(
+    trade_date,
+    *,
+    index_type=THS_CONCEPT_INDEX_TYPE,
+    index_map=None,
+    daily_rows=None,
+    pro=None,
+    ts_module=None,
+):
+    """A 股概念指数当日榜：只保留 type=N、exchange=A、885/886 的同花顺概念指数。"""
+    mapping = (
+        index_map
+        if index_map is not None
+        else fetch_tushare_ths_index_map(pro=pro, ts_module=ts_module, index_type=index_type)
+    )
+    rows = (
+        daily_rows
+        if daily_rows is not None
+        else fetch_tushare_ths_daily(trade_date, pro=pro, ts_module=ts_module)
+    )
+    board = []
+    for row in rows:
+        ts_code = str((row or {}).get("ts_code") or "").strip().upper()
+        meta = mapping.get(ts_code) or {}
+        if not ts_code or not is_a_share_concept_index(meta, index_type=index_type):
+            continue
+        name = str(meta.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            change = float(row.get("pct_change"))
+        except (TypeError, ValueError):
+            continue
+        board.append({
+            "ts_code": ts_code,
+            "name": name,
+            "pct_change": round(change, 4),
+            "close": _number_or_none(row.get("close")),
+            "turnover_rate": _number_or_none(row.get("turnover_rate")),
+            "trade_date": str(row.get("trade_date") or "").strip(),
+        })
+    board.sort(key=lambda item: (-item["pct_change"], item["ts_code"]))
+    for index, item in enumerate(board, start=1):
+        item["rank"] = index
+    return board
+
+
+def _number_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def fetch_tushare_ths_member(ts_code, *, pro=None, ts_module=None):
@@ -419,6 +510,9 @@ def fetch_tushare_open_trade_dates(start_date, end_date, *, exchange="SSE", pro=
     rows = _frame_to_records(pro.trade_cal(exchange=exchange, start_date=start, end_date=end, is_open="1"))
     dates = []
     for row in rows:
+        is_open = (row or {}).get("is_open")
+        if str(is_open).strip().lower() not in {"1", "1.0", "true"}:
+            continue
         cal_date = _compact_date((row or {}).get("cal_date"))
         if cal_date:
             dates.append(f"{cal_date[:4]}-{cal_date[4:6]}-{cal_date[6:8]}")

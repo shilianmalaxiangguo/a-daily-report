@@ -258,6 +258,12 @@ def build_margin_pressure_snapshot(
     usage_note = "融资余额是杠杆存量，两市成交额是承接流量；融资余额上升、成交额下降时，市场承接压力加重。"
     if is_stale_for_target:
         usage_note = f"{usage_note} 本项数据截至{latest_date}，较目标日{target_date}滞后{stale_trade_days}个交易日。"
+    normalized_trade_dates = sorted({
+        normalize_kline_date_str(value)
+        for value in (trade_dates or [])
+        if normalize_kline_date_str(value)
+        and latest_date <= normalize_kline_date_str(value) <= target_date
+    })
     return {
         "available": True,
         "status": "success",
@@ -270,6 +276,7 @@ def build_margin_pressure_snapshot(
         "target_date": target_date,
         "is_stale_for_target": is_stale_for_target,
         "stale_trade_days": stale_trade_days,
+        **({"trade_dates": normalized_trade_dates} if normalized_trade_dates else {}),
         "latest_margin_turnover_ratio_pct": latest_ratio,
         "latest_pressure_diff_pct": _safe_float(latest.get("pressure_diff_pct")),
         "summary": summary,

@@ -4,9 +4,15 @@ from domains.market_activity.new_high_structure import (
     build_new_high_structure_signal,
     classify_new_high_breadth_level,
 )
+from domains.market_activity.limit_pool_facts import (
+    format_limit_count,
+    resolve_limit_down_count,
+    resolve_limit_up_count,
+)
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
 from domains.market_state.two_market_turnover.node_registry import build_two_market_turnover_node_specs
 from domains.market_state.two_market_turnover.node_runtime import run_two_market_turnover_nodes
+from domains.market_state.two_market_turnover.nodes import build_turnover_comparison
 from market_data.kline_dates import parse_kline_date
 from report.market_overview_node_registry import build_market_overview_node_specs
 from report.market_overview_node_runtime import run_market_overview_nodes
@@ -196,6 +202,25 @@ def evaluate_turnover_quality(market_data):
     else:
         # 如果下跌家数为0，说明全部上涨，涨跌比视为无穷大
         rise_fall_ratio = float('inf')
+
+    target_date = str(market_data.get("target_date") or market_data.get("date") or "").strip()
+    comparison = build_turnover_comparison(market_data, target_date)
+    previous_change_pct = comparison.get("previous_change_pct")
+    if previous_change_pct is not None and abs(previous_change_pct) >= 3:
+        if previous_change_pct > 0:
+            if rise_fall_ratio > 0.5:
+                return {
+                    "turnover_quality": "做多放量",
+                    "turnover_quality_desc": f"成交额较前一交易日放大{previous_change_pct:.2f}%，上涨家数占优",
+                }
+            return {
+                "turnover_quality": "杀跌放量",
+                "turnover_quality_desc": f"成交额较前一交易日放大{previous_change_pct:.2f}%，但上涨家数不足",
+            }
+        return {
+            "turnover_quality": "缩量",
+            "turnover_quality_desc": f"成交额较前一交易日回落{abs(previous_change_pct):.2f}%",
+        }
 
     # 判断成交量质量
     if total_turnover > 30000:
@@ -1196,8 +1221,8 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
             trend = _index_trend_label(csi1000, change)
             lines.append(f"| 中证1000 | {point:.2f} | {change:+.2f}% | {trend} |")
     turnover = float(_resolve_total_turnover(data) or 0)
-    zt_count = len(data.get("zt_pool", []))
-    dt_count = len(data.get("dt_pool", []))
+    zt_count = resolve_limit_up_count(data)
+    dt_count = resolve_limit_down_count(data)
     up_count, down_count = _resolve_breadth_counts(data)
     top50_share = resolve_top50_turnover_share(data)
     top20_capacity = resolve_top20_turnover_capacity(data)
@@ -1234,7 +1259,16 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         f"| 融资承接压力 | {_margin_pressure_summary(margin_pressure)} | - | "
         f"{_append_sentence(_margin_pressure_basis(margin_pressure, target_date), _margin_pressure_usage_note(margin_pressure, target_date))} |"
     )
-    lines.append(f"| 涨停 / 跌停 | {zt_count} / {dt_count} | - | {'活跃度还在，但亏钱端不轻' if dt_count >= 3 else '情绪尚可'} |")
+    limit_pool_note = (
+        "跌停事实待确认"
+        if dt_count is None
+        else "活跃度还在，但亏钱端不轻"
+        if dt_count >= 3
+        else "情绪尚可"
+    )
+    lines.append(
+        f"| 涨停 / 跌停 | {format_limit_count(zt_count)} / {format_limit_count(dt_count)} | - | {limit_pool_note} |"
+    )
     lines.append(f"| 涨跌比 | {up_count:g} / {down_count:g} | - | {'下跌家数偏多，底色偏防守' if down_count > up_count else '多头仍占优'} |")
     lines.append("")
     top50_trend_rows = resolve_top50_turnover_share_trend_rows(data, _target_date(context))
@@ -1370,13 +1404,36 @@ def build_market_overview_new_high_node(context, node_meta=None, node_lookup=Non
             "|------|--------|---------|------|--------|----------|",
         ]
     )
+    unresolved_sector_rows = []
     for row in _display_latest_first(snapshot.get("trend_rows", []) or []):
+        new_high_count = int(_safe_float(row.get("new_high_count")))
+        leading_sectors = str(row.get("leading_sectors") or "").strip()
+        if new_high_count <= 0:
+            leading_sectors = "无阶段新高"
+        elif (
+            not leading_sectors
+            or leading_sectors in {"待补充板块", "板块归属事实不足", "缺少逐股板块映射"}
+        ):
+            unresolved_sector_rows.append((str(row.get("trade_date") or "").strip(), new_high_count))
+            leading_sectors = "未判定*"
         lines.append(
-            f"| {row.get('trade_date', '')} | {int(_safe_float(row.get('new_high_count')))} | "
+            f"| {row.get('trade_date', '')} | {new_high_count} | "
             f"{_format_pct(row.get('all_a_share_pct'))} | "
             f"{_new_high_regime_signal(row.get('all_a_share_pct'), row.get('new_high_count'))} | "
             f"{row.get('change_text', '待累计')} | "
-            f"{row.get('leading_sectors', '待补充板块')} |"
+            f"{leading_sectors} |"
+        )
+    if unresolved_sector_rows:
+        unresolved_text = "、".join(
+            f"{trade_date}（{count}只）"
+            for trade_date, count in unresolved_sector_rows
+            if trade_date
+        )
+        lines.extend(
+            [
+                "",
+                f"> *板块分布未判定：{unresolved_text}的逐股行业映射未冻结；这些日期不参与领头板块比较。",
+            ]
         )
 
     lines.extend(

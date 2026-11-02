@@ -1,3 +1,6 @@
+from time import monotonic
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -25,7 +28,13 @@ def build_pk_decision_node_lookup(node_specs):
     return lookup
 
 
-def run_pk_decision_nodes(node_specs, node_context=None, node_lookup=None):
+def run_pk_decision_nodes(
+    node_specs,
+    node_context=None,
+    node_lookup=None,
+    *,
+    capture_timings=False,
+):
     node_specs = list(node_specs or [])
     node_lookup = node_lookup or build_pk_decision_node_lookup(node_specs)
     current_context = dict(node_context or {})
@@ -33,6 +42,7 @@ def run_pk_decision_nodes(node_specs, node_context=None, node_lookup=None):
     aggregated_logs = []
     node_outputs = {}
     executed_nodes = []
+    node_timing_rows = []
 
     for spec in node_specs:
         node_key = str(spec.get("node_key", "") or "").strip()
@@ -48,6 +58,7 @@ def run_pk_decision_nodes(node_specs, node_context=None, node_lookup=None):
                 "node_no": len(executed_nodes),
             }
 
+        node_started_at = monotonic() if capture_timings else None
         try:
             result = builder(current_context, node_meta, node_lookup) or {}
         except Exception as error:
@@ -60,6 +71,15 @@ def run_pk_decision_nodes(node_specs, node_context=None, node_lookup=None):
                 error=str(error),
             )
             raise
+
+        if node_started_at is not None:
+            node_timing_rows.append(
+                {
+                    "node_key": node_key,
+                    "phase": str(node_meta.get("title", "") or node_key),
+                    "elapsed_seconds": max(0.0, monotonic() - node_started_at),
+                }
+            )
 
         lines = list(result.get("lines") or [])
         exports = dict(result.get("exports") or {})
@@ -87,4 +107,5 @@ def run_pk_decision_nodes(node_specs, node_context=None, node_lookup=None):
         "node_outputs": node_outputs,
         "node_lookup": node_lookup,
         "nodes": executed_nodes,
+        "node_timing_rows": node_timing_rows,
     }

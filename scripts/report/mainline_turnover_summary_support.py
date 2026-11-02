@@ -100,6 +100,43 @@ def resolve_mainline_attack_evidence_summary(context=None):
     }
 
 
+def resolve_unconfirmed_mainline_summary(context=None):
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    if not attack_summary or attack_summary.get("attack_state") == "confirmed_attack":
+        return {}
+
+    candidate_lines = _directional_string_list(attack_summary.get("candidate_lines"))
+    candidate_text = "、".join(candidate_lines)
+    evidence = str(
+        attack_summary.get("confirmation_evidence")
+        or "资金未形成明确进攻方向"
+    ).strip()
+    cycle_label = "未形成跨日胜出方向"
+    daily_label = (
+        f"{candidate_text}均未胜出"
+        if candidate_text
+        else "当日资金未形成明确进攻方向"
+    )
+    competition_summary = (
+        f"候选方向：{candidate_text}；{evidence}"
+        if candidate_text
+        else evidence
+    )
+    return {
+        "candidate_lines": candidate_lines,
+        "candidate_text": candidate_text,
+        "cycle_label": cycle_label,
+        "daily_label": daily_label,
+        "headline": (
+            f"{cycle_label}（候选：{candidate_text}）"
+            if candidate_text
+            else cycle_label
+        ),
+        "evidence": evidence,
+        "competition_summary": competition_summary,
+    }
+
+
 def _format_rank(value):
     try:
         rank = int(float(value))
@@ -344,6 +381,7 @@ def resolve_mainline_attack_evidence_rows(context=None, limit=3):
                 "net_inflow_rank": _format_rank(_row_value(row, "net_inflow_rank")),
                 "net_inflow_amount": _format_signed_amount_yi(_row_value(row, "net_inflow_amount")),
                 "limit_up_count": _format_plain_count(_row_value(row, "limit_up_count")),
+                "high_anchor_name": str(_row_value(row, "high_anchor_name") or "").strip(),
                 "high_anchor_height": _format_plain_count(_row_value(row, "high_anchor_height")),
                 "turnover_share_change": _format_signed_pct_change(_row_value(row, "turnover_share_change")),
                 "conclusion": _attack_row_conclusion(source, row, state_label),

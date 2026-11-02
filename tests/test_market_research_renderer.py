@@ -200,7 +200,7 @@ class MarketResearchRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证-2.04% / 涨停0 / 跌停0 / 涨跌比暂无 / 成交额35073亿 |", rendered)
+        self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证-2.04% / 涨停0 / 跌停待确认 / 涨跌比暂无 / 成交额35073亿 |", rendered)
 
     def test_render_market_research_snapshot_section_renders_cycle_interpretation_table(self):
         lines = render_market_research_snapshot_section(

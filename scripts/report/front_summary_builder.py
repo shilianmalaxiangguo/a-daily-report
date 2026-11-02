@@ -126,13 +126,18 @@ def render_core_mvp_digest_contract(
         fallback_mainline=exit_analysis.get("sector_name", ""),
     )
     overall_level = exit_analysis.get("overall_level", "未知")
-    dt_count = observation.get("dt_count", 0)
+    dt_count = observation.get("dt_count")
+    dt_count_text = (
+        "待确认"
+        if observation.get("dt_count_available") is False or dt_count is None
+        else f"{dt_count}只"
+    )
     front_high_board_count = max(
         int(safe_float(high_board_count)),
         int(safe_float(style_switch.get("high_board_count", 0))),
     )
     risk_parts = [f"主线状态{overall_level}"]
-    risk_parts.append(f"跌停{dt_count}只")
+    risk_parts.append(f"跌停{dt_count_text}")
     risk_parts.append(f"高位连板{front_high_board_count}只")
     front_follow_action_text = str(front_follow_action_text or final_gate.get("final_action", position_reason) or "").strip()
     can_open_text = str(structure_layer_text or follow_verdict.get("label", position_level) or "").strip()

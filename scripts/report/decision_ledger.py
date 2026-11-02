@@ -2182,6 +2182,11 @@ def build_decision_ledger_index(snapshot, previous_index=None):
         "available_trade_dates": sorted(available_dates),
         "snapshots": snapshots,
         "by_stock_code": by_stock_code,
+        "daily_judgment_reviews": [
+            dict(item)
+            for item in list(previous_index.get("daily_judgment_reviews") or [])
+            if isinstance(item, dict)
+        ],
         "extreme_conviction_backtest_rows": build_extreme_conviction_backtest_rows(
             {"by_stock_code": by_stock_code},
             max_rows=25,
@@ -3432,6 +3437,72 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12, final_action=N
     return rows[:max_rows]
 
 
+_BACKTEST_GAP_LABELS = {
+    "return_1d_pct": "后续1日表现",
+    "return_3d_pct": "后续3日表现",
+    "return_5d_pct": "后续5日表现",
+    "max_drawdown_5d_pct": "5日最大回撤",
+    "price_source_date": "价格来源日期",
+}
+
+
+def _backtest_row_gap_items(row):
+    row = row or {}
+    gaps = []
+    for field in _PERFORMANCE_FIELDS:
+        if row.get(field) is None:
+            gaps.append(_BACKTEST_GAP_LABELS[field])
+    if not _clean_text(
+        row.get("price_source_date")
+        or (row.get("source_dates") or {}).get("price_source_date")
+    ):
+        gaps.append(_BACKTEST_GAP_LABELS["price_source_date"])
+    if _clean_text(row.get("buy_point_quality")) in {"", "待补事实"}:
+        gaps.append("观察位质量复盘")
+    if _clean_text(row.get("review_status")) in _WAITING_REVIEW_STATUSES:
+        gaps.append("执行复盘")
+    return list(dict.fromkeys(gaps))
+
+
+def _backtest_row_is_settled(row):
+    return not _backtest_row_gap_items(row)
+
+
+def _backtest_progress_text(row):
+    row = row or {}
+    parts = []
+    if row.get("is_final_execution_target"):
+        parts.append("样本=明日执行对象")
+    else:
+        selection_quality = _clean_text(row.get("selection_quality"))
+        if selection_quality:
+            parts.append(f"样本={selection_quality}")
+    selection_result_status = _clean_text(row.get("selection_result_status"))
+    if selection_result_status:
+        parts.append(f"识别={selection_result_status}")
+    buy_point_quality = _clean_text(row.get("buy_point_quality"))
+    if buy_point_quality and buy_point_quality != "待补事实":
+        parts.append(f"观察位={buy_point_quality}")
+    review_status = _clean_text(row.get("review_status"))
+    if review_status and review_status not in _WAITING_REVIEW_STATUSES:
+        parts.append(f"执行复盘={review_status}")
+    for field, label in (
+        ("return_1d_pct", "后续1日"),
+        ("return_3d_pct", "后续3日"),
+        ("return_5d_pct", "后续5日"),
+        ("max_drawdown_5d_pct", "5日最大回撤"),
+    ):
+        if row.get(field) is not None:
+            parts.append(f"{label}={_format_performance_pct(row.get(field))}")
+    price_source_date = _clean_text(
+        row.get("price_source_date")
+        or (row.get("source_dates") or {}).get("price_source_date")
+    )
+    if price_source_date:
+        parts.append(f"价格来源日={price_source_date}")
+    return "；".join(parts) or "已保存入选记录，等待计划窗口复盘"
+
+
 def render_extreme_conviction_backtest_lines(index, *, max_rows=12, final_action=None):
     rows = build_extreme_conviction_backtest_rows(index, max_rows=max_rows, final_action=final_action)
     final_target = _final_execution_target_from_action(final_action)
@@ -3445,11 +3516,17 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12, final_action
     lines.append(_format_backtest_coverage_summary_line(summary, max_rows=max_rows))
     lines.append("> 历史回测表仅记录过去预演，不作为明日新增参与依据。")
     lines.append("")
-    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |")
-    lines.append("|--------|------|------|----------|----------|----------|--------|----------|----------|----------|----------|----------|------------|----------|----------|----------|")
-    for row in rows:
+    settled_rows = [row for row in rows if _backtest_row_is_settled(row)]
+    pending_rows = [row for row in rows if not _backtest_row_is_settled(row)]
+    lines.append("**已完成结算明细**")
+    if not settled_rows:
+        lines.append("- 当前展示范围内暂无完成全部观察窗口结算的样本。")
+    else:
+        lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 历史标准动作 |")
+        lines.append("|--------|------|------|----------|----------|----------|--------|----------|----------|----------|----------|----------|------------|----------|----------|")
+    for row in settled_rows:
         lines.append(
-            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {selection_result_status} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {return_1d_pct} | {return_3d_pct} | {return_5d_pct} | {max_drawdown_5d_pct} | {price_source_date} | {missing_fields} | {standard_action} |".format(
+            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {selection_result_status} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {return_1d_pct} | {return_3d_pct} | {return_5d_pct} | {max_drawdown_5d_pct} | {price_source_date} | {standard_action} |".format(
                 mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
                 stock_name=_clean_markdown_cell(row.get("stock_name")),
                 stock_code=_clean_markdown_cell(row.get("stock_code")),
@@ -3467,8 +3544,7 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12, final_action
                 return_3d_pct=_clean_markdown_cell(_format_performance_pct(row.get("return_3d_pct"))),
                 return_5d_pct=_clean_markdown_cell(_format_performance_pct(row.get("return_5d_pct"))),
                 max_drawdown_5d_pct=_clean_markdown_cell(_format_performance_pct(row.get("max_drawdown_5d_pct"))),
-                price_source_date=_clean_markdown_cell(row.get("price_source_date") or (row.get("source_dates") or {}).get("price_source_date") or "待补事实"),
-                missing_fields=_clean_markdown_cell(_performance_missing_text(row.get("missing_fields"))),
+                price_source_date=_clean_markdown_cell(row.get("price_source_date") or (row.get("source_dates") or {}).get("price_source_date")),
                 standard_action=_clean_markdown_cell(
                     _final_execution_history_action(final_target)
                     if row.get("is_final_execution_target")
@@ -3476,6 +3552,25 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12, final_action
                 ),
             )
         )
+    if pending_rows:
+        lines.append("")
+        lines.append("**未完成结算摘要**")
+        lines.append("| 入选日 | 股票 | 代码 | 观察位窗口 | 已有进度 | 尚缺 |")
+        lines.append("|--------|------|------|------------|----------|------|")
+        for row in pending_rows:
+            buy_window = _clean_text(row.get("buy_window"))
+            if not buy_window or buy_window.lower() == "none":
+                buy_window = "未记录固定窗口"
+            lines.append(
+                "| {mention_trade_date} | {stock_name} | {stock_code} | {buy_window} | {progress} | {gaps} |".format(
+                    mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
+                    stock_name=_clean_markdown_cell(row.get("stock_name")),
+                    stock_code=_clean_markdown_cell(row.get("stock_code")),
+                    buy_window=_clean_markdown_cell(buy_window),
+                    progress=_clean_markdown_cell(_backtest_progress_text(row)),
+                    gaps=_clean_markdown_cell("、".join(_backtest_row_gap_items(row))),
+                )
+            )
     lines.append("")
     return lines
 
@@ -3494,6 +3589,33 @@ def _report_paths_for_trade_date(root, trade_date):
         root / "reports" / "replay" / f"{trade_date}_A股日报_完整版_replay.md",
         root / "reports" / f"{trade_date}_A股日报_完整版.md",
     ]
+
+
+def _previous_trade_date_from_reports(root, trade_date):
+    root = Path(root)
+    trade_date = _clean_text(trade_date)
+    dates = []
+    patterns = (
+        (root / "reports", "*_A股日报_完整版.md"),
+        (root / "reports" / "replay", "*_A股日报_完整版_replay.md"),
+    )
+    for directory, pattern in patterns:
+        if not directory.exists():
+            continue
+        for path in directory.glob(pattern):
+            match = re.match(r"^(\d{4}-\d{2}-\d{2})_", path.name)
+            if match and match.group(1) < trade_date:
+                dates.append(match.group(1))
+    return max(dates) if dates else ""
+
+
+def _previous_trade_date_for_judgment_review(index, root, trade_date):
+    candidates = [
+        _previous_trade_date_from_index(index, trade_date),
+        _previous_trade_date_from_reports(root, trade_date),
+    ]
+    candidates = [item for item in candidates if item]
+    return max(candidates) if candidates else ""
 
 
 def _load_markdown_text(path):
@@ -3525,7 +3647,11 @@ def _parse_today_judgments_from_markdown(markdown):
     in_today_section = False
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("### ") and "今日判断" in stripped:
+        is_today_heading = "今日判断" in stripped and (
+            stripped.startswith("### ")
+            or (stripped.startswith("**") and stripped.endswith("**"))
+        )
+        if is_today_heading:
             in_today_section = True
             continue
         if in_today_section and stripped.startswith("### "):
@@ -3584,7 +3710,7 @@ def _normalize_market_state_bucket(value):
         return "退潮"
     if "修复" in text:
         return "修复"
-    if any(token in text for token in ("进攻", "爆发", "主升", "扩张", "expand")):
+    if any(token in text for token in ("进攻", "加速", "爆发", "主升", "扩张", "expand")):
         return "进攻"
     if any(token in text for token in ("混沌", "轮动", "无确认主线", "多方向")):
         return "混沌"
@@ -4153,38 +4279,122 @@ def _merge_judgment_reviews(record, reviews):
     return merged
 
 
-def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, root, snapshot, review_market_facts_by_stock_code=None):
-    previous_index = previous_index or {}
-    previous_date = _previous_trade_date_from_index(previous_index, trade_date)
+def _judgment_review_slot(review):
+    return (
+        _clean_text((review or {}).get("judgment_type")),
+        _review_report_date(review),
+    )
+
+
+def _load_daily_judgment_reviews_for_target(
+    index,
+    trade_date,
+    root,
+    snapshot,
+    *,
+    snapshot_data=None,
+    review_market_facts_by_stock_code=None,
+):
+    previous_date = _previous_trade_date_for_judgment_review(index, root, trade_date)
     if not previous_date:
-        return previous_index
+        return "", []
     previous_judgments = _load_previous_today_judgments(root, previous_date)
     if not previous_judgments:
-        return previous_index
-    snapshot_data = _load_snapshot_data_for_trade_date(root, trade_date)
-    if not snapshot_data:
-        return previous_index
+        return previous_date, []
+    current_snapshot_data = (
+        snapshot_data
+        if isinstance(snapshot_data, dict) and snapshot_data
+        else _load_snapshot_data_for_trade_date(root, trade_date)
+    )
+    if not current_snapshot_data:
+        return previous_date, []
     candidate_review_facts = _merge_candidate_review_facts(
-        _existing_participation_review_facts_by_stock_code(previous_index, previous_date, trade_date),
+        _existing_participation_review_facts_by_stock_code(index, previous_date, trade_date),
         review_market_facts_by_stock_code,
     )
-    reviews = _build_daily_judgment_reviews(
+    return previous_date, _build_daily_judgment_reviews(
         previous_judgments,
-        snapshot_data,
+        current_snapshot_data,
         snapshot,
         previous_date,
         trade_date,
         review_market_facts_by_stock_code=candidate_review_facts,
+    )
+
+
+def refresh_daily_judgment_reviews_for_display(
+    index,
+    *,
+    trade_date,
+    root_dir,
+    snapshot_data=None,
+    snapshot=None,
+    review_market_facts_by_stock_code=None,
+):
+    index = _sanitize_decision_ledger_index(index or {})
+    previous_date, reviews = _load_daily_judgment_reviews_for_target(
+        index,
+        trade_date,
+        Path(root_dir),
+        snapshot or {},
+        snapshot_data=snapshot_data,
+        review_market_facts_by_stock_code=review_market_facts_by_stock_code,
+    )
+    if not previous_date:
+        return index
+
+    updated = dict(index)
+    available_dates = set(updated.get("available_trade_dates") or [])
+    available_dates.add(previous_date)
+    if trade_date:
+        available_dates.add(_clean_text(trade_date))
+    updated["available_trade_dates"] = sorted(item for item in available_dates if item)
+    if not reviews:
+        return updated
+
+    record_slots = {
+        _judgment_review_slot(review)
+        for records in (updated.get("by_stock_code") or {}).values()
+        for record in list(records or [])
+        for review in list((record or {}).get("judgment_reviews") or [])
+        if isinstance(review, dict)
+    }
+    new_reviews = [
+        dict(review)
+        for review in reviews
+        if _judgment_review_slot(review) not in record_slots
+    ]
+    replacement_slots = {_judgment_review_slot(review) for review in new_reviews}
+    existing = [
+        dict(review)
+        for review in list(updated.get("daily_judgment_reviews") or [])
+        if isinstance(review, dict)
+        and _judgment_review_slot(review) not in replacement_slots
+    ]
+    updated["daily_judgment_reviews"] = existing + new_reviews
+    return updated
+
+
+def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, root, snapshot, review_market_facts_by_stock_code=None):
+    previous_index = previous_index or {}
+    previous_date, reviews = _load_daily_judgment_reviews_for_target(
+        previous_index,
+        trade_date,
+        root,
+        snapshot,
+        review_market_facts_by_stock_code=review_market_facts_by_stock_code,
     )
     if not reviews:
         return previous_index
 
     updated_index = dict(previous_index)
     updated_by_stock_code = {}
+    attached = False
     for code, records in (previous_index.get("by_stock_code") or {}).items():
         updated_records = []
         for record in list(records or []):
             if _record_has_extreme_mention_on_date(record, previous_date):
+                attached = True
                 updated_records.append(
                     {
                         **record,
@@ -4196,6 +4406,18 @@ def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, 
                 updated_records.append(record)
         updated_by_stock_code[code] = updated_records
     updated_index["by_stock_code"] = updated_by_stock_code
+    available_dates = set(updated_index.get("available_trade_dates") or [])
+    available_dates.add(previous_date)
+    updated_index["available_trade_dates"] = sorted(item for item in available_dates if item)
+    if not attached:
+        updated_index = refresh_daily_judgment_reviews_for_display(
+            updated_index,
+            trade_date=trade_date,
+            root_dir=root,
+            snapshot_data=_load_snapshot_data_for_trade_date(root, trade_date),
+            snapshot=snapshot,
+            review_market_facts_by_stock_code=review_market_facts_by_stock_code,
+        )
     return updated_index
 
 
@@ -4269,6 +4491,7 @@ def write_decision_ledger_artifacts(
     database_service=None,
     write_json_archive=True,
     write_decision_revision=True,
+    allow_postgres=True,
 ):
     root = Path(root_dir)
     snapshot = _sanitize_decision_ledger_snapshot(snapshot or {})
@@ -4278,8 +4501,8 @@ def write_decision_ledger_artifacts(
     index_path = ledger_dir / "index.json"
     previous_same_day_snapshot = _sanitize_decision_ledger_snapshot(_read_json_if_exists(snapshot_path))
     previous_index = {}
-    service = database_service
-    postgres_required = _postgres_storage_required()
+    service = database_service if allow_postgres else None
+    postgres_required = bool(allow_postgres and _postgres_storage_required())
     if service is None and postgres_required:
         try:
             from storage.database_service import DatabaseService

@@ -309,6 +309,41 @@ class ShIndexChanlunHtmlTest(unittest.TestCase):
             self.assertIn("明日抉择", text)
             self.assertIn("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", text)
 
+    def test_save_report_reuses_pre_rendered_html_without_rerunning_analysis(self):
+        def unexpected_runner(*_args, **_kwargs):
+            raise AssertionError("已核验 HTML 保存时不应重新获取指数数据")
+
+        with TemporaryDirectory() as tempdir:
+            rendered_html = "<!doctype html><html><body>已核验</body></html>"
+            written_path = save_sh_index_chanlun_html_report(
+                "2026-05-21",
+                root=Path(tempdir),
+                runner=unexpected_runner,
+                rendered_html=rendered_html,
+            )
+
+            self.assertEqual(written_path.read_text(encoding="utf-8"), rendered_html)
+
+    def test_replay_report_writes_chanlun_html_beside_replay_markdown_links(self):
+        def fake_runner(_target_date, _index_code):
+            return _sample_market_zhongshu(), _sample_rows()
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            replay_report_root = root / "reports" / "replay"
+            written_path = save_sh_index_chanlun_html_report(
+                "2026-05-19",
+                root=root,
+                output_root=replay_report_root,
+                runner=fake_runner,
+            )
+
+            relative_link = Path("chanlun-html/2026-05-19_上证指数缠论.html")
+            replay_report_path = replay_report_root / "2026-05-19_A股日报_完整版_replay.md"
+            self.assertEqual(written_path, replay_report_path.parent / relative_link)
+            self.assertTrue(written_path.is_file())
+            self.assertFalse(build_sh_index_chanlun_html_path("2026-05-19", root=root).exists())
+
     def test_zero_position_tomorrow_decision_final_action_mentions_no_participation(self):
         payload = {
             "date": "2026-05-21",

@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 	<head>
 	  <meta charset="utf-8">
+	  <meta name="viewport" content="width=device-width, initial-scale=1">
 	  <title>$title</title>
 	  <style>
 	    :root {
@@ -29,6 +30,7 @@
 	      --signal-ice: #2364aa;
 	      --signal-deep-ice: #12365a;
 	      --signal-green: #176e54;
+	      --signal-fluorescent-purple: #B000FF;
 	      --signal-green-soft: rgba(224, 245, 235, 0.8);
 	      --reader-cream: #fffaf3;
 	      --reader-glass: rgba(255, 255, 255, 0.58);
@@ -218,7 +220,8 @@
 	      line-height: 1.45;
 	    }
 
-    .outline-nav {
+    .outline-nav,
+    .mobile-nav {
       display: grid;
       gap: 4px;
     }
@@ -290,8 +293,10 @@
 	      padding: 38px clamp(18px, 3vw, 34px) 88px;
 	    }
 
-	    .bear-shell.is-outline-collapsed .reader-document {
-	      max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width));
+	    @media (min-width: 761px) {
+	      .bear-shell.is-outline-collapsed .reader-document {
+	        max-width: calc(var(--editor-width) + var(--outline-rail-width) - var(--outline-toggle-rail-width));
+	      }
 	    }
 
 	    .reader-header {
@@ -351,6 +356,87 @@
 	      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
 	      font-size: 14px;
 	      font-weight: 800;
+	    }
+
+    .mobile-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+	    .mobile-nav a {
+	      display: inline-flex;
+	      min-height: 34px;
+	      align-items: center;
+	      border: 1px solid rgba(231, 57, 34, 0.16);
+	      border-radius: 999px;
+	      padding: 5px 12px;
+	      color: var(--reader-muted);
+	      background: rgba(255, 252, 246, 0.74);
+	      font-size: 14px;
+	      font-weight: 800;
+	    }
+
+    .mobile-nav a.level-3 {
+      display: none;
+    }
+
+    .mobile-nav-appendix {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+
+    .mobile-nav-appendix > summary {
+      display: inline-flex;
+      min-height: 34px;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(231, 57, 34, 0.16);
+      border-radius: 999px;
+      padding: 5px 12px;
+      color: var(--reader-muted);
+      background: rgba(255, 252, 246, 0.74);
+      cursor: pointer;
+      list-style: none;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .mobile-nav-appendix > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .mobile-nav-appendix > summary::before {
+      content: "+";
+      color: var(--accent-soft-text);
+    }
+
+    .mobile-nav-appendix[open] > summary::before {
+      content: "-";
+    }
+
+    .mobile-nav-appendix > summary small {
+      color: var(--reader-muted-soft);
+      font-size: 11px;
+    }
+
+    .mobile-nav-appendix-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding-top: 8px;
+    }
+
+    .mobile-nav-appendix-links a.level-3 {
+      display: inline-flex;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+	    .mobile-nav a:hover {
+	      border-color: var(--accent-red);
+	      color: var(--accent);
 	    }
 
     .markdown-body h1,
@@ -481,9 +567,11 @@
 	      background: var(--reader-surface);
 	      color: var(--reader-text);
 	      font-family: "Menlo-Regular", Menlo, Consolas, monospace;
-      font-size: 0.91em;
+	      font-size: 0.91em;
       font-weight: 400;
       font-style: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
 	    .markdown-body code.stock-ref {
@@ -616,6 +704,7 @@
 	      border: 1px solid var(--reader-line);
 	      border-radius: 6px;
 	      box-sizing: border-box;
+	      -webkit-overflow-scrolling: touch;
 	    }
 
 	    .tomorrow-action-calendar-table {
@@ -833,6 +922,238 @@
 	      text-align: center;
 	    }
 
+	    .position-dual-cluster {
+	      max-width: 100%;
+	      margin: 0 0 14px;
+	      overflow: hidden;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 84%, #ffffff);
+	      border-radius: 20px;
+	      background: rgba(255, 252, 246, 0.84);
+	      box-shadow: 0 14px 30px rgba(104, 56, 24, 0.055);
+	    }
+
+	    .position-dual-cluster-head {
+	      display: flex;
+	      align-items: flex-end;
+	      justify-content: space-between;
+	      gap: 18px;
+	      padding: 16px 18px 14px;
+	      border-bottom: 1px solid var(--reader-line);
+	    }
+
+	    .position-dual-cluster-head span {
+	      color: var(--accent-red);
+	      font-size: 11px;
+	      font-weight: 900;
+	      letter-spacing: 0.08em;
+	    }
+
+	    .position-dual-cluster-head h4 {
+	      margin: 3px 0 0;
+	      color: var(--reader-heading);
+	      font-size: 17px;
+	    }
+
+	    .position-dual-cluster-head p {
+	      max-width: 440px;
+	      margin: 0;
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	      text-align: right;
+	    }
+
+	    .position-dual-cluster-scroll {
+	      max-width: 100%;
+	      overflow-x: auto;
+	      -webkit-overflow-scrolling: touch;
+	    }
+
+	    .position-dual-cluster-table {
+	      width: 100%;
+	      min-width: 1180px;
+	      border: 0;
+	      border-radius: 0;
+	      border-collapse: separate;
+	      border-spacing: 0;
+	      table-layout: fixed;
+	      overflow: visible;
+	      font-size: 12px;
+	      line-height: 1.45;
+	    }
+
+	    .position-dual-cluster-table th,
+	    .position-dual-cluster-table td {
+	      min-width: 0;
+	      padding: 12px;
+	      border-right: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	      overflow-wrap: anywhere;
+	      vertical-align: top;
+	    }
+
+	    .position-dual-cluster-table th:first-child {
+	      width: 132px;
+	    }
+
+	    .position-dual-cluster-table th:last-child,
+	    .position-dual-cluster-table td:last-child {
+	      border-right: 0;
+	    }
+
+	    .position-dual-cluster-table tbody tr:last-child > * {
+	      border-bottom: 0;
+	    }
+
+	    .position-dual-cluster-table thead th {
+	      background: color-mix(in srgb, var(--reader-heading) 5%, #ffffff);
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	      text-align: left;
+	    }
+
+	    .position-dual-cluster-table tbody th {
+	      background: color-mix(in srgb, var(--reader-heading) 3%, #ffffff);
+	      color: var(--reader-heading);
+	    }
+
+	    .position-dual-cluster-table tbody th strong,
+	    .position-dual-cluster-table tbody th small {
+	      display: block;
+	      margin-top: 4px;
+	    }
+
+	    .position-dual-cluster-table tbody th small {
+	      color: var(--reader-muted-soft);
+	      font-size: 10px;
+	      font-weight: 600;
+	    }
+
+	    .position-dual-cluster-code {
+	      display: inline-flex;
+	      min-width: 34px;
+	      height: 24px;
+	      align-items: center;
+	      justify-content: center;
+	      border-radius: 8px;
+	      background: var(--reader-heading);
+	      color: #ffffff;
+	      font-family: Menlo, Consolas, monospace;
+	      font-size: 11px;
+	      font-weight: 800;
+	    }
+
+	    .position-dual-cluster-role,
+	    .position-dual-cluster-transition,
+	    .position-dual-cluster-capacity,
+	    .position-dual-cluster-action {
+	      display: block;
+	      min-height: 44px;
+	      padding: 9px 10px;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 10px;
+	      background: #ffffff;
+	    }
+
+	    .position-dual-cluster-role.is-confirmed,
+	    .position-dual-cluster-transition.is-transition,
+	    .position-dual-cluster-transition.is-coexisting {
+	      border-color: color-mix(in srgb, var(--accent-green) 38%, #ffffff);
+	      background: color-mix(in srgb, var(--accent-green) 9%, #ffffff);
+	      color: #176e54;
+	    }
+
+	    .position-dual-cluster-role.is-candidate {
+	      border-color: color-mix(in srgb, var(--accent-orange) 42%, #ffffff);
+	      background: color-mix(in srgb, var(--accent-orange) 9%, #ffffff);
+	      color: #854916;
+	    }
+
+	    .position-dual-cluster-role.is-empty,
+	    .position-dual-cluster-transition.is-empty {
+	      color: var(--reader-muted);
+	      background: color-mix(in srgb, var(--reader-line) 18%, #ffffff);
+	    }
+
+	    .position-dual-cluster-role.is-weakened,
+	    .position-dual-cluster-transition.is-weakened {
+	      border-color: color-mix(in srgb, var(--accent-red) 38%, #ffffff);
+	      background: color-mix(in srgb, var(--accent-red) 8%, #ffffff);
+	      color: var(--accent-red);
+	    }
+
+	    .position-dual-cluster-role.is-unresolved,
+	    .position-dual-cluster-transition.is-unresolved {
+	      border-style: dashed;
+	      color: var(--reader-muted);
+	    }
+
+	    .position-dual-cluster-scope {
+	      margin: 0;
+	      padding: 10px 18px 12px;
+	      border-top: 1px solid var(--reader-line);
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .position-dual-cluster-scope code {
+	      font-size: 10px;
+	      word-break: break-all;
+	    }
+
+	    .position-day-order-facts {
+	      max-width: 100%;
+	      margin: 0 0 18px;
+	      overflow: hidden;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 14px;
+	      background: color-mix(in srgb, var(--reader-bg) 72%, #ffffff);
+	    }
+
+	    .position-day-order-facts > summary {
+	      display: flex;
+	      align-items: center;
+	      justify-content: space-between;
+	      gap: 12px;
+	      padding: 12px 16px;
+	      color: var(--reader-heading);
+	      cursor: pointer;
+	      font-weight: 800;
+	      list-style: none;
+	    }
+
+	    .position-day-order-facts > summary::-webkit-details-marker {
+	      display: none;
+	    }
+
+	    .position-day-order-facts > summary::before {
+	      content: "+";
+	      flex: 0 0 auto;
+	      color: var(--accent-red);
+	    }
+
+	    .position-day-order-facts[open] > summary::before {
+	      content: "−";
+	    }
+
+	    .position-day-order-facts > summary small {
+	      margin-left: auto;
+	      color: var(--reader-muted);
+	      font-size: 11px;
+	      font-weight: 600;
+	    }
+
+	    .position-day-order-facts-body {
+	      min-width: 0;
+	      padding: 0 12px 12px;
+	    }
+
+	    .position-day-order-raw-table {
+	      max-width: 100%;
+	      margin-top: 0;
+	      overflow-x: auto;
+	    }
+
 	    .position-timeline-shell {
       --timeline-lane-width: 76px;
       --timeline-asset-width: 116px;
@@ -850,6 +1171,7 @@
       overflow-x: auto;
       isolation: isolate;
       border-radius: 8px;
+      -webkit-overflow-scrolling: touch;
     }
 
     .position-timeline-table {
@@ -1626,7 +1948,149 @@
 			      border-radius: 22px;
 			      background: transparent;
 			      contain: paint;
+			      -webkit-overflow-scrolling: touch;
 			    }
+
+    .candidate-lifecycle {
+      margin: 14px 0 22px;
+      padding: 16px 0 4px;
+      border-top: 1px solid var(--reader-line);
+      border-bottom: 1px solid var(--reader-line);
+    }
+
+    .candidate-lifecycle-overview {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border: 1px solid var(--reader-line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.6);
+    }
+
+    .candidate-lifecycle-overview > div {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+      padding: 12px 14px;
+    }
+
+    .candidate-lifecycle-overview > div + div {
+      border-left: 1px solid var(--reader-line);
+    }
+
+    .candidate-lifecycle-overview span,
+    .candidate-lifecycle-sources > strong {
+      color: var(--reader-muted);
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .candidate-lifecycle-overview strong {
+      color: var(--reader-heading);
+      font-size: 18px;
+      line-height: 1.25;
+    }
+
+    .candidate-lifecycle-sources {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px 16px;
+      align-items: start;
+      padding: 12px 2px 14px;
+    }
+
+    .candidate-lifecycle-sources ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 16px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .candidate-lifecycle-sources li {
+      display: inline-flex;
+      gap: 5px;
+      color: var(--reader-text);
+      font-size: 12px;
+    }
+
+    .candidate-lifecycle-sources li strong {
+      color: var(--accent-soft-text);
+    }
+
+    .candidate-lifecycle-focus h4 {
+      margin: 4px 0 8px;
+      color: var(--reader-heading);
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .candidate-lifecycle .reader-table {
+      margin: 8px 0 14px;
+      border: 1px solid var(--reader-line);
+      border-radius: 8px;
+    }
+
+    .candidate-lifecycle-table table {
+      min-width: 760px;
+    }
+
+    .candidate-lifecycle-table th:first-child,
+    .candidate-lifecycle-table td:first-child {
+      width: 150px;
+      min-width: 150px;
+    }
+
+    .candidate-lifecycle-table th:nth-child(2),
+    .candidate-lifecycle-table td:nth-child(2) {
+      width: 190px;
+      min-width: 190px;
+    }
+
+    .candidate-lifecycle-rest {
+      border-top: 1px solid var(--reader-line);
+    }
+
+    .candidate-lifecycle-rest:not([open]) > .candidate-lifecycle-table {
+      display: none;
+    }
+
+    .candidate-lifecycle-rest summary {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 12px 2px;
+      color: var(--reader-heading);
+      cursor: pointer;
+      list-style: none;
+      font-size: 13px;
+      font-weight: 820;
+    }
+
+    .candidate-lifecycle-rest summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .candidate-lifecycle-rest summary::after {
+      content: "+";
+      margin-left: auto;
+      color: var(--accent-soft-text);
+      font-size: 18px;
+    }
+
+    .candidate-lifecycle-rest[open] summary::after {
+      content: "-";
+    }
+
+    .candidate-lifecycle-rest summary strong {
+      color: var(--reader-muted);
+      font-size: 12px;
+    }
+
+    .candidate-lifecycle-empty {
+      margin: 12px 0;
+      color: var(--reader-muted);
+    }
 
 		    .bear-chart-card {
 		      position: relative;
@@ -1656,6 +2120,7 @@
 	    }
 
 	    .bear-chart-copy,
+	    .bear-chart-toolbar,
 	    .bear-chart-frame,
 	    .bear-chart-footnote {
 	      position: relative;
@@ -1666,6 +2131,46 @@
 	      display: grid;
 	      gap: 5px;
 	      margin-bottom: 12px;
+	    }
+
+	    .bear-chart-toolbar {
+	      display: flex;
+	      justify-content: flex-end;
+	      margin: -2px 0 8px;
+	    }
+
+	    .bear-chart-window-control {
+	      display: inline-flex;
+	      padding: 3px;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 8px;
+	      background: rgba(255, 255, 255, 0.72);
+	    }
+
+	    .bear-chart-window-control button {
+	      min-width: 52px;
+	      min-height: 30px;
+	      padding: 4px 10px;
+	      border: 0;
+	      border-radius: 6px;
+	      background: transparent;
+	      color: var(--reader-muted);
+	      font: inherit;
+	      font-size: 12px;
+	      font-weight: 800;
+	      letter-spacing: 0;
+	      cursor: pointer;
+	    }
+
+	    .bear-chart-window-control button[aria-pressed="true"] {
+	      background: var(--accent-red);
+	      color: #fff;
+	      box-shadow: 0 3px 10px rgba(231, 57, 34, 0.2);
+	    }
+
+	    .bear-chart-window-control button:focus-visible {
+	      outline: 2px solid var(--signal-ice);
+	      outline-offset: 2px;
 	    }
 
 		    .bear-chart-eyebrow {
@@ -1712,6 +2217,486 @@
 	      width: 100%;
 	      height: 100%;
 	      min-height: 320px;
+	    }
+
+      [data-bear-chart-card="turnover_top30"] {
+        min-width: 0;
+        max-width: 100%;
+        border: 1px solid var(--reader-line);
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: none;
+      }
+
+      [data-bear-chart-card="turnover_top30"]::before {
+        display: none;
+      }
+
+      [data-bear-chart-card="turnover_top30"] .bear-chart-frame {
+        height: auto;
+        max-height: 620px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding: 0;
+        border: 0;
+        overscroll-behavior: contain;
+      }
+
+	    .sector-cycle-card {
+	      overflow: hidden;
+	    }
+
+	    .sector-cycle-context {
+	      position: relative;
+	      z-index: 1;
+	      display: grid;
+	      grid-template-columns: repeat(4, minmax(0, 1fr));
+	      gap: 8px 18px;
+	      margin: 0 0 12px;
+	      padding: 10px 0;
+	      border-top: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	      color: var(--reader-text);
+	      font-size: 12px;
+	      line-height: 1.45;
+	    }
+
+	    .sector-cycle-context span,
+	    .sector-cycle-context b {
+	      display: block;
+	      min-width: 0;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .sector-cycle-context b {
+	      margin-bottom: 2px;
+	      color: var(--reader-muted);
+	      font-size: 10px;
+	      font-weight: 800;
+	    }
+
+	    .sector-cycle-insufficient {
+	      margin: -4px 0 12px;
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	    }
+
+	    .sector-cycle-legend {
+	      position: relative;
+	      z-index: 1;
+	      display: flex;
+	      flex-wrap: wrap;
+	      gap: 8px 16px;
+	      margin: 0 0 12px;
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	      font-weight: 760;
+	    }
+
+	    .sector-cycle-legend span {
+	      display: inline-flex;
+	      gap: 6px;
+	      align-items: center;
+	    }
+
+	    .sector-cycle-legend i {
+	      display: inline-block;
+	      width: 10px;
+	      height: 10px;
+	      box-sizing: border-box;
+	      border: 2px solid #945c6e;
+	      border-radius: 50%;
+	      background: #945c6e;
+	    }
+
+	    .sector-cycle-legend .is-run {
+	      width: 22px;
+	      height: 7px;
+	      border: 0;
+	      border-radius: 3px;
+	      opacity: 0.72;
+	    }
+
+	    .sector-cycle-legend .is-feedback-range {
+	      width: 24px;
+	      height: 8px;
+	      border: 0;
+	      border-radius: 3px;
+	      background: #945c6e;
+	      opacity: 0.68;
+	    }
+
+	    .sector-cycle-legend .is-response {
+	      border-color: #3f6f97;
+	      background: #3f6f97;
+	    }
+
+	    .sector-cycle-legend .is-rotation {
+	      border: 0;
+	      border-radius: 0;
+	      background: #6c5b91;
+	      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+	    }
+
+	    .sector-cycle-legend .is-fund {
+	      border: 0;
+	      border-radius: 1px;
+	      background: #2f7a62;
+	      transform: rotate(45deg);
+	    }
+
+	    .sector-cycle-legend .is-institution {
+	      border-color: #a87922;
+	      border-radius: 2px;
+	      background: #a87922;
+	    }
+
+	    .sector-cycle-legend .is-turnover {
+	      border-color: #68737d;
+	      background: transparent;
+	    }
+
+	    .sector-cycle-legend .is-combined {
+	      border-radius: 2px;
+	      transform: rotate(45deg);
+	    }
+
+	    .sector-cycle-legend .is-missing {
+	      background: #ffffff;
+	    }
+
+	    .sector-cycle-legend .is-path {
+	      width: 24px;
+	      height: 2px;
+	      border: 0;
+	      border-radius: 0;
+	      background: #68737d;
+	    }
+
+	    .sector-cycle-legend .is-baseline {
+	      width: 24px;
+	      height: 1px;
+	      border: 0;
+	      border-top: 1px dashed #8b817c;
+	      border-radius: 0;
+	      background: transparent;
+	    }
+
+	    .sector-cycle-shell {
+	      position: relative;
+	      z-index: 1;
+	      display: grid;
+	      grid-template-columns: var(--sector-cycle-label-width, 148px) minmax(0, 1fr);
+	      width: 100%;
+	      min-width: 0;
+	      border-top: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	    }
+
+	    .sector-cycle-lane-labels {
+	      display: grid;
+	      grid-auto-rows: minmax(0, 1fr);
+	      height: var(--sector-cycle-height);
+	      box-sizing: border-box;
+	      padding: 18px 12px 56px 0;
+	      overflow: hidden;
+	      border-right: 1px solid var(--reader-line);
+	      background: rgba(255, 255, 255, 0.52);
+	    }
+
+	    .sector-cycle-lane-label {
+	      display: flex;
+	      gap: 7px;
+	      align-items: center;
+	      min-width: 0;
+	      color: var(--reader-heading);
+	      font-size: 12px;
+	      font-weight: 820;
+	      line-height: 1.25;
+	    }
+
+	    .sector-cycle-lane-label i {
+	      width: 7px;
+	      height: 7px;
+	      flex: 0 0 auto;
+	      border-radius: 50%;
+	      background: var(--sector-cycle-color);
+	    }
+
+	    .sector-cycle-lane-label.is-relative-path {
+	      align-items: flex-start;
+	    }
+
+	    .sector-cycle-lane-copy {
+	      display: block;
+	      min-width: 0;
+	    }
+
+	    .sector-cycle-lane-copy strong,
+	    .sector-cycle-lane-copy small {
+	      display: block;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .sector-cycle-lane-copy strong {
+	      color: var(--reader-heading);
+	      font-size: 12px;
+	      line-height: 1.25;
+	    }
+
+	    .sector-cycle-lane-copy small {
+	      margin-top: 3px;
+	      color: var(--reader-muted);
+	      font-size: 9px;
+	      font-weight: 720;
+	      line-height: 1.35;
+	    }
+
+	    .sector-cycle-lane-copy small + small {
+	      margin-top: 2px;
+	    }
+
+	    .sector-cycle-track-scroll {
+	      width: 100%;
+	      min-width: 0;
+	      overflow-x: auto;
+	      overflow-y: hidden;
+	      background: rgba(255, 255, 255, 0.34);
+	      scrollbar-gutter: stable;
+	      -webkit-overflow-scrolling: touch;
+	    }
+
+	    .sector-cycle-scroll-controls {
+	      display: grid;
+	      grid-template-columns: 30px minmax(0, 1fr) 30px;
+	      gap: 8px;
+	      align-items: center;
+	      min-width: 0;
+	      margin-left: var(--sector-cycle-label-width, 148px);
+	      padding: 8px 10px;
+	      border-top: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	      background: rgba(255, 255, 255, 0.58);
+	    }
+
+	    .sector-cycle-scroll-controls button {
+	      display: inline-grid;
+	      width: 30px;
+	      height: 30px;
+	      padding: 0;
+	      place-items: center;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 82%, var(--reader-muted));
+	      border-radius: 4px;
+	      background: rgba(255, 255, 255, 0.8);
+	      color: var(--reader-heading);
+	      font: 800 16px/1 system-ui, sans-serif;
+	      cursor: pointer;
+	    }
+
+	    .sector-cycle-scroll-controls button:disabled {
+	      opacity: 0.36;
+	      cursor: default;
+	    }
+
+	    .sector-cycle-scroll-controls button:focus-visible,
+	    .sector-cycle-scroll-controls input:focus-visible {
+	      outline: 2px solid var(--accent-red);
+	      outline-offset: 2px;
+	    }
+
+	    .sector-cycle-scroll-controls input[type="range"] {
+	      width: 100%;
+	      min-width: 0;
+	      height: 30px;
+	      margin: 0;
+	      padding: 0;
+	      appearance: none;
+	      -webkit-appearance: none;
+	      background: transparent;
+	      cursor: ew-resize;
+	    }
+
+	    .sector-cycle-scroll-controls input[type="range"]::-webkit-slider-runnable-track {
+	      height: 7px;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 74%, var(--reader-muted));
+	      border-radius: 4px;
+	      background: color-mix(in srgb, var(--reader-line) 64%, #ffffff);
+	    }
+
+	    .sector-cycle-scroll-controls input[type="range"]::-webkit-slider-thumb {
+	      width: 18px;
+	      height: 18px;
+	      margin-top: -6px;
+	      appearance: none;
+	      -webkit-appearance: none;
+	      border: 2px solid #ffffff;
+	      border-radius: 50%;
+	      background: var(--accent-red);
+	      box-shadow: 0 0 0 1px rgba(126, 54, 43, 0.42);
+	    }
+
+	    .sector-cycle-scroll-controls input[type="range"]::-moz-range-track {
+	      height: 7px;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 74%, var(--reader-muted));
+	      border-radius: 4px;
+	      background: color-mix(in srgb, var(--reader-line) 64%, #ffffff);
+	    }
+
+	    .sector-cycle-scroll-controls input[type="range"]::-moz-range-thumb {
+	      width: 18px;
+	      height: 18px;
+	      border: 2px solid #ffffff;
+	      border-radius: 50%;
+	      background: var(--accent-red);
+	      box-shadow: 0 0 0 1px rgba(126, 54, 43, 0.42);
+	    }
+
+	    .sector-cycle-scroll-controls.is-static input[type="range"] {
+	      opacity: 0.42;
+	      cursor: default;
+	    }
+
+	    .sector-cycle-chart {
+	      min-width: 760px;
+	      min-height: 0;
+	    }
+
+	    .sector-cycle-ascii {
+	      position: relative;
+	      z-index: 1;
+	      margin-top: 12px;
+	      overflow-x: auto;
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	    }
+
+	    .sector-cycle-ascii strong {
+	      display: block;
+	      margin-bottom: 6px;
+	      color: var(--reader-heading);
+	    }
+
+	    .sector-cycle-ascii pre {
+	      width: max-content;
+	      min-width: 100%;
+	      box-sizing: border-box;
+	      margin: 0;
+	      padding: 10px 12px;
+	      border: 1px solid var(--reader-line);
+	      border-radius: 6px;
+	      background: rgba(255, 255, 255, 0.58);
+	      color: var(--reader-text);
+	      font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	      white-space: pre;
+	    }
+
+	    .sector-cycle-card.is-chart-ready .sector-cycle-ascii {
+	      display: none;
+	    }
+
+	    .sector-cycle-card:not(.is-chart-ready) .sector-cycle-shell {
+	      display: none;
+	    }
+
+	    .sector-cycle-card:not(.is-chart-ready) .sector-cycle-scroll-controls {
+	      margin-left: 0;
+	    }
+
+	    .sector-cycle-raw-records {
+	      margin: 14px 0 24px;
+	      border-top: 1px solid var(--reader-line);
+	      border-bottom: 1px solid var(--reader-line);
+	    }
+
+	    .sector-cycle-raw-records > summary {
+	      display: flex;
+	      gap: 10px;
+	      align-items: baseline;
+	      padding: 12px 2px;
+	      color: var(--reader-heading);
+	      font-weight: 850;
+	      cursor: pointer;
+	      list-style: none;
+	    }
+
+	    .sector-cycle-raw-records > summary::-webkit-details-marker {
+	      display: none;
+	    }
+
+	    .sector-cycle-raw-records > summary::before {
+	      content: "+";
+	      width: 16px;
+	      color: var(--accent-soft-text);
+	      font-size: 18px;
+	      line-height: 1;
+	    }
+
+	    .sector-cycle-raw-records[open] > summary::before {
+	      content: "-";
+	    }
+
+	    .sector-cycle-raw-records > summary small {
+	      color: var(--reader-muted);
+	      font-size: 12px;
+	      font-weight: 650;
+	    }
+
+	    .sector-cycle-raw-records-body {
+	      padding: 0 0 12px;
+	    }
+
+	    .bear-appendix-section {
+	      margin: 0;
+	      border-top: 1px solid var(--reader-line);
+	    }
+
+	    .bear-appendix-section:last-of-type {
+	      border-bottom: 1px solid var(--reader-line);
+	    }
+
+	    .bear-appendix-section > summary {
+	      display: grid;
+	      grid-template-columns: 18px minmax(0, 1fr);
+	      gap: 9px;
+	      align-items: start;
+	      padding: 14px 2px;
+	      color: var(--reader-heading);
+	      cursor: pointer;
+	      list-style: none;
+	      scroll-margin-top: 24px;
+	    }
+
+	    .bear-appendix-section > summary::-webkit-details-marker {
+	      display: none;
+	    }
+
+	    .bear-appendix-section > summary::before {
+	      content: "+";
+	      color: var(--accent-soft-text);
+	      font-size: 18px;
+	      font-weight: 800;
+	      line-height: 1.35;
+	    }
+
+	    .bear-appendix-section[open] > summary::before {
+	      content: "-";
+	    }
+
+	    .bear-appendix-section-title {
+	      min-width: 0;
+	      font-size: 15px;
+	      font-weight: 850;
+	      line-height: 1.55;
+	      overflow-wrap: anywhere;
+	    }
+
+	    .bear-appendix-section-body {
+	      min-width: 0;
+	      padding: 0 0 18px 27px;
+	    }
+
+	    .bear-appendix-section-body > :first-child {
+	      margin-top: 0;
 	    }
 
 		    .bear-chart-footnote {
@@ -1925,6 +2910,184 @@
 	      }
 	    }
 
+	    @media (max-width: 760px) {
+	      body {
+	        background: var(--reader-bg);
+	      }
+
+      .bear-shell {
+        display: block;
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+	      .outline-sidebar {
+	        display: none;
+	      }
+
+	      .outline-toggle {
+	        display: none;
+	      }
+
+	      .editor-pane {
+	        margin-left: 0;
+	      }
+
+	      .bear-shell.is-outline-collapsed .editor-pane {
+	        margin-left: 0;
+	      }
+
+			      .reader-document {
+			        max-width: none;
+		        padding: 24px 12px 52px;
+		      }
+
+		      .reader-header,
+		      .markdown-body {
+		        border-radius: 24px;
+		      }
+
+	      .bear-chart-card {
+	        margin: 16px -2px 20px;
+	        padding: 16px 12px 14px;
+	        border-radius: 12px;
+	      }
+
+	      .tomorrow-action-calendar {
+	        margin-bottom: 16px;
+	        padding: 12px;
+	      }
+
+	      .tomorrow-action-calendar-header {
+	        align-items: flex-start;
+	        flex-direction: column;
+	        gap: 4px;
+	      }
+
+	      .tomorrow-action-calendar-header p {
+	        text-align: left;
+	      }
+
+	      .position-dual-cluster-head {
+	        align-items: flex-start;
+	        flex-direction: column;
+	        gap: 7px;
+	        padding: 14px 12px 12px;
+	      }
+
+	      .position-dual-cluster-head p {
+	        max-width: none;
+	        text-align: left;
+	      }
+
+	      .position-dual-cluster-scope {
+	        padding-inline: 12px;
+	      }
+
+	      .position-day-order-facts > summary {
+	        align-items: flex-start;
+	        flex-wrap: wrap;
+	        padding-inline: 12px;
+	      }
+
+	      .position-day-order-facts > summary small {
+	        width: calc(100% - 24px);
+	        margin-left: 24px;
+	      }
+
+	      .bear-chart-frame {
+	        height: 340px;
+	      }
+
+	      .sector-cycle-card {
+	        --sector-cycle-label-width: 106px !important;
+	      }
+
+	      .sector-cycle-card.is-relative-path {
+	        --sector-cycle-label-width: 164px !important;
+	      }
+
+	      .sector-cycle-lane-labels {
+	        padding-right: 8px;
+	      }
+
+	      .sector-cycle-lane-label {
+	        gap: 5px;
+	        font-size: 11px;
+	        overflow-wrap: anywhere;
+	      }
+
+	      .sector-cycle-legend {
+	        gap: 7px 12px;
+	      }
+
+	      .sector-cycle-context {
+	        grid-template-columns: repeat(2, minmax(0, 1fr));
+	      }
+
+	      .sector-cycle-raw-records > summary {
+	        flex-wrap: wrap;
+	      }
+
+	      .bear-appendix-section > summary {
+	        padding-block: 12px;
+	      }
+
+	      .bear-appendix-section-body {
+	        padding-left: 18px;
+	      }
+
+	      .bear-chart-frame.is-tall {
+	        height: 620px;
+	      }
+
+		      .reader-header h1,
+		      .markdown-body h1 {
+	        font-size: 1.8em;
+	      }
+
+	      .markdown-body h2 {
+	        font-size: 1.5em;
+	      }
+
+      .candidate-lifecycle {
+        margin-inline: -4px;
+      }
+
+      .candidate-lifecycle-overview > div {
+        padding: 10px 8px;
+      }
+
+      .candidate-lifecycle-overview span {
+        font-size: 11px;
+      }
+
+      .candidate-lifecycle-overview strong {
+        font-size: 16px;
+      }
+
+      .candidate-lifecycle-sources {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+	    }
+
+	    @media (max-width: 440px) {
+	      .reader-header,
+	      .markdown-body {
+	        padding: 20px;
+	      }
+
+	      .meta,
+	      .mobile-nav a {
+	        font-size: 12px;
+	      }
+	    }
+
 	    @media (prefers-reduced-motion: reduce) {
 	      *,
 	      *::before,
@@ -1977,6 +3140,7 @@
         <header class="reader-header">
           <h1>$title</h1>
           <div class="meta">$trade_date · $source</div>
+          $mobile_nav
         </header>
         <div class="markdown-body">
           $document_body
@@ -1990,6 +3154,7 @@
 	  <script>
 	    (() => {
       const outlineMarker = "$" + "outline_nav";
+      const mobileMarker = "$" + "mobile_nav";
       const outlineTitleMarker = "$" + "outline_title";
       const hasTemplatePlaceholders = document.body.textContent.includes(outlineMarker);
       if (hasTemplatePlaceholders) {
@@ -1998,6 +3163,8 @@
         const meta = document.querySelector(".meta");
         const outlineSlot = Array.from(document.querySelectorAll(".outline-sticky"))
           .find((node) => node.textContent.includes(outlineMarker));
+        const mobileSlot = Array.from(document.querySelectorAll(".reader-header"))
+          .find((node) => node.textContent.includes(mobileMarker));
         const body = document.querySelector(".markdown-body");
 
         if (outlineTitle) {
@@ -2022,6 +3189,12 @@
           outlineSlot.innerHTML = outlineSlot.innerHTML
             .replace(outlineTitleMarker, "2026-06-05 A股日报")
             .replace(outlineMarker, `<nav class="outline-nav" aria-label="当前日报标题导航">${previewNav}</nav>`);
+        }
+        if (mobileSlot) {
+          mobileSlot.innerHTML = mobileSlot.innerHTML.replace(
+            mobileMarker,
+            `<nav class="mobile-nav" aria-label="当前日报标题导航">${previewNav}</nav>`
+          );
         }
         if (body) {
           body.innerHTML = `
@@ -2097,9 +3270,10 @@
 		        extremeText: cssValue("--signal-extreme-text", "#FFFFFF"),
 		        iceBlue: cssValue("--signal-ice", "#2364aa"),
 		        deepIceBlue: cssValue("--signal-deep-ice", "#12365a"),
-		        green: cssValue("--signal-green", "#176e54"),
+		        green: "#07C160",
+		        fluorescentPurple: cssValue("--signal-fluorescent-purple", "#B000FF"),
 		        gold: cssValue("--accent-orange", "#ff8a1f"),
-		        surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)"),
+		        surface: "#FFFFFF",
 		      };
 
 	      const numberValue = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -2396,7 +3570,7 @@
 		              const children = [{
 		                type: "polyline",
 		                shape: { points: pixelPoints },
-		                style: { stroke: marketStructureTone.green, lineWidth: 2.6, fill: null, lineJoin: "round", lineCap: "round" },
+		                style: { stroke: marketStructureTone.green, lineWidth: 2.2, fill: null, lineJoin: "round", lineCap: "round" },
 		                silent: true,
 		              }];
 		              pixelPoints.forEach((point) => {
@@ -2463,9 +3637,9 @@
 		        });
 		        chart = window.echarts.init(node, null, { renderer: "canvas" });
 		        chart.setOption({
-		          backgroundColor: "transparent",
+		          ...baseChartOption(),
 		          animation: false,
-		          tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+		          tooltip: { ...baseChartOption().tooltip, trigger: "axis", axisPointer: { type: "cross" } },
 		          axisPointer: { link: [{ xAxisIndex: "all" }] },
 		          grid: [
 		            { left: 64, right: 28, top: 36, height: 470 },
@@ -2476,12 +3650,12 @@
 		            { type: "category", data: dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false }, axisLine: { onZero: false } },
 		          ],
 		          yAxis: [
-		            { scale: true, axisLabel: { color: chartTone.muted }, splitLine: { lineStyle: { color: chartTone.line } }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.22)", "rgba(255,250,243,0.28)"] } } },
+		            { scale: true, axisLabel: { color: chartTone.muted }, splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } } },
 		            { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
 		          ],
 		          dataZoom: [
-		            { type: "inside", xAxisIndex: [0, 1], filterMode: "none" },
-			            { type: "slider", xAxisIndex: [0, 1], filterMode: "none", bottom: 12, height: 22, borderColor: chartTone.line, fillerColor: marketStructureTone.redSoft },
+		            { type: "inside", xAxisIndex: [0, 1], filterMode: "weakFilter" },
+			            { type: "slider", xAxisIndex: [0, 1], filterMode: "weakFilter", bottom: 12, height: 22, borderColor: chartTone.line, fillerColor: marketStructureTone.redSoft },
 		          ],
 		          series: [
 		            {
@@ -2569,10 +3743,11 @@
 		          return null;
 		        }
 		        const breadthDownTone = "#07C160";
+		        const breadthDownAlertTone = chartTone.fluorescentPurple;
 		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
 		        chart.setOption({
 		          ...baseChartOption(),
-		          color: [chartTone.red, breadthDownTone, chartTone.iceBlue, chartTone.gold],
+		          color: [chartTone.red, breadthDownTone, chartTone.iceBlue, chartTone.fluorescentPurple],
 		          legend: {
 		            type: "scroll",
 		            top: 4,
@@ -2593,10 +3768,10 @@
 		              const newHighShare = nullableNumber(item.new_high_share_pct);
 		              return [
 		                `<strong>${escapeText(item.date || "")}</strong>`,
-		                `上涨家数：${escapeText(upCount === null ? "事实不足" : `${Math.round(upCount)}家`)}`,
-		                `下跌家数：${escapeText(downCount === null ? "事实不足" : `${Math.round(downCount)}家`)}`,
-		                `全A涨跌幅：${escapeText(allAChange === null ? "事实不足" : formatSignedPct(allAChange))}`,
-		                `创新高全A占比：${escapeText(newHighShare === null ? "事实不足" : formatPct(newHighShare))}`,
+			                `上涨家数：${escapeText(upCount === null ? "未记录" : `${Math.round(upCount)}家`)}`,
+			                `下跌家数：${escapeText(downCount === null ? "未记录" : `${Math.round(downCount)}家`)}`,
+			                `全A涨跌幅：${escapeText(allAChange === null ? "未记录" : formatSignedPct(allAChange))}`,
+			                `创新高全A占比：${escapeText(newHighShare === null ? "未记录" : formatPct(newHighShare))}`,
 		              ].join("<br>");
 		            },
 		          },
@@ -2605,7 +3780,7 @@
 		            {
 		              type: "value",
 		              name: "家数",
-		              min: (value) => Math.min(-4200, value.min),
+		              min: (value) => Math.min(-5200, value.min),
 		              nameTextStyle: { color: chartTone.muted },
 		              axisLabel: { color: chartTone.muted, formatter: (value) => Math.abs(value) },
 		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
@@ -2632,7 +3807,10 @@
 		              type: "bar",
 		              stack: "breadth",
 		              barMaxWidth: 20,
-		              itemStyle: { borderRadius: [0, 0, 7, 7] },
+		              itemStyle: {
+		                borderRadius: [0, 0, 7, 7],
+		                color: (params) => params.value < -5000 ? breadthDownAlertTone : breadthDownTone,
+		              },
 		              markLine: {
 		                silent: true,
 		                symbol: ["none", "none"],
@@ -2648,7 +3826,14 @@
 		                  borderRadius: 3,
 		                  padding: [2, 4],
 		                },
-		                data: [{ yAxis: -4000 }],
+		                data: [
+		                  { yAxis: -4000 },
+		                  {
+		                    yAxis: -5000,
+		                    lineStyle: { color: breadthDownAlertTone },
+		                    label: { formatter: "5000+下跌", color: breadthDownAlertTone },
+		                  },
+		                ],
 		              },
 		              data: items.map((item) => {
 		                const value = nullableNumber(item.down_count);
@@ -2670,11 +3855,224 @@
 		              yAxisIndex: 1,
 		              smooth: 0.18,
 		              showSymbol: false,
-		              lineStyle: { width: 2.2 },
+		              lineStyle: { width: 2.2, color: chartTone.fluorescentPurple },
+		              itemStyle: { color: chartTone.fluorescentPurple },
 		              data: items.map((item) => nullableNumber(item.new_high_share_pct)),
 		            },
 		          ],
 		        });
+		        return chart;
+		      };
+
+		      const renderCffexPositionTrendChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const targetDate = items.some((item) => item.date === payload?.target_date)
+		          ? payload.target_date
+		          : "";
+		        const defaultWindow = Math.min(60, items.length);
+		        let visibleItems = items.slice(-defaultWindow);
+		        const handAxisLabel = (value) => {
+		          const number = Number(value);
+		          return Math.abs(number) >= 10000
+		            ? `${(number / 10000).toFixed(1)}万`
+		            : `${Math.round(number)}`;
+		        };
+		        const formatHand = (value) => {
+		          const number = nullableNumber(value);
+		          if (number === null) return "未记录";
+		          return `${number > 0 ? "+" : ""}${Math.round(number).toLocaleString("zh-CN")}手`;
+		        };
+		        const formatBalance = (value) => {
+		          const number = nullableNumber(value);
+		          return number === null ? "未记录" : `${Math.round(number).toLocaleString("zh-CN")}手`;
+		        };
+		        const formatNotional = (value) => {
+		          const number = nullableNumber(value);
+		          return number === null ? "未记录" : `${number.toFixed(2)}亿元`;
+		        };
+		        const targetMarkLine = (showLabel) => ({
+		          silent: true,
+		          symbol: "none",
+		          lineStyle: { color: chartTone.gold, type: "dashed", width: 1.4, opacity: 0.9 },
+		          label: showLabel ? {
+		            show: true,
+		            formatter: "目标日",
+		            position: "insideEndTop",
+		            color: chartTone.muted,
+		            fontSize: 11,
+		            backgroundColor: chartTone.surface,
+		            padding: [2, 4],
+		          } : { show: false },
+		          data: [{ xAxis: targetDate, name: "目标日" }],
+		        });
+		        const xAxis = (gridIndex, showLabels) => ({
+		          type: "category",
+		          gridIndex,
+		          data: visibleItems.map((item) => item.date),
+		          boundaryGap: gridIndex === 1,
+		          axisLabel: {
+		            show: showLabels,
+		            color: chartTone.muted,
+		            formatter: compactDateLabel,
+		            interval: visibleItems.length > 40 ? 5 : visibleItems.length > 20 ? 2 : 0,
+		            hideOverlap: true,
+		            rotate: visibleItems.length > 12 ? 34 : 0,
+		          },
+		          axisTick: { show: false },
+		          axisLine: { lineStyle: { color: chartTone.line } },
+		        });
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          ...baseChartOption(),
+		          color: [chartTone.iceBlue, chartTone.red, chartTone.fluorescentPurple],
+		          legend: {
+		            type: "scroll",
+		            data: ["中信名义净空", "中信净空日变", "前20榜单净空差"],
+		            top: 4,
+		            left: "center",
+		            selectedMode: true,
+		            itemWidth: 12,
+		            itemHeight: 8,
+		            itemGap: 8,
+		            pageIconSize: 10,
+		            textStyle: { color: chartTone.muted, fontSize: 11 },
+		          },
+		          title: [
+		            { text: "中信代客名义净空（亿元）", left: 68, top: 44 },
+		            { text: "中信代客净空日变（手，仅复核）", left: 68, top: 206 },
+		            { text: "前20榜单净空差（手）", left: 68, top: 368 },
+		          ].map((item) => ({
+		            ...item,
+		            textStyle: { color: chartTone.text, fontSize: 12, fontWeight: 800 },
+		          })),
+		          grid: [
+		            { left: 70, right: 28, top: 76, height: 102, containLabel: false },
+		            { left: 70, right: 28, top: 238, height: 102, containLabel: false },
+		            { left: 70, right: 28, top: 400, height: 102, containLabel: false },
+		          ],
+		          axisPointer: { link: [{ xAxisIndex: [0, 1, 2] }] },
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            axisPointer: { type: "line" },
+		            formatter: (params) => {
+		              const first = Array.isArray(params) ? params[0] : params;
+		              const item = visibleItems[first?.dataIndex] || {};
+		              return [
+		                `<strong>${escapeText(item.date || "")}${item.date === targetDate ? " · 目标日" : ""}</strong>`,
+		                `中信代客名义净空：${escapeText(formatNotional(item.member_net_short_notional_yi))}`,
+		                `中信代客净空日变：${escapeText(formatHand(item.member_net_short_change))}`,
+		                `前20榜单净空差：${escapeText(formatBalance(item.top20_cross_section_net_short))}`,
+		                `较前一披露日：${escapeText(formatHand(item.top20_cross_section_change))}`,
+		                "榜单跨日变化包含会员或披露范围变化。",
+		              ].join("<br>");
+		            },
+		          },
+		          xAxis: [xAxis(0, false), xAxis(1, false), xAxis(2, true)],
+		          yAxis: [
+		            {
+		              type: "value",
+		              gridIndex: 0,
+		              scale: true,
+		              axisLabel: { color: chartTone.muted, formatter: (value) => `${Math.round(value)}亿` },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		            {
+		              type: "value",
+		              gridIndex: 1,
+		              axisLabel: { color: chartTone.muted, formatter: handAxisLabel },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		            {
+		              type: "value",
+		              gridIndex: 2,
+		              scale: true,
+		              axisLabel: { color: chartTone.muted, formatter: handAxisLabel },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		          ],
+		          series: [
+		            {
+		              name: "中信名义净空",
+		              type: "line",
+		              xAxisIndex: 0,
+		              yAxisIndex: 0,
+		              smooth: 0.2,
+		              showSymbol: false,
+		              connectNulls: false,
+		              lineStyle: { width: 2.2, color: chartTone.iceBlue },
+		              itemStyle: { color: chartTone.iceBlue },
+		              data: visibleItems.map((item) => nullableNumber(item.member_net_short_notional_yi)),
+		              ...(targetDate ? { markLine: targetMarkLine(true) } : {}),
+		            },
+		            {
+		              name: "中信净空日变",
+		              type: "bar",
+		              xAxisIndex: 1,
+		              yAxisIndex: 1,
+		              barMaxWidth: 15,
+		              data: visibleItems.map((item) => nullableNumber(item.member_net_short_change)),
+		              itemStyle: {
+		                color: (params) => nullableNumber(params.value) < 0 ? chartTone.green : chartTone.red,
+		                borderRadius: (params) => nullableNumber(params.value) < 0 ? [0, 0, 4, 4] : [4, 4, 0, 0],
+		              },
+		              markLine: {
+		                silent: true,
+		                symbol: "none",
+		                lineStyle: { color: chartTone.line, type: "dashed", width: 1.2 },
+		                label: { show: false },
+		                data: [
+		                  { yAxis: 0 },
+		                  ...(targetDate ? [{ xAxis: targetDate, name: "目标日", lineStyle: { color: chartTone.gold } }] : []),
+		                ],
+		              },
+		            },
+		            {
+		              name: "前20榜单净空差",
+		              type: "line",
+		              xAxisIndex: 2,
+		              yAxisIndex: 2,
+		              smooth: 0.2,
+		              showSymbol: false,
+		              connectNulls: false,
+		              lineStyle: { width: 2.2, color: chartTone.fluorescentPurple },
+		              itemStyle: { color: chartTone.fluorescentPurple },
+		              data: visibleItems.map((item) => nullableNumber(item.top20_cross_section_net_short)),
+		              ...(targetDate ? { markLine: targetMarkLine(false) } : {}),
+		            },
+		          ],
+		        });
+
+		        const control = node.closest("[data-bear-chart-card]")
+		          ?.querySelector('[data-bear-chart-window-control="cffex_position_trend"]');
+		        if (control) {
+		          const buttons = Array.from(control.querySelectorAll("button[data-window-size]"));
+		          const setWindow = (requestedSize) => {
+		            const size = Math.min(Math.max(Number(requestedSize) || 60, 1), items.length);
+		            visibleItems = items.slice(-size);
+		            chart.setOption({
+		              xAxis: [xAxis(0, false), xAxis(1, false), xAxis(2, true)],
+		              series: [
+		                { name: "中信名义净空", data: visibleItems.map((item) => nullableNumber(item.member_net_short_notional_yi)) },
+		                { name: "中信净空日变", data: visibleItems.map((item) => nullableNumber(item.member_net_short_change)) },
+		                { name: "前20榜单净空差", data: visibleItems.map((item) => nullableNumber(item.top20_cross_section_net_short)) },
+		              ],
+		            });
+		            buttons.forEach((button) => {
+		              button.setAttribute(
+		                "aria-pressed",
+		                String(Number(button.dataset.windowSize) === Number(requestedSize)),
+		              );
+		            });
+		          };
+		          buttons.forEach((button) => {
+		            button.addEventListener("click", () => setWindow(button.dataset.windowSize));
+		          });
+		          setWindow(60);
+		        }
 		        return chart;
 		      };
 
@@ -2716,7 +4114,12 @@
 		              type: "bar",
 		              barWidth: "54%",
 		              data: items.map((item) => ({ value: numberValue(item.total_turnover), item })),
-		              itemStyle: { borderRadius: [7, 7, 0, 0] },
+		              itemStyle: {
+		                borderRadius: [7, 7, 0, 0],
+		                color: (params) => Number.isFinite(params.value) && params.value < 15000
+		                  ? chartTone.fluorescentPurple
+		                  : Number.isFinite(params.value) && params.value < 20000 ? chartTone.green : chartTone.red,
+		              },
 		              markLine: {
 		                silent: true,
 		                symbol: "none",
@@ -2729,8 +4132,8 @@
 		                },
 		                lineStyle: { color: chartTone.line, type: "dashed", width: 1, opacity: 0.82 },
 		                data: [
-		                  { yAxis: 15000, name: "1.5万亿以下", label: { position: "insideStartTop" } },
-		                  { yAxis: 20000, name: "2万亿以下", label: { position: "insideEndTop" } },
+		                  ...(items.some((item) => numberValue(item.total_turnover) < 15000) ? [{ yAxis: 15000, name: "1.5万亿以下", label: { position: "insideStartTop" }, lineStyle: { color: chartTone.fluorescentPurple, width: 1.5 } }] : []),
+		                  { yAxis: 20000, name: "2万亿以下", label: { position: "insideEndTop" }, lineStyle: { color: chartTone.green, width: 1.5 } },
 		                  { yAxis: 25000, name: "2.5万亿以下", label: { position: "insideStartTop" } },
 		                  { yAxis: 30000, name: "3万亿以下", label: { position: "insideEndTop" } },
 		                  {
@@ -2741,9 +4144,6 @@
 		                      position: "insideEndTop",
 		                      color: chartTone.extremeText,
 		                      backgroundColor: chartTone.extremeRed,
-		                      textShadowColor: "rgba(94,0,0,0.5)",
-		                      textShadowBlur: 2,
-		                      textShadowOffsetY: 1,
 		                    },
 		                  },
 		                ],
@@ -2759,20 +4159,30 @@
 		        if (!items.length || !window.echarts) {
 		          return null;
 		        }
+		        const hasChinext = items.some((item) => nullableNumber(item.chinext_close) !== null);
 		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
 		        chart.setOption({
 		          ...baseChartOption(),
-		          color: [chartTone.red],
-		          grid: { left: 58, right: 34, top: 28, bottom: 44, containLabel: false },
+		          color: hasChinext ? [chartTone.red, chartTone.iceBlue] : [chartTone.red],
+		          legend: hasChinext ? {
+		            data: ["Top50占比", "创业板指"],
+		            top: 4,
+		            left: "center",
+		            selectedMode: true,
+		            textStyle: { color: chartTone.muted, fontSize: 11 },
+		          } : undefined,
+		          grid: { left: 58, right: hasChinext ? 62 : 34, top: hasChinext ? 56 : 28, bottom: 44, containLabel: false },
 		          tooltip: {
 		            ...baseChartOption().tooltip,
 		            trigger: "axis",
 		            formatter: (params) => {
 		              const first = Array.isArray(params) ? params[0] : params;
-		              const item = first?.data?.item || {};
+		              const item = items[first?.dataIndex] || first?.data?.item || {};
+		              const chinextClose = nullableNumber(item.chinext_close);
 		              return [
 		                `<strong>${escapeText(item.date)}</strong>`,
 		                `Top50占比：${escapeText(formatPct(item.top50_share_pct))}`,
+			                hasChinext ? `创业板指：${escapeText(chinextClose === null ? "当日收盘未记录" : chinextClose.toFixed(2))}` : "",
 		                `Top50成交额：${escapeText(item.top50_turnover == null ? "待确认" : formatAmount(item.top50_turnover))}`,
 		                item.change_pct_point == null ? "" : `较前日：${escapeText(`${numberValue(item.change_pct_point) > 0 ? "+" : ""}${numberValue(item.change_pct_point).toFixed(2)}pct`)}`,
 		                item.state ? `状态：${escapeText(item.state)}` : "",
@@ -2780,15 +4190,26 @@
 		            },
 		          },
 		          xAxis: marketTrendXAxis(items),
-		          yAxis: {
-		            type: "value",
-		            name: "占比",
-		            min: (value) => Math.min(16, Math.floor(value.min) - 1),
-		            max: (value) => Math.max(26, Math.ceil(value.max) + 1),
-		            nameTextStyle: { color: chartTone.muted },
-		            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
-		            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
-		          },
+		          yAxis: [
+		            {
+		              type: "value",
+		              name: "占比",
+		              min: (value) => Math.min(16, Math.floor(value.min) - 1),
+		              max: (value) => Math.max(26, Math.ceil(value.max) + 1),
+		              nameTextStyle: { color: chartTone.muted },
+		              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		            ...(hasChinext ? [{
+		              type: "value",
+		              name: "创业板指",
+		              scale: true,
+		              nameTextStyle: { color: chartTone.iceBlue },
+		              axisLabel: { color: chartTone.iceBlue, formatter: (value) => Math.round(value) },
+		              axisLine: { show: true, lineStyle: { color: chartTone.iceBlue } },
+		              splitLine: { show: false },
+		            }] : []),
+		          ],
 		          series: [
 		            {
 		              name: "Top50占比",
@@ -2796,7 +4217,7 @@
 		              smooth: 0.32,
 		              symbol: "circle",
 		              symbolSize: 6,
-		              lineStyle: { width: 2.5 },
+		              lineStyle: { width: 2.2 },
 		              data: items.map((item) => ({ value: numberValue(item.top50_share_pct), item })),
 		              markLine: {
 		                silent: true,
@@ -2818,9 +4239,6 @@
 		                    label: {
 		                      color: chartTone.extremeText,
 		                      backgroundColor: chartTone.extremeRed,
-		                      textShadowColor: "rgba(94,0,0,0.5)",
-		                      textShadowBlur: 2,
-		                      textShadowOffsetY: 1,
 		                    },
 		                  },
 		                  { yAxis: 20, name: "20%活跃" },
@@ -2828,6 +4246,18 @@
 		                ],
 		              },
 		            },
+		            ...(hasChinext ? [{
+		              name: "创业板指",
+		              type: "line",
+		              yAxisIndex: 1,
+		              smooth: 0.24,
+		              connectNulls: false,
+		              symbol: "diamond",
+		              symbolSize: 6,
+		              lineStyle: { width: 2.2, color: chartTone.iceBlue },
+		              itemStyle: { color: chartTone.iceBlue },
+		              data: items.map((item) => nullableNumber(item.chinext_close)),
+		            }] : []),
 		          ],
 		        });
 		        return chart;
@@ -2850,7 +4280,7 @@
 		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
 		        chart.setOption({
 		          ...baseChartOption(),
-		          color: [chartTone.green],
+		          color: [chartTone.fluorescentPurple],
 		          grid: { left: 58, right: 34, top: 28, bottom: 44, containLabel: false },
 		          tooltip: {
 		            ...baseChartOption().tooltip,
@@ -2885,16 +4315,17 @@
 		          series: [{
 		            name: "创新高全A占比",
 		            type: "line",
+		            z: 10,
 		            smooth: 0.2,
 		            symbol: "circle",
 		            symbolSize: 4,
 		            showSymbol: false,
 		            connectNulls: false,
-		            lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 },
-		            itemStyle: { color: "rgba(23,110,84,0.72)" },
+		            lineStyle: { width: 2.2, color: chartTone.fluorescentPurple, opacity: 1 },
+		            itemStyle: { color: chartTone.fluorescentPurple },
 		            emphasis: {
 		              lineStyle: { width: 2.4, opacity: 0.9 },
-		              itemStyle: { color: chartTone.green },
+		              itemStyle: { color: chartTone.fluorescentPurple },
 		            },
 		            data: items.map((item) => ({ value: numberValue(item.new_high_share_pct), item })),
 		            markLine: {
@@ -2923,60 +4354,596 @@
 		        return chart;
 		      };
 
-	      const renderSectorTurnoverShareChart = (node, payload) => {
-	        const items = Array.isArray(payload?.items) ? payload.items : [];
-	        if (!items.length || !window.echarts) {
+	      const renderSectorCycleSwimlaneChart = (node, payload) => {
+	        const dates = Array.isArray(payload?.dates) ? payload.dates : [];
+	        const lanes = Array.isArray(payload?.lanes) ? payload.lanes : [];
+	        if (!dates.length || !lanes.length || !window.echarts) {
 	          return null;
 	        }
-	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
-	        chart.setOption({
-	          ...baseChartOption(),
-	          xAxis: {
-	            type: "value",
-	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
-	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
-	          },
-	          yAxis: {
-	            type: "category",
-	            inverse: true,
-	            data: items.map((item) => item.sector),
-	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
-	            axisTick: { show: false },
-	            axisLine: { show: false },
-	          },
-	          tooltip: {
-	            ...baseChartOption().tooltip,
-	            formatter: (params) => {
-	              const item = params.data.item || {};
-	              const change = item.change_pct === null || item.change_pct === undefined
-	                ? "待确认"
-	                : `${numberValue(item.change_pct) > 0 ? "+" : ""}${numberValue(item.change_pct).toFixed(1)}pct`;
-	              return [
-	                `<strong>${escapeText(item.sector)}</strong>`,
-	                `占比：${escapeText(formatPct(item.share_pct))}`,
-	                `板块成交额：${escapeText(formatAmount(item.turnover))}`,
-	                `同板块变化：${escapeText(change)}`,
-	                item.note ? `解读：${escapeText(item.note)}` : "",
-	              ].filter(Boolean).join("<br>");
-	            },
-	          },
-	          series: [{
-	            type: "bar",
-	            barWidth: 14,
-	            data: items.map((item) => ({ value: numberValue(item.share_pct), item })),
-	            itemStyle: {
-	              borderRadius: [0, 8, 8, 0],
-	              color: (params) => params.data.item.color || chartTone.red,
-	            },
-	            label: {
-	              show: true,
-	              position: "right",
-	              color: chartTone.muted,
-	              formatter: (params) => formatPct(params.value),
-	            },
-	          }],
+	        const isRelativePath = payload?.schema === "sector_relative_path_swimlane.v2";
+	        const runItems = [];
+	        const observationItems = [];
+	        const pathItems = [];
+	        const activityIntervalItems = [];
+	        const activityEventItems = [];
+	        let maxPathDeviation = 0;
+	        lanes.forEach((lane, laneIndex) => {
+	          const color = lane.color || chartTone.red;
+	          (Array.isArray(lane.runs) ? lane.runs : []).forEach((run) => {
+	            runItems.push({
+	              value: [run.start_index, run.end_index, laneIndex],
+	              itemStyle: { color, opacity: 0.7 },
+	              item: { ...run, kind: "run", sector: lane.sector, color },
+	            });
+	          });
+	          (Array.isArray(lane.observations) ? lane.observations : []).forEach((observation) => {
+	            observationItems.push({
+	              value: [observation.date_index, laneIndex, observation.share_pct],
+	              item: { ...observation, sector: lane.sector, color },
+	            });
+	          });
+	          if (isRelativePath) {
+	            (Array.isArray(lane.activity_intervals) ? lane.activity_intervals : []).forEach((interval) => {
+	              activityIntervalItems.push({
+	                value: [interval.start_index, interval.end_index, laneIndex],
+	                item: { ...interval, kind: "activity-interval", sector: lane.sector, color },
+	              });
+	            });
+	            (Array.isArray(lane.activity_events) ? lane.activity_events : []).forEach((event) => {
+	              const kinds = Array.isArray(event.kinds) && event.kinds.length
+	                ? event.kinds
+	                : [event.primary_kind || "price_response"];
+	              const labels = Array.isArray(event.labels) ? event.labels : [];
+	              const detailsByKind = event.details_by_kind && typeof event.details_by_kind === "object"
+	                ? event.details_by_kind
+	                : {};
+	              const stockNamesByKind = event.stock_names_by_kind && typeof event.stock_names_by_kind === "object"
+	                ? event.stock_names_by_kind
+	                : {};
+	              kinds.forEach((eventKind, eventKindIndex) => {
+	                activityEventItems.push({
+	                  value: [event.date_index, laneIndex],
+	                  item: {
+	                    ...event,
+	                    kind: "activity-event",
+	                    event_kind: eventKind,
+	                    event_label: labels[eventKindIndex] || "反馈记录",
+	                    event_kind_index: eventKindIndex,
+	                    event_kind_count: kinds.length,
+	                    details: Array.isArray(detailsByKind[eventKind]) ? detailsByKind[eventKind] : [],
+	                    amount_yi: nullableNumber(event.amounts_yi?.[eventKind]),
+	                    stock_names: Array.isArray(stockNamesByKind[eventKind])
+	                      ? stockNamesByKind[eventKind]
+	                      : [],
+	                    sector: lane.sector,
+	                    color,
+	                  },
+	                });
+	              });
+	            });
+	            const path = Array.isArray(lane.normalized_path) ? lane.normalized_path : [];
+	            const segments = [];
+	            let currentSegment = [];
+	            path.forEach((point) => {
+	              const normalizedValue = nullableNumber(point?.normalized_value);
+	              if (normalizedValue === null) {
+	                if (currentSegment.length) segments.push(currentSegment);
+	                currentSegment = [];
+	                return;
+	              }
+	              maxPathDeviation = Math.max(maxPathDeviation, Math.abs(normalizedValue - 100));
+	              currentSegment.push({
+	                dateIndex: Number(point.date_index),
+	                normalizedValue,
+	                point,
+	              });
+	            });
+	            if (currentSegment.length) segments.push(currentSegment);
+	            pathItems.push({
+	              value: [laneIndex],
+	              item: { ...lane, laneIndex, color, segments, kind: "relative-path" },
+	            });
+	          }
 	        });
-	        return chart;
+	        maxPathDeviation = Math.max(maxPathDeviation, 3);
+
+	        const activityIntervalTooltip = (item) => {
+	          const sourceStart = item.source_start_date || item.start_date || "待确认";
+	          const sourceEnd = item.source_end_date || item.end_date || "待确认";
+	          const visibleRange = sourceStart !== item.start_date || sourceEnd !== item.end_date
+	            ? `图内区间：${item.start_date || "待确认"} 至 ${item.end_date || "待确认"}`
+	            : "";
+	          const basis = Array.isArray(item.basis_labels) && item.basis_labels.length
+	            ? item.basis_labels.join(" / ")
+	            : "证据类型待确认";
+	          const coverage = nullableNumber(item.evidence_coverage);
+	          return [
+	            `<strong>${escapeText(item.sector || "")}</strong>`,
+	            `反馈区间：${escapeText(sourceStart)} 至 ${escapeText(sourceEnd)}`,
+	            visibleRange ? escapeText(visibleRange) : "",
+	            `持续：${escapeText(item.span_trading_days ? `${item.span_trading_days}个交易日` : "待确认")}`,
+	            `区间状态：${escapeText(item.status || "有反馈记录")}`,
+	            `起止依据：${escapeText(`${item.start_basis || "待确认"} / ${item.end_basis || "待确认"}`)}`,
+	            `证据类型：${escapeText(basis)}`,
+	            `逐日覆盖：${escapeText(coverage === null ? "未记录" : `${Math.round(coverage * 100)}%`)}`,
+	          ].filter(Boolean).join("<br>");
+	        };
+
+	        const activityEventTooltip = (item) => {
+	          const details = Array.isArray(item.details) ? item.details : [];
+	          const stockNames = Array.isArray(item.stock_names) ? item.stock_names : [];
+	          return [
+	            `<strong>${escapeText(item.sector || "")}</strong>`,
+	            `日期：${escapeText(item.date || "待确认")}`,
+	            `证据：${escapeText(item.event_label || "反馈记录")}`,
+	            ...details.map((detail) => escapeText(detail)),
+	            stockNames.length ? `涉及个股：${escapeText(stockNames.join("、"))}` : "",
+	          ].filter(Boolean).join("<br>");
+	        };
+
+	        const relativePathTooltip = (item) => {
+	          const roleText = Array.isArray(item.roles) && item.roles.length
+	            ? item.roles.join(" / ")
+	            : "观察方向";
+	          const metric = nullableNumber(item.relative_strength_metric);
+	          const coverage = nullableNumber(item.comparison_coverage);
+	          const density = nullableNumber(item.trend_density);
+	          return [
+	            `<strong>${escapeText(item.sector || "")}</strong>`,
+	            `身份：${escapeText(roleText)}`,
+	            `价格辅助判断：${escapeText(item.interpretation || "未形成")}`,
+	            `阶段状态：${escapeText(item.stage_status || "未确认")}`,
+	            `共同窗口收益：${escapeText(metric === null ? "未计算" : formatSignedPct(metric))}`,
+	            `相对名次：${escapeText(item.relative_strength_rank ? `第${item.relative_strength_rank}` : "未计算")}`,
+	            `比较覆盖：${escapeText(coverage === null ? "未记录" : `${Math.round(coverage * 100)}%`)}`,
+	            `内部趋势密度：${escapeText(density === null ? "未记录" : `${(density * 100).toFixed(1)}%`)}`,
+	            `分歧检验：${escapeText(item.divergence_test_status || "未经检验")}`,
+	            `价格吸收：${escapeText(item.price_absorption || "未形成")}`,
+	            item.path_missing_reason ? `路径缺口：${escapeText(item.path_missing_reason)}` : "",
+	          ].filter(Boolean).join("<br>");
+	        };
+
+	        const activityEventColor = (kind, laneColor) => {
+	          if (kind === "institution_net_buy") return "#a87922";
+	          if (kind === "main_fund_inflow" || kind === "capital_return") return "#2f7a62";
+	          if (kind === "rotation" || kind === "reflow") return "#6c5b91";
+	          if (kind === "turnover_participation") return "#68737d";
+	          if (kind === "cross_day_feedback") return "#3f6f97";
+	          return laneColor || chartTone.red;
+	        };
+
+	        const activityEventMarkerPosition = (point, laneHeight, kind, kindIndex, kindCount) => {
+	          if (kindCount > 1) {
+	            const ringRadius = Math.max(18, Math.min(laneHeight * 0.25, 20));
+	            const angle = -Math.PI / 2 + (Math.PI * 2 * kindIndex) / kindCount;
+	            return [
+	              point[0] + Math.cos(angle) * ringRadius,
+	              point[1] + Math.sin(angle) * ringRadius,
+	            ];
+	          }
+	          const singleYOffset = kind === "institution_net_buy"
+	            ? -laneHeight * 0.3
+	            : kind === "main_fund_inflow"
+	              ? -laneHeight * 0.24
+	              : kind === "capital_return"
+	                ? -laneHeight * 0.18
+	                : kind === "reflow"
+	                  ? -laneHeight * 0.09
+	                  : kind === "rotation"
+	                    ? 0
+	                    : kind === "cross_day_feedback"
+	                      ? laneHeight * 0.09
+	                      : kind === "price_response"
+	                        ? laneHeight * 0.18
+	                        : laneHeight * 0.3;
+	          return [point[0], point[1] + singleYOffset];
+	        };
+
+	        const relativePathSeries = () => [
+	          {
+	            name: "共同起点100",
+	            type: "custom",
+	            coordinateSystem: "cartesian2d",
+	            silent: true,
+	            renderItem: (params, api) => {
+	              const laneIndex = api.value(0);
+	              const start = api.coord([0, laneIndex]);
+	              const end = api.coord([Math.max(dates.length - 1, 0), laneIndex]);
+	              return {
+	                type: "line",
+	                shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] },
+	                style: { stroke: chartTone.muted, lineWidth: 1, lineDash: [4, 4], opacity: 0.2 },
+	              };
+	            },
+	            data: lanes.map((_lane, laneIndex) => ({ value: [laneIndex] })),
+	            z: 1,
+	          },
+	          {
+	            name: "反馈起止区间",
+	            type: "custom",
+	            coordinateSystem: "cartesian2d",
+	            renderItem: (params, api) => {
+	              const item = activityIntervalItems[params.dataIndex]?.item || {};
+	              const laneIndex = Number(api.value(2)) || 0;
+	              const start = api.coord([api.value(0), laneIndex]);
+	              const end = api.coord([api.value(1), laneIndex]);
+	              const cellWidth = Math.abs(api.size([1, 0])[0]);
+	              const laneHeight = Math.abs(api.size([0, 1])[1]);
+	              const shape = window.echarts.graphic.clipRectByRect(
+	                {
+	                  x: start[0] - cellWidth * 0.38,
+	                  y: start[1] - laneHeight * 0.18,
+	                  width: Math.max(cellWidth * 0.76, end[0] - start[0] + cellWidth * 0.76),
+	                  height: Math.max(12, laneHeight * 0.36),
+	                  r: 4,
+	                },
+	                params.coordSys,
+	              );
+	              if (!shape) return null;
+	              const isOngoing = item.is_ongoing === true;
+	              const isObservedFeedback = item.range_kind === "observed_feedback";
+	              const isTerminalStatus = item.status === "反馈减弱" || item.status === "反馈结束";
+	              const isEnded = !isOngoing || isTerminalStatus;
+	              const intervalOpacity = isTerminalStatus
+	                ? 0.42
+	                : isObservedFeedback
+	                  ? (isOngoing ? 0.66 : 0.48)
+	                  : isEnded
+	                    ? 0.54
+	                    : 0.72;
+	              const intervalLineDash = isTerminalStatus
+	                ? [8, 4]
+	                : isObservedFeedback
+	                  ? [2, 3]
+	                  : isEnded
+	                    ? [5, 3]
+	                    : null;
+	              const color = item.color || chartTone.red;
+	              const children = [{
+	                type: "rect",
+	                shape,
+	                style: {
+	                  fill: color,
+	                  opacity: intervalOpacity,
+	                  stroke: color,
+	                  lineWidth: 1.2,
+	                  lineDash: intervalLineDash,
+	                },
+	              }];
+	              if (isOngoing && !isTerminalStatus) {
+	                children.push({
+	                  type: "circle",
+	                  shape: {
+	                    cx: shape.x + shape.width - 3,
+	                    cy: shape.y + shape.height / 2,
+	                    r: 3,
+	                  },
+	                  style: { fill: "#ffffff", stroke: color, lineWidth: 1.4 },
+	                });
+	              }
+	              return { type: "group", children };
+	            },
+	            encode: { x: [0, 1], y: 2 },
+	            data: activityIntervalItems,
+	            z: 3,
+	          },
+	          {
+	            name: "归一价格辅助线",
+	            type: "custom",
+	            coordinateSystem: "cartesian2d",
+	            renderItem: (params, api) => {
+	              const item = pathItems[params.dataIndex]?.item || {};
+	              const laneIndex = Number(item.laneIndex) || 0;
+	              const center = api.coord([0, laneIndex]);
+	              const laneHeight = Math.abs(api.size([0, 1])[1]);
+	              const roles = Array.isArray(item.roles) ? item.roles : [];
+	              const lineWidth = roles.includes("阶段主线") ? 1.8 : roles.includes("当日主攻") ? 1.6 : 1.2;
+	              const children = [];
+	              (Array.isArray(item.segments) ? item.segments : []).forEach((segment) => {
+	                const points = segment.map((point) => {
+	                  const x = api.coord([point.dateIndex, laneIndex])[0];
+	                  const y = center[1] - ((point.normalizedValue - 100) / maxPathDeviation) * laneHeight * 0.34;
+	                  return [x, y];
+	                });
+	                if (points.length > 1) {
+	                  children.push({
+	                    type: "polyline",
+	                    shape: { points },
+	                    style: {
+	                      stroke: item.color || chartTone.red,
+	                      fill: null,
+	                      lineWidth,
+	                      opacity: item.path_complete ? 0.58 : 0.36,
+	                    },
+	                  });
+	                }
+	                points.forEach((point, pointIndex) => {
+	                  if (pointIndex !== 0 && pointIndex !== points.length - 1) return;
+	                  children.push({
+	                    type: "circle",
+	                    shape: { cx: point[0], cy: point[1], r: roles.includes("阶段主线") ? 2.6 : 2.2 },
+	                    style: { fill: item.color || chartTone.red, stroke: "#ffffff", lineWidth: 1 },
+	                  });
+	                });
+	              });
+	              return { type: "group", children };
+	            },
+	            encode: { y: 0 },
+	            data: pathItems,
+	            z: 4,
+	          },
+	          {
+	            name: "逐日反馈与资金节点",
+	            type: "custom",
+	            coordinateSystem: "cartesian2d",
+	            renderItem: (params, api) => {
+	              const item = activityEventItems[params.dataIndex]?.item || {};
+	              const laneIndex = Number(api.value(1)) || 0;
+	              const point = api.coord([api.value(0), laneIndex]);
+	              const laneHeight = Math.abs(api.size([0, 1])[1]);
+	              const kind = item.event_kind || item.primary_kind || "price_response";
+	              const color = activityEventColor(kind, item.color);
+	              const size = kind === "price_response" ? 3 : 5;
+	              const kindIndex = Number(item.event_kind_index) || 0;
+	              const kindCount = Math.max(Number(item.event_kind_count) || 1, 1);
+	              const [x, y] = activityEventMarkerPosition(
+	                point,
+	                laneHeight,
+	                kind,
+	                kindIndex,
+	                kindCount,
+	              );
+	              let marker = null;
+	              if (kind === "institution_net_buy") {
+	                marker = {
+	                  type: "rect",
+	                  shape: { x: x - size, y: y - size, width: size * 2, height: size * 2, r: 1 },
+	                  style: { fill: color, stroke: "#ffffff", lineWidth: 1.2 },
+	                };
+	              } else if (kind === "main_fund_inflow" || kind === "capital_return") {
+	                marker = {
+	                  type: "polygon",
+	                  shape: { points: [[x, y - size - 1], [x + size + 1, y], [x, y + size + 1], [x - size - 1, y]] },
+	                  style: { fill: color, stroke: "#ffffff", lineWidth: 1.2 },
+	                };
+	              } else if (kind === "rotation" || kind === "reflow") {
+	                marker = {
+	                  type: "polygon",
+	                  shape: { points: [[x, y - size - 1], [x + size + 1, y + size], [x - size - 1, y + size]] },
+	                  style: { fill: color, stroke: "#ffffff", lineWidth: 1 },
+	                };
+	              } else {
+	                marker = {
+	                  type: "circle",
+	                  shape: { cx: x, cy: y, r: size },
+	                  style: {
+	                    fill: kind === "turnover_participation" ? "#ffffff" : color,
+	                    stroke: color,
+	                    lineWidth: kind === "turnover_participation" ? 2 : 1,
+	                  },
+	                };
+	              }
+	              return { type: "group", children: [marker] };
+	            },
+	            encode: { x: 0, y: 1 },
+	            data: activityEventItems,
+	            z: 6,
+	          },
+	        ];
+
+	        let chart = null;
+	        try {
+	          chart = window.echarts.init(node, null, { renderer: "canvas" });
+	          chart.setOption({
+	            ...baseChartOption(),
+	            animationDuration: 260,
+	            grid: { left: 12, right: 20, top: 18, bottom: 56, containLabel: false },
+	            tooltip: {
+	              ...baseChartOption().tooltip,
+	              formatter: (params) => {
+	                const item = params?.data?.item || {};
+	                if (item.kind === "activity-interval") {
+	                  return activityIntervalTooltip(item);
+	                }
+	                if (item.kind === "activity-event") {
+	                  return activityEventTooltip(item);
+	                }
+	                if (item.kind === "relative-path") {
+	                  return relativePathTooltip(item);
+	                }
+	                if (item.kind === "run") {
+	                  const range = item.start_date === item.end_date
+	                    ? item.start_date
+	                    : `${item.start_date} 至 ${item.end_date}`;
+	                  return [
+	                    `<strong>${escapeText(item.sector || "")}</strong>`,
+	                    `小周期方向：${escapeText(range || "待确认")}`,
+	                  ].join("<br>");
+	                }
+	                return [
+	                  `<strong>${escapeText(item.sector || "")}</strong>`,
+	                  `日期：${escapeText(item.date || "待确认")}`,
+	                  `板块成交额：${escapeText(item.turnover_text || "数据暂缺")}`,
+	                  `两市成交额：${escapeText(item.total_turnover_text || "数据暂缺")}`,
+	                  `占比：${escapeText(item.share_text || "待累计")}`,
+	                  `同板块变化：${escapeText(item.change_text || "待累计")}`,
+	                  `样本状态：${escapeText(item.status || "待累计")}`,
+	                  item.note ? `解读：${escapeText(item.note)}` : "",
+	                ].filter(Boolean).join("<br>");
+	              },
+	            },
+	            xAxis: {
+	              type: "category",
+	              boundaryGap: true,
+	              data: dates,
+	              axisLabel: { color: chartTone.muted, interval: 0, rotate: 42, formatter: compactDateLabel },
+	              axisTick: { show: false },
+	              axisLine: { lineStyle: { color: chartTone.line } },
+	              splitLine: { show: true, lineStyle: { color: chartTone.line, type: "dashed" } },
+	            },
+	            yAxis: {
+	              type: "category",
+	              inverse: true,
+	              data: lanes.map((lane) => lane.sector),
+	              axisLabel: { show: false },
+	              axisTick: { show: false },
+	              axisLine: { show: false },
+	              splitLine: { show: true, lineStyle: { color: chartTone.line } },
+	            },
+	            series: isRelativePath ? relativePathSeries() : [
+	              {
+	                name: "小周期方向",
+	                type: "custom",
+	                coordinateSystem: "cartesian2d",
+	                renderItem: (params, api) => {
+	                  const start = api.coord([api.value(0), api.value(2)]);
+	                  const end = api.coord([api.value(1), api.value(2)]);
+	                  const cellWidth = Math.abs(api.size([1, 0])[0]);
+	                  const laneHeight = Math.abs(api.size([0, 1])[1]);
+	                  const shape = window.echarts.graphic.clipRectByRect(
+	                    {
+	                      x: start[0] - cellWidth * 0.38,
+	                      y: start[1] - laneHeight * 0.18,
+	                      width: Math.max(cellWidth * 0.76, end[0] - start[0] + cellWidth * 0.76),
+	                      height: Math.max(8, laneHeight * 0.36),
+	                      r: 4,
+	                    },
+	                    params.coordSys,
+	                  );
+	                  return shape ? { type: "rect", shape, style: api.style() } : null;
+	                },
+	                encode: { x: [0, 1], y: 2 },
+	                data: runItems,
+	                z: 2,
+	              },
+	              {
+	                name: "成交占比观察点",
+	                type: "scatter",
+	                symbol: (value, params) => {
+	                  const kind = params?.data?.item?.kind;
+	                  if (kind === "missing") return "emptyCircle";
+	                  if (kind === "combined") return "diamond";
+	                  return "circle";
+	                },
+	                symbolSize: (value, params) => params?.data?.item?.kind === "combined" ? 15 : 11,
+	                itemStyle: {
+	                  color: (params) => params?.data?.item?.kind === "missing"
+	                    ? "#ffffff"
+	                    : (params?.data?.item?.color || chartTone.red),
+	                  borderColor: (params) => params?.data?.item?.color || chartTone.red,
+	                  borderWidth: 2,
+	                },
+	                emphasis: { scale: 1.35 },
+	                data: observationItems,
+	                z: 4,
+	              },
+	            ],
+	          });
+	          node.closest("[data-sector-cycle-card]")?.classList.add("is-chart-ready");
+	          return chart;
+	        } catch (error) {
+	          if (chart) chart.dispose();
+	          return null;
+	        }
+	      };
+
+	      const setupSectorCycleScrollControls = () => {
+	        const controlsList = Array.from(document.querySelectorAll("[data-sector-cycle-scroll-controls]"));
+	        for (const controls of controlsList) {
+	          const card = controls.closest("[data-sector-cycle-card]");
+	          const track = card?.querySelector(".sector-cycle-track-scroll");
+	          const ascii = card?.querySelector("[data-sector-cycle-ascii]");
+	          const range = controls.querySelector("[data-sector-cycle-scroll-range]");
+	          const backward = controls.querySelector("[data-sector-cycle-scroll-backward]");
+	          const forward = controls.querySelector("[data-sector-cycle-scroll-forward]");
+	          const activeScrollTarget = () => card?.classList.contains("is-chart-ready") ? track : ascii;
+	          const scrollTargets = [track, ascii].filter(Boolean);
+	          if (!activeScrollTarget() || !range || !backward || !forward) {
+	            continue;
+	          }
+
+	          let scrollTicking = false;
+	          let lastActiveScrollTarget = activeScrollTarget();
+	          let pendingScrollRatio = null;
+	          const scrollMaximum = (target) => (
+	            target ? Math.max(Math.ceil(target.scrollWidth - target.clientWidth), 0) : 0
+	          );
+	          const scrollRatio = (target) => {
+	            const maximum = scrollMaximum(target);
+	            return maximum > 0
+	              ? Math.min(Math.max(target.scrollLeft / maximum, 0), 1)
+	              : 0;
+	          };
+	          let lastScrollRatio = scrollRatio(lastActiveScrollTarget);
+	          const maxScroll = () => {
+	            const target = activeScrollTarget();
+	            return scrollMaximum(target);
+	          };
+	          const syncFromTarget = () => {
+	            const target = activeScrollTarget();
+	            if (!target) return;
+	            if (target !== lastActiveScrollTarget) {
+	              pendingScrollRatio = lastScrollRatio;
+	              lastActiveScrollTarget = target;
+	            }
+	            const maximum = maxScroll();
+	            if (pendingScrollRatio !== null && maximum > 0) {
+	              target.scrollLeft = Math.round(maximum * pendingScrollRatio);
+	              pendingScrollRatio = null;
+	            }
+	            const position = Math.min(Math.max(Math.round(target.scrollLeft), 0), maximum);
+	            if (maximum > 0) {
+	              lastScrollRatio = position / maximum;
+	            }
+	            range.max = String(maximum);
+	            range.value = String(position);
+	            range.disabled = maximum === 0;
+	            backward.disabled = maximum === 0 || position <= 0;
+	            forward.disabled = maximum === 0 || position >= maximum;
+	            controls.classList.toggle("is-static", maximum === 0);
+	          };
+
+	          for (const target of scrollTargets) {
+	            target.addEventListener("scroll", () => {
+	              if (target !== activeScrollTarget() || scrollTicking) return;
+	              lastActiveScrollTarget = target;
+	              pendingScrollRatio = null;
+	              lastScrollRatio = scrollRatio(target);
+	              scrollTicking = true;
+	              window.requestAnimationFrame(() => {
+	                syncFromTarget();
+	                scrollTicking = false;
+	              });
+	            }, { passive: true });
+	          }
+	          range.addEventListener("input", () => {
+	            const target = activeScrollTarget();
+	            if (!target) return;
+	            target.scrollLeft = Number(range.value) || 0;
+	            syncFromTarget();
+	          });
+	          const scrollStep = () => Math.max((activeScrollTarget()?.clientWidth || 0) * 0.72, 180);
+	          backward.addEventListener("click", () => {
+	            const target = activeScrollTarget();
+	            if (!target) return;
+	            target.scrollLeft = Math.max(target.scrollLeft - scrollStep(), 0);
+	          });
+	          forward.addEventListener("click", () => {
+	            const target = activeScrollTarget();
+	            if (!target) return;
+	            target.scrollLeft = Math.min(target.scrollLeft + scrollStep(), maxScroll());
+	          });
+
+	          if (window.ResizeObserver) {
+	            const observer = new ResizeObserver(syncFromTarget);
+	            for (const target of scrollTargets) {
+	              observer.observe(target);
+	              if (target.firstElementChild) observer.observe(target.firstElementChild);
+	            }
+	          }
+	          window.addEventListener("resize", syncFromTarget);
+	          window.requestAnimationFrame(syncFromTarget);
+	        }
 	      };
 
 	      const renderTurnoverSectorShareChart = (node, payload) => {
@@ -3171,19 +5138,21 @@
 		          return null;
 	        }
 	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+        const narrow = () => node.clientWidth < 480;
 	        chart.setOption({
 	          ...baseChartOption(),
-	          grid: { left: 126, right: 108, top: 14, bottom: 28, containLabel: false },
+          grid: { left: narrow() ? 88 : 126, right: narrow() ? 88 : 142, top: 14, bottom: 28, containLabel: false },
 	          xAxis: {
 	            type: "value",
-	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}亿` },
-	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+            axisLabel: { show: !narrow(), color: chartTone.muted, hideOverlap: true, formatter: (value) => `${value}亿` },
+            splitNumber: 3,
+            splitLine: { show: false },
 	          },
 	          yAxis: {
 	            type: "category",
 	            inverse: true,
 	            data: items.map((item) => `${item.rank}. ${item.name}`),
-	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+            axisLabel: { color: chartTone.text, interval: 0, width: narrow() ? 80 : 118, overflow: "truncate" },
 	            axisTick: { show: false },
 	            axisLine: { show: false },
 	          },
@@ -3203,24 +5172,39 @@
 	          series: [{
 	            name: "成交额",
 	            type: "bar",
-	            barWidth: 11,
+            barWidth: 20,
 	            data: items.map((item) => ({ value: numberValue(item.turnover), item })),
 	            itemStyle: {
-	              borderRadius: [0, 7, 7, 0],
-	              color: (params) => numberValue(params.data.item.change_pct) < 0 ? chartTone.green : chartTone.red,
+              borderRadius: 3,
+              color: (params) => {
+                const change = params.data.item.change_pct;
+                return change == null || numberValue(change) === 0 ? chartTone.muted : numberValue(change) < 0 ? chartTone.green : chartTone.red;
+              },
 	            },
 	            label: {
 	              show: true,
 	              position: "right",
 	              color: chartTone.muted,
+              fontSize: narrow() ? 11 : 12,
+              lineHeight: 14,
 	              formatter: (params) => {
 	                const item = params.data.item || {};
-	                const changeText = formatSignedPct(item.change_pct);
-	                return item.status ? `${changeText} · ${item.status}` : changeText;
+                return `${formatAmount(item.turnover)}${narrow() ? "\n" : " · "}${formatSignedPct(item.change_pct)}`;
 	              },
 	            },
 	          }],
 		        });
+        let wasNarrow = narrow();
+        new ResizeObserver(() => {
+          if (narrow() === wasNarrow || chart.isDisposed()) return;
+          wasNarrow = narrow();
+          chart.setOption({
+            grid: { left: wasNarrow ? 88 : 126, right: wasNarrow ? 88 : 142 },
+            xAxis: { axisLabel: { show: !wasNarrow } },
+            yAxis: { axisLabel: { width: wasNarrow ? 80 : 118 } },
+            series: [{ label: { fontSize: wasNarrow ? 11 : 12 } }],
+          });
+        }).observe(node);
 		        return chart;
 		      };
 
@@ -3341,13 +5325,12 @@
 		          ...baseChartOption(),
 		          color: palette,
 		          legend: {
-		            top: 8,
-		            left: 8,
-		            right: 8,
+		            top: 4,
+		            left: "center",
 		            type: "scroll",
 		            itemWidth: 10,
 		            itemHeight: 10,
-		            textStyle: { color: chartTone.muted, fontSize: 12 },
+		            textStyle: { color: chartTone.muted, fontSize: 11 },
 		            data: groupedItems.map((group) => group.label),
 		          },
 		          grid: [
@@ -3418,13 +5401,23 @@
 		        return chart;
 		      };
 
-			      const renderedCharts = Array.from(document.querySelectorAll("[data-market-structure-chart]"))
-			        .map((node) => renderMarketStructureChart(node))
-			        .concat(Array.from(document.querySelectorAll("[data-bear-chart]"))
-		        .map((node) => {
-		          const key = node.dataset.bearChart;
+	      const renderedCharts = [];
+	      let chartsInitialized = false;
+	      const renderCharts = () => {
+	        if (chartsInitialized || !window.echarts) {
+	          return false;
+	        }
+	        chartsInitialized = true;
+	        renderedCharts.push(...Array.from(document.querySelectorAll("[data-market-structure-chart]"))
+			          .map((node) => renderMarketStructureChart(node))
+			          .concat(Array.from(document.querySelectorAll("[data-bear-chart]"))
+	          .map((node) => {
+	          const key = node.dataset.bearChart;
 		          if (key === "t0_market_breadth") {
 		            return renderT0MarketBreadthChart(node, chartPayload.t0_market_breadth);
+		          }
+		          if (key === "cffex_position_trend") {
+		            return renderCffexPositionTrendChart(node, chartPayload.cffex_position_trend);
 		          }
 		          if (key === "intraday_feedback_review") {
 			            return renderIntradayFeedbackReviewChart(node, chartPayload.intraday_feedback_review);
@@ -3438,8 +5431,8 @@
 		          if (key === "new_high_share_trend") {
 		            return renderNewHighShareTrendChart(node, chartPayload.new_high_share_trend);
 		          }
-	          if (key === "sector_turnover_share") {
-	            return renderSectorTurnoverShareChart(node, chartPayload.sector_turnover_share);
+	          if (key === "sector_cycle_swimlane") {
+	            return renderSectorCycleSwimlaneChart(node, chartPayload.sector_cycle_swimlane);
 	          }
 	          if (key === "turnover_sector_share") {
 	            return renderTurnoverSectorShareChart(node, chartPayload.turnover_sector_share);
@@ -3454,8 +5447,13 @@
 	            return renderLhbNetFlowChart(node, chartPayload.lhb_net_flow);
 			          }
 			          return null;
-		        }))
-			        .filter(Boolean);
+	          }))
+	          .filter(Boolean));
+	        return true;
+	      };
+	      renderCharts();
+	      window.addEventListener("bear:echarts-ready", renderCharts, { once: true });
+	      setupSectorCycleScrollControls();
 
 	      let chartResizeTicking = false;
 	      window.addEventListener("resize", () => {
@@ -3545,6 +5543,7 @@
 	      const outline = document.querySelector(".outline-sticky");
 	      const nav = document.querySelector(".outline-nav");
 	      const links = Array.from(document.querySelectorAll(".outline-nav a[data-outline-anchor]"));
+	      const navigationLinks = Array.from(document.querySelectorAll("a[data-outline-anchor]"));
 	      const linkByAnchor = new Map(links.map((link) => [link.dataset.outlineAnchor || "", link]));
 	      const headings = links
 	        .map((link) => document.getElementById(link.dataset.outlineAnchor || ""))
@@ -3667,7 +5666,20 @@
 	        });
 	      };
 
-	      for (const link of links) {
+	      const updateLocationAnchor = (id) => {
+	        if (window.location.protocol === "file:") {
+	          return;
+	        }
+	        try {
+	          if (window.history && window.history.replaceState) {
+	            window.history.replaceState(null, "", `#${encodeURIComponent(id)}`);
+	          }
+	        } catch (_error) {
+	          // Scrolling remains available when an embedding browser rejects URL changes.
+	        }
+	      };
+
+	      for (const link of navigationLinks) {
 	        link.addEventListener("click", (event) => {
           const id = link.dataset.outlineAnchor || "";
           const target = document.getElementById(id);
@@ -3678,11 +5690,9 @@
 	          forcedActiveId = id;
 	          setActive(id, { keepVisible: true });
 	          target.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
-	          if (window.history && window.history.replaceState) {
-	            window.history.replaceState(null, "", `#${encodeURIComponent(id)}`);
-          }
-          forcedActiveId = "";
-        });
+	          updateLocationAnchor(id);
+	          forcedActiveId = "";
+	        });
       }
       const releaseForcedActive = () => {
         if (!forcedActiveId) {
@@ -3703,6 +5713,7 @@
 	      window.addEventListener("load", scheduleHeadingRefresh, { once: true });
 	      window.addEventListener("wheel", releaseForcedActive, { passive: true });
       window.addEventListener("mousedown", releaseForcedActive, { passive: true });
+      window.addEventListener("touchstart", releaseForcedActive, { passive: true });
       window.addEventListener("keydown", releaseForcedActive);
     })();
   </script>

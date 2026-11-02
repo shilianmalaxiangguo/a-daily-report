@@ -45,6 +45,13 @@ def build_environment_follow_stage(stage_context, stage_meta, stage_lookup=None)
     stage_context = stage_context or {}
     stage_meta = stage_meta or {}
     bundle = dict(stage_context.get("market_research_bundle") or {})
+    data = stage_context.get("data") or {}
+    if isinstance(data, dict) and data.get("postgres_only") is True:
+        persisted_context = data.get("execution_stage_context") or {}
+        if isinstance(persisted_context, dict):
+            for field in ("candidates", "watchlist"):
+                if isinstance(persisted_context.get(field), list):
+                    bundle[field] = persisted_context[field]
     display_mvp_mode = bool(stage_context.get("display_mvp_mode", False))
     render_environment_follow_stage_body = stage_context.get("render_environment_follow_stage_body")
     render_market_research_snapshot_section = stage_context.get("render_market_research_snapshot_section")

@@ -55,6 +55,7 @@ os.environ.setdefault("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 class EventAnalysisCache:
+    ANALYSIS_CONTRACT_VERSION = "llm_event_analysis.v2"
     CACHE_DURATION_DAYS = 5
     CACHE_DURATION_SECONDS = CACHE_DURATION_DAYS * 24 * 60 * 60
 
@@ -63,21 +64,8 @@ class EventAnalysisCache:
         self.cache: Dict[str, Any] = {}
         self._service = self._runtime_cache_service()
 
-    def _postgres_database_url(self) -> str:
-        return (
-            os.environ.get("A_DAILY_REPORT_DATABASE_URL")
-            or os.environ.get("DATABASE_URL")
-            or ""
-        ).strip()
-
-    def _postgres_only_runtime(self) -> bool:
-        return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", "").strip() == "1"
-
     def _runtime_cache_service(self):
         if DatabaseService is None:
-            return None
-        database_url = self._postgres_database_url()
-        if not database_url.startswith(("postgres://", "postgresql://")):
             return None
         service = DatabaseService.from_environment()
         checker = getattr(service, "is_postgres_backed", None)
@@ -85,13 +73,21 @@ class EventAnalysisCache:
             return service
         return None
 
-    def _runtime_cache_key(self, event_title: str) -> str:
-        return self._make_key(event_title)
+    def _runtime_cache_key(self, event_title: str, event_summary: str = "") -> str:
+        return self._make_key(event_title, event_summary)
 
-    def _active_service_entry(self, event_title: str) -> Optional[Dict[str, Any]]:
+    def _active_service_entry(self, event_title: str, event_summary: str = "") -> Optional[Dict[str, Any]]:
         if self._service is None:
             return None
-        entry = self._service.get_runtime_cache_entry("llm_event_analysis", self._runtime_cache_key(event_title), "")
+        try:
+            entry = self._service.get_runtime_cache_entry(
+                "llm_event_analysis",
+                self._runtime_cache_key(event_title, event_summary),
+                "",
+            )
+        except Exception as error:
+            print(f"[EventCache] 读取缓存失败，按未命中继续分析: {error}")
+            return None
         if not isinstance(entry, dict):
             return None
         payload = entry.get("payload")
@@ -102,18 +98,24 @@ class EventAnalysisCache:
         result = payload.get("result")
         return result if isinstance(result, dict) else None
 
-    def _store_active_service_entry(self, event_title: str, result: Dict[str, Any]) -> None:
+    def _store_active_service_entry(
+        self,
+        event_title: str,
+        event_summary: str,
+        result: Dict[str, Any],
+    ) -> None:
         if self._service is None:
             return
         payload = {
             "timestamp": time.time(),
             "title": event_title,
+            "summary": event_summary,
             "result": result,
         }
         try:
             self._service.set_runtime_cache_entry(
                 "llm_event_analysis",
-                self._runtime_cache_key(event_title),
+                self._runtime_cache_key(event_title, event_summary),
                 "",
                 payload,
                 source="llm_service",
@@ -122,31 +124,42 @@ class EventAnalysisCache:
         except Exception as error:
             print(f"[EventCache] 保存缓存失败: {error}")
 
-    def _make_key(self, event_title: str) -> str:
-        return hashlib.md5(str(event_title or "").strip().lower().encode("utf-8")).hexdigest()
+    def _make_key(self, event_title: str, event_summary: str = "") -> str:
+        payload = json.dumps(
+            {
+                "analysis_contract": self.ANALYSIS_CONTRACT_VERSION,
+                "title": str(event_title or "").strip().lower(),
+                "summary": str(event_summary or "").strip(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
-    def get(self, event_title: str) -> Optional[Dict[str, Any]]:
-        key = self._make_key(event_title)
+    def get(self, event_title: str, event_summary: str = "") -> Optional[Dict[str, Any]]:
+        key = self._make_key(event_title, event_summary)
         if key in self.cache:
             cached = self.cache.get(key)
             if cached and time.time() - float(cached.get("timestamp", 0)) <= self.CACHE_DURATION_SECONDS:
                 result = cached.get("result")
                 return result if isinstance(result, dict) else None
             self.cache.pop(key, None)
-        service_result = self._active_service_entry(event_title)
+        service_result = self._active_service_entry(event_title, event_summary)
         if service_result is not None:
             return service_result
         return None
 
-    def set(self, event_title: str, result: Dict[str, Any]) -> None:
-        key = self._make_key(event_title)
+    def set(self, event_title: str, result: Dict[str, Any], event_summary: str = "") -> None:
+        key = self._make_key(event_title, event_summary)
         record = {
             "timestamp": time.time(),
             "title": event_title,
+            "summary": event_summary,
             "result": result,
         }
         self.cache[key] = record
-        self._store_active_service_entry(event_title, result)
+        self._store_active_service_entry(event_title, event_summary, result)
 
     def get_stats(self) -> Dict[str, int]:
         if self._service is not None:
@@ -166,6 +179,8 @@ class EventAnalysisCache:
 
 
 class BaseLLMProvider(ABC):
+    seed_supported = False
+
     @abstractmethod
     def chat(
         self,
@@ -176,6 +191,28 @@ class BaseLLMProvider(ABC):
         timeout: float,
     ) -> str:
         raise NotImplementedError
+
+    def chat_with_metadata(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        timeout: float,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "content": self.chat(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+            ),
+            "provider_request_id": "",
+            "seed_supported": False,
+            "seed": None,
+        }
 
 
 class DeepSeekHTTPProvider(BaseLLMProvider):
@@ -191,6 +228,24 @@ class DeepSeekHTTPProvider(BaseLLMProvider):
         max_tokens: int,
         timeout: float,
     ) -> str:
+        result = self.chat_with_metadata(
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        return str(result.get("content") or "")
+
+    def chat_with_metadata(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        timeout: float,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Any]:
         import requests
 
         response = requests.post(
@@ -220,7 +275,12 @@ class DeepSeekHTTPProvider(BaseLLMProvider):
                 "deepseek reasoning-only length response; increase max_tokens "
                 f"(reasoning_len={len(reasoning_content)})"
             )
-        return content
+        return {
+            "content": content,
+            "provider_request_id": str(data.get("id") or "").strip(),
+            "seed_supported": False,
+            "seed": None,
+        }
 
 
 class NullProvider(BaseLLMProvider):
@@ -289,6 +349,28 @@ class LLMService:
         max_tokens: int = 500,
         max_retries: int = 1,
     ) -> str:
+        result = self.chat_with_metadata(
+            prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_retries=max_retries,
+        )
+        return str(result.get("content") or "")
+
+    @property
+    def seed_supported(self) -> bool:
+        return bool(getattr(self.provider, "seed_supported", False))
+
+    def chat_with_metadata(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 500,
+        max_retries: int = 1,
+        seed: Optional[int] = None,
+    ) -> Dict[str, Any]:
         messages: List[Dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -300,23 +382,46 @@ class LLMService:
         for attempt in range(max_retries + 1):
             start_time = time.time()
             try:
-                result = self.provider.chat(
+                provider_result = self.provider.chat_with_metadata(
                     messages=messages,
                     model=self.model,
                     temperature=temperature,
                     max_tokens=resolved_max_tokens,
                     timeout=self.timeout,
+                    seed=seed if self.seed_supported else None,
                 )
                 elapsed = time.time() - start_time
-                result = (result or "").strip()
-                self._update_stats(elapsed, success=True, empty=not result)
-                if not result:
+                if not isinstance(provider_result, dict):
+                    provider_result = {"content": provider_result}
+                content = str(provider_result.get("content") or "").strip()
+                provider_seed_supported = provider_result.get("seed_supported") is True
+                provider_effective_config = provider_result.get("effective_config")
+                effective_config = (
+                    dict(provider_effective_config)
+                    if isinstance(provider_effective_config, dict)
+                    else {
+                        "model": self.model,
+                        "temperature": float(temperature),
+                        "max_tokens": resolved_max_tokens,
+                        "timeout": self.timeout,
+                    }
+                )
+                self._update_stats(elapsed, success=True, empty=not content)
+                if not content:
                     if attempt < max_retries:
                         print(f"[LLMService] 空响应，重试 {attempt + 1}/{max_retries}...")
                         time.sleep(1)
                         continue
                     print("[LLMService] 空响应，按正常降级路径处理")
-                return result
+                return {
+                    "content": content,
+                    "provider_request_id": str(
+                        provider_result.get("provider_request_id") or ""
+                    ).strip(),
+                    "seed_supported": provider_seed_supported,
+                    "seed": provider_result.get("seed") if provider_seed_supported else None,
+                    "effective_config": effective_config,
+                }
             except Exception as error:
                 elapsed = time.time() - start_time
                 self._update_stats(elapsed, success=False, empty=False)
@@ -335,8 +440,30 @@ class LLMService:
                     time.sleep(2)
                     continue
                 print(f"[LLMService] API调用失败 ({elapsed:.2f}s): {error}")
-                return ""
-        return ""
+                return {
+                    "content": "",
+                    "provider_request_id": "",
+                    "seed_supported": self.seed_supported,
+                    "seed": seed if self.seed_supported else None,
+                    "effective_config": {
+                        "model": self.model,
+                        "temperature": float(temperature),
+                        "max_tokens": resolved_max_tokens,
+                        "timeout": self.timeout,
+                    },
+                }
+        return {
+            "content": "",
+            "provider_request_id": "",
+            "seed_supported": self.seed_supported,
+            "seed": seed if self.seed_supported else None,
+            "effective_config": {
+                "model": self.model,
+                "temperature": float(temperature),
+                "max_tokens": resolved_max_tokens,
+                "timeout": self.timeout,
+            },
+        }
 
     def analyze_event_sectors(self, event_title: str, event_summary: str = "") -> Dict[str, Any]:
         full_text = f"{event_title} {event_summary}".strip()
@@ -547,7 +674,8 @@ class LLMService:
         uncached_events: list[tuple[int, Dict[str, str]]] = []
         for idx, event in enumerate(events):
             title = event.get("title", "")
-            cached_result = cache.get(title) if cache else None
+            summary = event.get("summary", "")
+            cached_result = cache.get(title, summary) if cache else None
             if cached_result:
                 cached_results[idx] = cached_result
             else:
@@ -575,7 +703,7 @@ class LLMService:
                 result = batch_results[item_idx] if item_idx < len(batch_results) else self._event_sector_fallback("结果缺失")
                 all_results[original_idx] = result
                 if cache:
-                    cache.set(event.get("title", ""), result)
+                    cache.set(event.get("title", ""), result, event.get("summary", ""))
             if not progress_callback:
                 print(f"      ✅ 第{batch_idx + 1}/{total_batches}批完成", flush=True)
             if batch_idx < total_batches - 1:

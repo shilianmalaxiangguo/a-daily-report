@@ -185,6 +185,34 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("| 参与预演判断 | 竞价、开盘、回封、分歧路径是否命中 | 0.00% | 错误 | 竞价命中 | 开盘承接断档 | 竞价命中但开盘承接断档 |", rendered)
         self.assertIn("历史复盘只统计过去判断，不作为明日新增参与依据。", rendered)
 
+    def test_renderer_normalizes_legacy_pending_result_and_names_the_gap(self):
+        rendered = "\n".join(
+            render_five_judgment_statistics_lines(
+                {
+                    "rows": [
+                        {
+                            "judgment_type": "mainline",
+                            "label": "主线判断",
+                            "metric_definition": "资金第二天是否继续选择这条线",
+                            "accuracy_pct": None,
+                            "latest_result": "待补事实",
+                            "latest_expected": "国产芯片替代",
+                            "latest_actual": "-",
+                            "latest_reason": "待补事实",
+                            "missing_fields": ["mainline_review"],
+                        }
+                    ]
+                }
+            )
+        )
+
+        self.assertIn(
+            "| 主线判断 | 资金第二天是否继续选择这条线 | 暂无已结算样本 | 未结算 | "
+            "国产芯片替代 | - | 尚缺：主线延续复盘 |",
+            rendered,
+        )
+        self.assertNotIn("待补事实", rendered)
+
     def test_falls_back_to_participation_and_cancellation_reviews(self):
         index = {
             "by_stock_code": {
@@ -809,7 +837,10 @@ class DecisionStatisticsTest(unittest.TestCase):
         )
         rows = {row["judgment_type"]: row for row in panel["today_rows"]}
 
-        self.assertEqual(rows["core_candidate"]["today_judgment"], "待补事实")
+        self.assertEqual(
+            rows["core_candidate"]["today_judgment"],
+            "无明日执行对象；当前没有取得买入资格的候选",
+        )
 
     def test_daily_panel_normalizes_empty_today_mainline_to_chaotic_market_state(self):
         index = {
@@ -826,7 +857,7 @@ class DecisionStatisticsTest(unittest.TestCase):
         rows = {row["judgment_type"]: row for row in panel["today_rows"]}
 
         self.assertEqual(rows["market_state"]["today_judgment"], "混沌")
-        self.assertEqual(rows["mainline"]["today_judgment"], "无确认主线")
+        self.assertEqual(rows["mainline"]["today_judgment"], "未形成跨日胜出方向")
 
     def test_daily_panel_normalizes_defensive_market_state_to_retreat_bucket(self):
         panel = build_daily_judgment_review_panel(
@@ -876,7 +907,11 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(previous_rows["market_state"]["missing_fact_count"], 1)
         self.assertEqual(previous_rows["mainline"]["missing_fact_count"], 1)
         self.assertEqual(previous_rows["core_candidate"]["missing_fact_count"], 1)
-        self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
+        self.assertIn(
+            "- 未完成项目：市场状态判断、主线判断、核心候选判断；"
+            "尚缺：市场状态复盘、主线延续复盘、核心候选次日反馈。",
+            rendered,
+        )
         self.assertNotIn("| 市场状态判断 | 3 | market_state_review |", rendered)
 
     def test_previous_day_settlement_table_only_renders_resolved_items(self):
@@ -925,7 +960,10 @@ class DecisionStatisticsTest(unittest.TestCase):
             settlement_block,
         )
         self.assertIn("**上一交易日未完成结算**", rendered)
-        self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
+        self.assertIn(
+            "尚缺：市场状态复盘、主线延续复盘、核心候选次日反馈。",
+            rendered,
+        )
 
     def test_recent_settled_performance_table_only_renders_resolved_items(self):
         index = {
@@ -1010,7 +1048,51 @@ class DecisionStatisticsTest(unittest.TestCase):
 
         self.assertIn("| 主线判断 | 正确 | - | - | 符合预期 |", settlement_block)
         self.assertNotIn("部分正确", settlement_block)
-        self.assertIn("| 主线判断 | 待补事实 | mainline_review |", unresolved_block)
+        self.assertIn("未完成项目：市场状态判断、主线判断、核心候选判断", unresolved_block)
+        self.assertIn("主线延续复盘", unresolved_block)
+
+    def test_top_level_daily_reviews_render_without_stock_records(self):
+        index = {
+            "available_trade_dates": ["2026-08-17", "2026-08-18"],
+            "daily_judgment_reviews": [
+                {
+                    "judgment_type": "market_state",
+                    "report_date": "2026-08-17",
+                    "review_trade_date": "2026-08-18",
+                    "expected": "进攻",
+                    "actual": "退潮",
+                    "is_correct": False,
+                    "reason": "预判进攻，次日实际为退潮",
+                },
+                {
+                    "judgment_type": "mainline",
+                    "report_date": "2026-08-17",
+                    "review_trade_date": "2026-08-18",
+                    "expected": "国产芯片替代",
+                    "actual": "无确认主线",
+                    "is_correct": False,
+                    "reason": "资金第二天没有继续选择预判方向",
+                },
+            ],
+            "by_stock_code": {},
+        }
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-08-18",
+            current_context={
+                "market_state": "退潮",
+                "mainline": "无确认主线",
+                "suppress_core_candidate_fallback": True,
+                "suppress_participation_fallback": True,
+            },
+        )
+
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+
+        self.assertEqual(panel["previous_trade_date"], "2026-08-17")
+        self.assertIn("| 市场状态判断 | 错误 | 进攻 | 退潮 | 预判进攻，次日实际为退潮 |", rendered)
+        self.assertIn("| 主线判断 | 错误 | 国产芯片替代 | 无确认主线 | 资金第二天没有继续选择预判方向 |", rendered)
+        self.assertNotIn("上一交易日未完成结算", rendered)
 
 
 if __name__ == "__main__":

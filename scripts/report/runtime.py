@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import os
 import json
 from pathlib import Path
@@ -18,6 +18,7 @@ from diagnostics.helper_diagnostics_runtime import (
     render_helper_diagnostics_lines as _render_helper_diagnostics_lines,
 )
 from domains.calendar_events.infer import normalize_calendar_ai_analysis
+from domains.market_activity.limit_pool_facts import resolve_limit_down_count
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     candidate_blocks_current_observation_target as _candidate_blocks_current_observation_target,
     candidate_can_be_current_observation_target as _candidate_can_be_current_observation_target,
@@ -41,6 +42,7 @@ from report.decision_ledger import (
     build_decision_coverage_summary as _default_build_decision_coverage_summary,
     build_decision_ledger_snapshot as _default_build_decision_ledger_snapshot,
     prune_replaced_same_day_extreme_mentions as _default_prune_replaced_same_day_extreme_mentions,
+    refresh_daily_judgment_reviews_for_display as _default_refresh_daily_judgment_reviews_for_display,
     render_extreme_conviction_backtest_lines as _default_render_extreme_conviction_backtest_lines,
     render_extreme_conviction_mention_tracking_lines as _default_render_extreme_conviction_mention_tracking_lines,
     render_extreme_conviction_mention_tracking_rows as _default_render_extreme_conviction_mention_tracking_rows,
@@ -57,7 +59,13 @@ from report.elimination_tournament import (
     build_elimination_tournament_payload,
     build_sector_capital_preflight_daily_context,
     build_sector_capital_preflight_payload,
+    sector_diffusion_stage_display,
+    sector_tournament_three_axis_display,
     store_elimination_tournament_payload as _default_store_elimination_tournament_payload,
+)
+from report.dual_cluster_projection import (
+    build_sector_tournament_dual_cluster,
+    sector_dual_cluster_display,
 )
 from report.sector_capital_carrier_strategy import (
     build_sector_capital_carrier_strategy as _build_sector_capital_carrier_strategy,
@@ -81,6 +89,7 @@ from report.market_structure_judgement import (
     build_market_structure_knowledge_update,
 )
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
+from report.mainline_turnover_summary_support import resolve_unconfirmed_mainline_summary
 from report.surface_wording import sanitize_user_visible_text
 from report.execution_wording import (
     PREMARKET_50_EXECUTION_SHORT_TEXT,
@@ -106,6 +115,54 @@ from report.position_context import (
     position_fact_status as _position_fact_status,
     resolve_tomorrow_account_action,
 )
+from report.replay_role_isolation import isolate_replay_named_role_fields
+from report.candidate_decision_evidence import (
+    build_candidate_decision_evidence,
+    candidate_decision_evidence_cache_key,
+    canonical_candidate_decision_evidence_hash,
+    validate_candidate_decision_evidence,
+)
+from report.formal_account_decision import (
+    DECISION_PRODUCT_FREEZE_KEY,
+    FORMAL_ACCOUNT_DECISION_SCHEMA_VERSION,
+    FORMAL_DECISION_INPUT_SCHEMA_VERSION,
+    apply_decision_product_freeze,
+    build_decision_product_freeze,
+    build_formal_account_decision,
+    build_decision_projection,
+    canonical_decision_projection_hash,
+    decision_projection_from_freeze,
+    prepare_formal_decision_input,
+    validate_decision_product_freeze,
+)
+from report.decision_robustness_version_health import (
+    build_decision_robustness_version_health,
+    canonical_decision_robustness_version_health_facts_hash,
+    canonical_decision_robustness_version_health_hash,
+    decision_robustness_version_health_cache_key,
+    validate_decision_robustness_version_health,
+)
+from report.research_execution_evidence import (
+    build_research_execution_evidence,
+    canonical_research_execution_evidence_hash,
+    render_research_execution_evidence_lines,
+    research_execution_evidence_cache_key,
+    resolve_research_execution_objects,
+    validate_research_execution_evidence,
+)
+from report.cffex_index_futures_position_evidence import (
+    build_unavailable_cffex_evidence,
+    canonical_cffex_evidence_hash,
+    render_cffex_evidence_lines,
+    validate_cffex_evidence,
+)
+from report.market_polarization_evidence import (
+    canonical_market_polarization_evidence_hash,
+    load_market_polarization_evidence,
+    market_polarization_evidence_cache_key,
+    render_market_polarization_evidence_lines,
+    validate_market_polarization_evidence,
+)
 from report.position_tier_contract import (
     POSITION_TIER_NONE_PCT,
     POSITION_TIER_B1_PCT,
@@ -116,8 +173,10 @@ from report.position_tier_contract import (
 )
 from report.selection_workflow import (
     build_selection_workflow as _default_build_selection_workflow,
+    refresh_sector_tournament_three_axis_for_display as _default_refresh_sector_tournament_three_axis_for_display,
     store_selection_workflow as _default_store_selection_workflow,
 )
+from report.strategy_tracking_store import strategy_performance_ledger_read_cache
 from report.two_layer_decision_payload import (
     build_two_layer_decision_payload,
     render_derivation_audit_layer,
@@ -138,6 +197,16 @@ __all__ = ["render_markdown_report_runtime"]
 _MISSING = object()
 EMIT_HELPER_DIAGNOSTICS = True
 REPORT_RUNTIME_CACHE = None
+REPORT_RUNTIME_TIMING_ROWS = None
+_RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY = "_replay_decision_product_freeze_locked"
+_RUNTIME_DECISION_PROJECTION_ROOT_KEYS = (
+    "selection_workflow",
+    "final_target_resolution",
+    "position_decision",
+    "two_layer_decision_payload",
+    "formal_decision_input",
+    "formal_account_decision",
+)
 ENABLE_REMOTE_CALENDAR_LLM = str(os.getenv("A_DAILY_REPORT_ENABLE_REMOTE_CALENDAR_LLM", "")).lower() in {
     "1",
     "true",
@@ -152,6 +221,228 @@ _DEFAULT_LLM_CALL_STATS = {
     "sector_analysis_calls": 0,
     "sector_analysis_time": 0.0,
 }
+
+
+def _runtime_decision_product_projection(
+    data,
+    target_date="",
+    *,
+    require_complete=False,
+):
+    if not isinstance(data, dict):
+        return {}
+    artifact = data.get(DECISION_PRODUCT_FREEZE_KEY)
+    if not isinstance(artifact, dict) or not artifact:
+        return {}
+    resolved_date = str(
+        target_date
+        or data.get("target_date")
+        or artifact.get("target_date")
+        or ""
+    ).strip()
+    if require_complete and artifact.get("availability") != "complete":
+        return {}
+    return decision_projection_from_freeze(
+        artifact,
+        target_date=resolved_date,
+    )
+
+
+def _runtime_frozen_decision_mapping(
+    data,
+    key,
+    *,
+    target_date="",
+    require_complete=False,
+):
+    if not isinstance(data, dict):
+        return None
+    artifact = data.get(DECISION_PRODUCT_FREEZE_KEY)
+    if not isinstance(artifact, dict) or not artifact:
+        return None
+    projection = _runtime_decision_product_projection(
+        data,
+        target_date=target_date,
+        require_complete=require_complete,
+    )
+    if not projection:
+        return None
+    value = projection.get(key) if isinstance(projection, dict) else None
+    return deepcopy(value) if isinstance(value, dict) else None
+
+
+def _runtime_decision_product_target_date(*sources):
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        value = str(
+            source.get("target_date")
+            or source.get("report_date")
+            or source.get("trade_date")
+            or ""
+        ).strip()
+        if value:
+            return value
+    return ""
+
+
+def _runtime_replay_decision_freeze_locked(data):
+    return bool(
+        isinstance(data, dict)
+        and data.get(_RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY) is True
+    )
+
+
+def _runtime_decision_product_requires_complete(data):
+    return bool(
+        isinstance(data, dict)
+        and str(data.get("run_mode") or "").strip() == LEDGER_MODE_REPLAY
+    )
+
+
+def _clear_runtime_decision_product_roots(data):
+    if not isinstance(data, dict):
+        return
+    targets = [data]
+    for source in (data.get("execution_stage_context"), data.get("market_research_snapshot")):
+        if isinstance(source, dict):
+            targets.append(source)
+            nested = source.get("market_research_snapshot")
+            if isinstance(nested, dict):
+                targets.append(nested)
+    seen = set()
+    for target in targets:
+        marker = id(target)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        for key in _RUNTIME_DECISION_PROJECTION_ROOT_KEYS:
+            target.pop(key, None)
+
+
+def _runtime_decision_product_review(
+    *,
+    target_date,
+    artifact=None,
+    availability,
+    errors=None,
+    valid=False,
+):
+    artifact = artifact if isinstance(artifact, dict) else {}
+    return {
+        "schema_version": "decision_product_freeze_review.v1",
+        "target_date": str(target_date or "").strip(),
+        "availability": str(availability or "historical_snapshot_missing"),
+        "artifact_origin": str(artifact.get("artifact_origin") or "").strip(),
+        "freeze_hash": str(artifact.get("freeze_hash") or "").strip(),
+        "valid": bool(valid),
+        "errors": sorted(set(str(item) for item in (errors or []) if str(item))),
+    }
+
+
+def _prepare_runtime_decision_product_freeze(data, *, target_date, run_mode):
+    if not isinstance(data, dict):
+        return {}, {}, False
+    normalized_date = str(target_date or "").strip()
+    data["run_mode"] = run_mode
+    artifact = data.get(DECISION_PRODUCT_FREEZE_KEY)
+    if not isinstance(artifact, dict) or not artifact:
+        artifact = {}
+
+    valid = False
+    errors = []
+    if artifact:
+        valid, errors = validate_decision_product_freeze(
+            artifact,
+            target_date=normalized_date,
+        )
+    complete = bool(valid and artifact.get("availability") == "complete")
+    accepted = bool(valid and (run_mode != LEDGER_MODE_REPLAY or complete))
+    if accepted:
+        _, review = apply_decision_product_freeze(
+            data,
+            artifact,
+            target_date=normalized_date,
+        )
+        data.pop(_RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY, None)
+        return deepcopy(artifact), review, True
+
+    if run_mode == LEDGER_MODE_REPLAY:
+        # A replay can only project a complete, validated historical freeze.
+        # Keep the source artifact for diagnostics, but never expose partial
+        # or invalid roots as if they were a formal target-date decision.
+        _clear_runtime_decision_product_roots(data)
+        data[_RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY] = True
+        if not artifact:
+            availability = "historical_snapshot_missing"
+            errors = ["decision_product_freeze_missing"]
+        elif not valid:
+            availability = "historical_snapshot_invalid"
+        else:
+            availability = "historical_snapshot_incomplete"
+            errors = [*errors, "decision_product_freeze_incomplete"]
+        review = _runtime_decision_product_review(
+            target_date=normalized_date,
+            artifact=artifact,
+            availability=availability,
+            errors=errors,
+            valid=False,
+        )
+        data["decision_product_freeze_review"] = review
+        return deepcopy(artifact), review, False
+
+    if artifact and not valid:
+        data.pop(DECISION_PRODUCT_FREEZE_KEY, None)
+    data.pop(_RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY, None)
+    review = _runtime_decision_product_review(
+        target_date=normalized_date,
+        artifact=artifact,
+        availability="fresh_rebuild_required",
+        errors=errors,
+        valid=False,
+    ) if artifact else {}
+    if review:
+        data["decision_product_freeze_review"] = review
+    return {}, review, False
+
+
+def _record_report_runtime_timing(timing_rows, phase, started_at):
+    ended_at = time.monotonic()
+    if isinstance(timing_rows, list):
+        timing_rows.append(
+            {
+                "phase": str(phase),
+                "elapsed_seconds": max(0.0, ended_at - started_at),
+            }
+        )
+    return ended_at
+
+
+def _record_report_runtime_timing_group(timing_rows, phase, started_at, nested_rows):
+    ended_at = time.monotonic()
+    if isinstance(timing_rows, list):
+        nested_seconds = 0.0
+        for row in nested_rows or []:
+            if not isinstance(row, dict):
+                continue
+            nested_phase = str(row.get("phase", "") or "").strip()
+            if not nested_phase:
+                continue
+            elapsed_seconds = max(0.0, float(row.get("elapsed_seconds") or 0.0))
+            nested_seconds += elapsed_seconds
+            timing_rows.append(
+                {
+                    "phase": f"{phase}/{nested_phase}",
+                    "elapsed_seconds": elapsed_seconds,
+                }
+            )
+        timing_rows.append(
+            {
+                "phase": f"{phase}/入口封装",
+                "elapsed_seconds": max(0.0, ended_at - started_at - nested_seconds),
+            }
+        )
+    return ended_at
 
 _APPENDIX_FRONT_PAGE_HEADING_RENAMES = {
     "## 一、交易纪律": "## 交易纪律细则",
@@ -711,9 +1002,9 @@ def _normalize_zero_participation_decision_claims(lines):
             "按昨晚1x/50%半仓预案检查B1执行资格；本计划不追加B2",
             "最终0%不生成B1/B2",
         ),
-        ("市场已允许参与", "市场环境偏强"),
-        ("市场允许参与", "市场环境偏强"),
-        ("🟢 跟随主线", "市场环境偏强（研究证据）"),
+        ("市场已允许参与", "局部主线偏强（仅作研究证据）"),
+        ("市场允许参与", "局部主线偏强（仅作研究证据）"),
+        ("🟢 跟随主线", "局部主线偏强（研究证据）"),
         (
             "09:30-09:35或09:50-10:10窗口条件成立才参与，不满足回到0%",
             "固定窗口结果只进入复盘，不生成盘中买入决定",
@@ -732,7 +1023,7 @@ def _normalize_zero_participation_decision_claims(lines):
         indent = text[: len(text) - len(stripped)]
         if stripped.startswith("**明日裁决**:") or stripped.startswith("- **明日裁决**:"):
             prefix = "- **明日裁决**:" if stripped.startswith("- ") else "**明日裁决**:"
-            text = f"{indent}{prefix} 0%不参与；市场环境偏强只作研究证据"
+            text = f"{indent}{prefix} 0%不参与；局部主线偏强仅作研究证据，整体环境不新增参与"
         elif stripped.startswith("**开盘前动作**:"):
             text = f"{indent}**开盘前动作**: 最终0%不生成B1/B2；只观察主攻线承接，结果进入复盘和下一份日报判断"
         elif stripped.startswith("**次日市场环境**: 只观察 / 进攻态"):
@@ -1408,15 +1699,38 @@ def _mainline_name_from_turnover_summary(summary):
     ).strip()
 
 
-def _resolve_decision_ledger_sector_relationship(execution_stage_context):
-    execution_stage_context = execution_stage_context or {}
-    summary = execution_stage_context.get("mainline_turnover_summary") or {}
-    return (
-        summary.get("relationship")
-        or summary.get("relationship_label")
-        or execution_stage_context.get("mainline_relationship_state")
-        or "暂未分出"
-    )
+def _resolve_decision_ledger_sector_relationship(
+    execution_stage_context,
+    *,
+    data=None,
+    market_research_snapshot=None,
+):
+    for source in (data, market_research_snapshot, execution_stage_context):
+        if not isinstance(source, dict):
+            continue
+        summary = source.get("mainline_turnover_summary")
+        summary = summary if isinstance(summary, dict) else {}
+        relationship = (
+            summary.get("relationship")
+            or summary.get("relationship_label")
+            or source.get("mainline_relationship_state")
+        )
+        if relationship not in (None, ""):
+            return relationship
+    return "暂未分出"
+
+
+def _resolve_decision_ledger_extreme_conviction_list(
+    data,
+    execution_stage_context,
+    market_research_snapshot,
+):
+    for source in (execution_stage_context, data, market_research_snapshot):
+        if not isinstance(source, dict) or "extreme_conviction_list" not in source:
+            continue
+        rows = source.get("extreme_conviction_list")
+        return list(rows) if isinstance(rows, list) else []
+    return _MISSING
 
 
 def _extract_extreme_conviction_list(source):
@@ -1598,14 +1912,24 @@ def _maybe_persist_decision_ledger(
             execution_stage_context,
             market_research_snapshot,
         )
-    extreme_conviction_list = execution_stage_context.get("extreme_conviction_list", []) or []
+    extreme_conviction_list = _resolve_decision_ledger_extreme_conviction_list(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    if extreme_conviction_list is _MISSING:
+        extreme_conviction_list = []
     build_snapshot = globals().get("build_decision_ledger_snapshot") or _default_build_decision_ledger_snapshot
     write_artifacts = globals().get("write_decision_ledger_artifacts") or _default_write_decision_ledger_artifacts
     snapshot_kwargs = {
         "trade_date": target_date,
         "extreme_conviction_list": extreme_conviction_list,
         "market_branch": _resolve_decision_ledger_market_branch(market_research_snapshot, execution_stage_context),
-        "sector_relationship_state": _resolve_decision_ledger_sector_relationship(execution_stage_context),
+        "sector_relationship_state": _resolve_decision_ledger_sector_relationship(
+            execution_stage_context,
+            data=data,
+            market_research_snapshot=market_research_snapshot,
+        ),
         "source_report": (data or {}).get("source_report") or {},
         "final_action": final_action,
     }
@@ -1868,16 +2192,17 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
             service = DatabaseService.from_environment()
         else:
             service = None
-        mark_result = service.mark_a_kill_shape_extreme_conviction_mentions(
-            end_date,
-            window_days=window_days,
-            return_details=True,
-        )
-        if isinstance(mark_result, dict):
-            globals()["_last_extreme_conviction_a_kill_mark_result"] = {
-                "updated_count": int(mark_result.get("updated_count") or 0),
-                "updated_records": list(mark_result.get("updated_records") or []),
-            }
+        if not bool(globals().get("decision_ledger_read_only", False)):
+            mark_result = service.mark_a_kill_shape_extreme_conviction_mentions(
+                end_date,
+                window_days=window_days,
+                return_details=True,
+            )
+            if isinstance(mark_result, dict):
+                globals()["_last_extreme_conviction_a_kill_mark_result"] = {
+                    "updated_count": int(mark_result.get("updated_count") or 0),
+                    "updated_records": list(mark_result.get("updated_records") or []),
+                }
         return list(
             service.query_extreme_conviction_mentions(
                 end_date,
@@ -2892,6 +3217,29 @@ def _build_runtime_selection_workflow(
     position_decision=None,
     final_target_resolution=None,
 ):
+    frozen = _runtime_frozen_decision_mapping(
+        data,
+        "selection_workflow",
+        target_date=target_date,
+        require_complete=_runtime_decision_product_requires_complete(data),
+    )
+    if frozen is not None:
+        return frozen
+    if _runtime_replay_decision_freeze_locked(data):
+        return {}
+    formal_input = (
+        data.get("formal_decision_input")
+        if isinstance(data, dict) and isinstance(data.get("formal_decision_input"), dict)
+        else {}
+    )
+    formal_candidate_selection = (
+        formal_input.get("candidate_selection")
+        if formal_input.get("schema_version") == FORMAL_DECISION_INPUT_SCHEMA_VERSION
+        and str(formal_input.get("report_date") or "").strip()
+        == str(target_date or "").strip()
+        and isinstance(formal_input.get("candidate_selection"), dict)
+        else {}
+    )
     workflow = _default_build_selection_workflow(
         target_date=target_date,
         data=data,
@@ -2900,6 +3248,7 @@ def _build_runtime_selection_workflow(
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         final_target_resolution=final_target_resolution,
+        formal_candidate_selection=formal_candidate_selection,
     )
     observation_candidate = _runtime_unbuyable_context_candidate(
         data=data,
@@ -2936,13 +3285,19 @@ def _candidate_traces_from_selection_workflow(workflow):
         if not isinstance(item, dict):
             continue
         stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
+        mainline = item.get("mainline")
+        mainline_fit = (
+            "数据缺失"
+            if mainline in (None, "")
+            else ("未满足" if item.get("eliminated_at") == "N6" else "满足")
+        )
         candidate = {
             **stock,
-            "mainline": item.get("mainline"),
+            "mainline": mainline,
             "sector": item.get("sector") or stock.get("sector"),
             "source_pools": item.get("source_pools") or [],
             "market_fit": "满足",
-            "mainline_fit": "未满足" if item.get("eliminated_at") == "N6" else "满足",
+            "mainline_fit": mainline_fit,
             "stock_structure_fit": "部分满足" if item.get("status") != "最终执行对象" else "满足",
             "first_seen_node": item.get("first_seen_node"),
             "entered_reason": item.get("entry_basis") or item.get("entered_reason"),
@@ -3092,6 +3447,25 @@ def _sync_position_decision_with_selection_workflow(position_decision, workflow)
                 ),
             }
         )
+        monthly_rhythm = (
+            dict(updated.get("monthly_rhythm") or {})
+            if isinstance(updated.get("monthly_rhythm"), dict)
+            else {}
+        )
+        if monthly_rhythm and (
+            monthly_rhythm.get("month_mode") == "attack_prepare"
+            or monthly_rhythm.get("target_role") == "attack_prepare"
+            or "50%条件执行" in _first_runtime_text(monthly_rhythm.get("reason"))
+        ):
+            monthly_rhythm.update(
+                {
+                    "month_mode": "observe_0",
+                    "target_role": "observe_0",
+                    "max_position_pct": 0,
+                    "reason": workflow_reason,
+                }
+            )
+            updated["monthly_rhythm"] = monthly_rhythm
         for key in (
             "trigger_text",
             "support_price",
@@ -3114,9 +3488,25 @@ def _sync_position_decision_with_selection_workflow(position_decision, workflow)
 
 
 def _store_runtime_position_decision(position_decision, data=None, execution_stage_context=None, market_research_snapshot=None):
-    if not isinstance(position_decision, dict):
+    target_date = _runtime_decision_product_target_date(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    frozen = _runtime_frozen_decision_mapping(
+        data,
+        "position_decision",
+        target_date=target_date,
+        require_complete=_runtime_decision_product_requires_complete(data),
+    )
+    if frozen is not None:
+        stored = frozen
+    elif _runtime_replay_decision_freeze_locked(data):
+        stored = {}
+    elif isinstance(position_decision, dict):
+        stored = deepcopy(position_decision)
+    else:
         return {}
-    stored = dict(position_decision)
     targets = []
     for target in (data, execution_stage_context, market_research_snapshot):
         if isinstance(target, dict) and all(target is not item for item in targets):
@@ -3149,6 +3539,22 @@ def _runtime_selection_workflow_zero_observation_target_from_sources(data=None, 
     if not _runtime_selection_workflow_final_controls_zero(workflow):
         return {}
     return _runtime_selection_workflow_observation_target(workflow)
+
+
+def _runtime_selection_workflow_positive_target_from_sources(
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    workflow = _runtime_selection_workflow(
+        data=data,
+        market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
+    )
+    if not _runtime_selection_workflow_final_controls_candidate(workflow):
+        return {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    return _runtime_stock_payload(final.get("execution_object"))
 
 
 def _runtime_selection_workflow_zero_blocks_surface_candidate(data=None, execution_stage_context=None, market_research_snapshot=None):
@@ -3766,6 +4172,269 @@ def _runtime_selection_workflow_observation_target(workflow):
     return {}
 
 
+def _runtime_lifecycle_position_target(record):
+    record = record if isinstance(record, dict) else {}
+    stock = _runtime_stock_payload(record.get("stock"))
+    if not stock:
+        return {}
+    position_pct = 0.0
+    sellable_pct = 0.0
+    for prefix in ("b1", "b2"):
+        leg = record.get(prefix) if isinstance(record.get(prefix), dict) else {}
+        position_pct += _runtime_cell_float(leg.get("position_pct")) or 0.0
+        sellable_pct += _runtime_cell_float(leg.get("sellable_pct")) or 0.0
+    confirmation = (
+        record.get("exit_confirmation")
+        if isinstance(record.get("exit_confirmation"), dict)
+        else {}
+    )
+    if record.get("funds_released") is True and confirmation.get("status") in {
+        "partial",
+        "confirmed",
+    }:
+        position_pct = max(
+            0.0,
+            position_pct - (_runtime_cell_float(confirmation.get("position_pct")) or 0.0),
+        )
+    return {
+        **stock,
+        "has_position": position_pct > 0,
+        "position_pct": position_pct,
+        "position": position_pct,
+        "sellable_pct": min(position_pct, sellable_pct),
+        "position_lifecycle": deepcopy(record),
+    }
+
+
+def _runtime_formal_account_decision_input_hash(data, workflow):
+    formal_input = (
+        data.get("formal_decision_input")
+        if isinstance(data, dict) and isinstance(data.get("formal_decision_input"), dict)
+        else {}
+    )
+    final = (
+        workflow.get("final")
+        if isinstance(workflow, dict) and isinstance(workflow.get("final"), dict)
+        else {}
+    )
+    return stable_json_hash(
+        {
+            "formal_input": formal_input,
+            "report_date": formal_input.get("report_date"),
+            "selection_workflow_final": final,
+        }
+    )
+
+
+def _build_runtime_formal_target_resolution(
+    *,
+    data,
+    workflow,
+    position_decision,
+    market_research_snapshot,
+    execution_stage_context,
+    tomorrow_account_action,
+    formal_account_decision=_MISSING,
+):
+    formal_input = (
+        data.get("formal_decision_input")
+        if isinstance(data, dict) and isinstance(data.get("formal_decision_input"), dict)
+        else {}
+    )
+    if formal_input.get("schema_version") != FORMAL_DECISION_INPUT_SCHEMA_VERSION:
+        return {}
+    workflow_target_date = str(workflow.get("target_date") or "").strip()
+    formal_input_date = str(formal_input.get("report_date") or "").strip()
+    if workflow_target_date and formal_input_date != workflow_target_date:
+        return {}
+    formal_account = (
+        build_formal_account_decision(
+            formal_input,
+            selection_workflow=workflow,
+            report_date=formal_input.get("report_date"),
+        )
+        if formal_account_decision is _MISSING
+        else deepcopy(formal_account_decision)
+        if isinstance(formal_account_decision, dict)
+        else {}
+    )
+    if formal_account.get("schema_version") != FORMAL_ACCOUNT_DECISION_SCHEMA_VERSION:
+        return {}
+    records = [
+        deepcopy(item)
+        for item in formal_account.get("position_lifecycle_records") or []
+        if isinstance(item, dict)
+    ]
+    existing_targets = [
+        target
+        for record in records
+        if (target := _runtime_lifecycle_position_target(record))
+    ]
+    existing = existing_targets[0] if existing_targets else {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    formal_target = _runtime_stock_payload(final.get("execution_object"))
+    formal_pct = _front_page_target_pct(
+        {"target_position_pct": final.get("position_pct", 0)}
+    )
+    if formal_pct <= 0:
+        formal_target = {}
+    action = _first_runtime_text(formal_account.get("selected_action"))
+    exposure = (
+        formal_account.get("account_exposure")
+        if isinstance(formal_account.get("account_exposure"), dict)
+        else {}
+    )
+    exit_plan = (
+        formal_account.get("exit_plan")
+        if isinstance(formal_account.get("exit_plan"), dict)
+        else {}
+    )
+    requires_exit_confirmation = bool(
+        exit_plan.get("requires_confirmation_before_reuse")
+    )
+    priority = {
+        "hold": "old_position" if existing_targets else "wait",
+        "add": "new_entry",
+        "replace": (
+            "new_entry_after_old_exit" if requires_exit_confirmation else "new_entry"
+        ),
+        "cash": "wait",
+    }.get(action, "wait")
+    reason = {
+        "hold": "保留合格 B1，剩余资金保持现金",
+        "add": "旧对象取得独立增加资格，复核日只增加同股 B2",
+        "replace": (
+            "先确认可卖旧仓已经退出，再执行唯一新对象 B1"
+            if requires_exit_confirmation
+            else "唯一新对象取得资格，下一交易日只执行 B1"
+        ),
+        "cash": "没有对象取得增加或替换资格，保持现金并处理已失效的可卖旧仓",
+    }.get(action, "账户事实不足，保持现金")
+    current_position_pct = _runtime_cell_float(exposure.get("current_position_pct")) or 0.0
+    planned_total_pct = _runtime_cell_float(exposure.get("planned_total_position_pct")) or 0.0
+    executable_new_pct = _runtime_cell_float(exposure.get("executable_new_entry_pct")) or 0.0
+    closing_target_pct = _runtime_cell_float(
+        exposure.get("closing_target_position_pct")
+    )
+    if closing_target_pct is None:
+        closing_target_pct = 0.0
+    target_key = _runtime_candidate_key(formal_target)
+    same_stock_target = bool(
+        target_key
+        and any(_runtime_candidate_key(target) == target_key for target in existing_targets)
+    )
+    exposure_plan = {
+        "schema_version": "position_tier_exposure.v2",
+        "position_fact_status": "confirmed" if existing_targets else "none",
+        "old_position_actual_pct": current_position_pct,
+        "old_position_pct": current_position_pct,
+        "old_position_x": (
+            position_tier_pct_to_x(current_position_pct)
+            if current_position_pct in {
+                POSITION_TIER_NONE_PCT,
+                POSITION_TIER_B1_PCT,
+                POSITION_TIER_B1_B2_PCT,
+            }
+            else None
+        ),
+        "planned_new_entry_pct": planned_total_pct,
+        "planned_new_entry_x": (
+            position_tier_pct_to_x(planned_total_pct)
+            if planned_total_pct in {
+                POSITION_TIER_NONE_PCT,
+                POSITION_TIER_B1_PCT,
+                POSITION_TIER_B1_B2_PCT,
+            }
+            else None
+        ),
+        "new_entry_pct": executable_new_pct,
+        "new_entry_x": (
+            position_tier_pct_to_x(executable_new_pct)
+            if executable_new_pct in {
+                POSITION_TIER_NONE_PCT,
+                POSITION_TIER_B1_PCT,
+                POSITION_TIER_B1_B2_PCT,
+            }
+            else None
+        ),
+        "same_stock_target": same_stock_target,
+        "same_stock_t": action == "add",
+        "possible_intraday_overlap": False,
+        "max_runtime_exposure_pct": _runtime_cell_float(
+            exposure.get("max_runtime_exposure_pct")
+        )
+        or current_position_pct,
+        "max_runtime_exposure_x": None,
+        "old_position_1x": current_position_pct == POSITION_TIER_B1_PCT,
+        "new_entry_1x": executable_new_pct == POSITION_TIER_B1_PCT,
+        "possible_intraday_overlap_2x": False,
+        "old_position_label": "、".join(
+            _runtime_stock_label(target) for target in existing_targets
+        ),
+        "pending_position_confirmation": requires_exit_confirmation,
+        "pending_position_label": "、".join(
+            _runtime_stock_label(target) for target in existing_targets
+        )
+        if requires_exit_confirmation
+        else "",
+        "new_entry_label": _runtime_stock_label(formal_target) if formal_target else "",
+        "priority": priority,
+        "policy": reason,
+        "tomorrow_closing_target_position_pct": _runtime_cell_float(
+            exposure.get("closing_target_position_pct")
+        )
+        or 0.0,
+        "legacy": {"source_schema_version": FORMAL_ACCOUNT_DECISION_SCHEMA_VERSION},
+    }
+    old_position_plan = {}
+    if existing:
+        old_position_plan = {
+            "schema_version": "old_position_plan.v1",
+            "holding": dict(existing),
+            "action": "exit" if action in {"replace", "cash"} else "hold",
+            "decision_class": "normal",
+            "primary_action_window": "09:50-10:10" if action in {"replace", "cash"} else "none",
+            "closing_target_position_pct": (
+                closing_target_pct
+                if action in {"replace", "cash"}
+                else current_position_pct
+            ),
+            "evidence_sources": ["formal_account_decision"],
+        }
+    opportunity_comparison = _runtime_opportunity_comparison(
+        data=data,
+        selected_position_candidate=formal_target,
+        position_decision=position_decision,
+        market_research_snapshot=market_research_snapshot,
+    )
+    resolution = {
+        "new_entry_target": dict(formal_target),
+        "existing_position_target": dict(existing),
+        "existing_position_targets": [dict(item) for item in existing_targets],
+        "position_lifecycle_records": records,
+        "old_position_plan": old_position_plan,
+        "tradable_proxy_target": {},
+        "watch_target": {},
+        "process_target": dict(formal_target),
+        "ascii_trace_target": dict(formal_target),
+        "display_target": dict(formal_target),
+        "capital_priority_decision": {
+            "capital_priority": priority,
+            "reason": reason,
+        },
+        "account_exposure_plan": exposure_plan,
+        "account_options": deepcopy(formal_account.get("outcomes") or {}),
+        "formal_account_decision": formal_account,
+        "opportunity_comparison": opportunity_comparison,
+    }
+    if tomorrow_account_action:
+        resolution["tomorrow_account_action"] = dict(tomorrow_account_action)
+    if isinstance(data, dict):
+        data["formal_account_decision"] = deepcopy(formal_account)
+        data["position_lifecycle_records"] = records
+    return resolution
+
+
 def _build_runtime_final_target_resolution(
     *,
     data=None,
@@ -3773,7 +4442,23 @@ def _build_runtime_final_target_resolution(
     position_decision=None,
     market_research_snapshot=None,
     execution_stage_context=None,
+    formal_account_decision=_MISSING,
 ):
+    target_date = _runtime_decision_product_target_date(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    frozen = _runtime_frozen_decision_mapping(
+        data,
+        "final_target_resolution",
+        target_date=target_date,
+        require_complete=_runtime_decision_product_requires_complete(data),
+    )
+    if frozen is not None:
+        return frozen
+    if _runtime_replay_decision_freeze_locked(data):
+        return {}
     workflow = _runtime_selection_workflow(
         data=data,
         market_research_snapshot=market_research_snapshot,
@@ -3792,6 +4477,21 @@ def _build_runtime_final_target_resolution(
         )
     )
     tomorrow_empty = is_tomorrow_empty_account_action(tomorrow_account_action)
+    formal_resolution = (
+        {}
+        if tomorrow_empty
+        else _build_runtime_formal_target_resolution(
+            data=data,
+            workflow=workflow,
+            position_decision=position_decision,
+            market_research_snapshot=market_research_snapshot,
+            execution_stage_context=execution_stage_context,
+            tomorrow_account_action=tomorrow_account_action,
+            formal_account_decision=formal_account_decision,
+        )
+    )
+    if formal_resolution:
+        return formal_resolution
     workflow_final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     workflow_execution_object = workflow_final.get("execution_object") if isinstance(workflow_final, dict) else {}
     workflow_position_pct = _front_page_target_pct(
@@ -4098,9 +4798,26 @@ def _store_runtime_final_target_resolution(
     *,
     phase="",
 ):
-    if not isinstance(resolution, dict) or not resolution:
+    target_date = _runtime_decision_product_target_date(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    frozen = _runtime_frozen_decision_mapping(
+        data,
+        "final_target_resolution",
+        target_date=target_date,
+        require_complete=_runtime_decision_product_requires_complete(data),
+    )
+    frozen_active = frozen is not None
+    if frozen_active:
+        stored = frozen
+    elif _runtime_replay_decision_freeze_locked(data):
+        stored = {}
+    elif isinstance(resolution, dict) and resolution:
+        stored = deepcopy(resolution)
+    else:
         return {}
-    stored = dict(resolution)
     identity = _runtime_final_resolution_identity(stored)
     audit = {}
     for target in (execution_stage_context, market_research_snapshot, data):
@@ -4124,8 +4841,9 @@ def _store_runtime_final_target_resolution(
         audit["identity_drift"] = bool(pre_key != front_key)
         if audit["identity_drift"]:
             audit["resolution_policy"] = "front_page_final_resolution"
-    stored["resolution_phase"] = phase_key
-    stored["resolution_identity"] = identity
+    if not frozen_active:
+        stored["resolution_phase"] = phase_key
+        stored["resolution_identity"] = identity
     for target in (data, execution_stage_context, market_research_snapshot):
         if isinstance(target, dict):
             target["final_target_resolution"] = stored
@@ -4215,9 +4933,25 @@ def _store_runtime_bayesian_diagnosis(packet, data=None, execution_stage_context
 
 
 def _store_runtime_two_layer_decision_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
-    if not isinstance(payload, dict) or not payload:
+    target_date = _runtime_decision_product_target_date(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    frozen = _runtime_frozen_decision_mapping(
+        data,
+        "two_layer_decision_payload",
+        target_date=target_date,
+        require_complete=_runtime_decision_product_requires_complete(data),
+    )
+    if frozen is not None:
+        stored = frozen
+    elif _runtime_replay_decision_freeze_locked(data):
+        stored = {}
+    elif isinstance(payload, dict) and payload:
+        stored = deepcopy(payload)
+    else:
         return {}
-    stored = dict(payload)
     for target in (data, execution_stage_context, market_research_snapshot):
         if isinstance(target, dict):
             target["two_layer_decision_payload"] = stored
@@ -4377,10 +5111,28 @@ def _build_runtime_elimination_tournament_payload(
         market_research_snapshot=market_research_snapshot,
     )
     trade_date = target_date or data.get("target_date")
+    display_workflow = deepcopy(workflow) if isinstance(workflow, dict) else {}
+    refreshed_three_axis = {}
+    if run_mode == LEDGER_MODE_REPLAY:
+        refreshed_three_axis = _default_refresh_sector_tournament_three_axis_for_display(
+            target_date=trade_date,
+            data=data,
+            execution_stage_context=context,
+            market_research_snapshot=market_research_snapshot,
+            selection_workflow=workflow,
+        )
+    if refreshed_three_axis:
+        display_workflow["sector_tournament_three_axis"] = refreshed_three_axis
+        input_payload = refreshed_three_axis.get("input_payload")
+        if not isinstance(input_payload, dict):
+            input_payload = {}
+        refreshed_stage = input_payload.get("sector_diffusion_stage_evidence")
+        if isinstance(refreshed_stage, dict) and refreshed_stage:
+            display_workflow["sector_diffusion_stage_evidence"] = refreshed_stage
     return build_elimination_tournament_payload(
         trade_date=trade_date,
         variant=run_mode or data.get("run_mode") or data.get("ledger_mode") or "",
-        selection_workflow=workflow,
+        selection_workflow=display_workflow,
         final_target_resolution=final_target_resolution,
         position_decision=position_decision,
         candidate_traces=_runtime_candidate_traces(
@@ -5083,6 +5835,19 @@ def _runtime_final_resolution_waits_without_watch_target(final_target_resolution
 
 def _runtime_final_resolution_core_candidate(final_target_resolution=None):
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    formal_account = (
+        resolution.get("formal_account_decision")
+        if isinstance(resolution.get("formal_account_decision"), dict)
+        else {}
+    )
+    if formal_account.get("schema_version") == FORMAL_ACCOUNT_DECISION_SCHEMA_VERSION:
+        if _first_runtime_text(formal_account.get("selected_action")) in {
+            "add",
+            "replace",
+        }:
+            target = _runtime_stock_payload(formal_account.get("formal_execution_object"))
+            if target:
+                return target
     decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
     capital_priority = _first_runtime_text(decision.get("capital_priority"))
     if capital_priority == "tradable_proxy":
@@ -5434,8 +6199,109 @@ def _render_sector_capital_preflight_front_summary(payload):
     if not layers:
         return []
     final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+    stage_display = sector_diffusion_stage_display(
+        payload.get("sector_diffusion_stage_evidence"),
+        trade_date=payload.get("trade_date"),
+    )
+    three_axis_display = sector_tournament_three_axis_display(
+        payload.get("sector_tournament_three_axis"),
+        trade_date=payload.get("trade_date"),
+    )
+    dual_cluster_projection = payload.get("dual_cluster_projection")
+    if not isinstance(dual_cluster_projection, dict) or not dual_cluster_projection:
+        dual_cluster_projection = build_sector_tournament_dual_cluster(
+            payload.get("sector_tournament_three_axis"),
+            target_date=payload.get("trade_date"),
+        )
+    dual_cluster_display = sector_dual_cluster_display(
+        dual_cluster_projection,
+        target_date=payload.get("trade_date"),
+    )
     lines = [
         "## 板块资金扩散淘汰赛",
+        (
+            f"> **双群聚判断**：{_clean_runtime_cell(dual_cluster_display['transition'])}；"
+            "持续核心、动态冲击与迁移带分开比较，不用一个总排名压平。"
+        ),
+        "",
+        "| 双群聚视角 | 当前结论 | 关键证据 | 反证或缺口 |",
+        "|---|---|---|---|",
+        (
+            "| 持续核心端 | "
+            f"{_clean_runtime_cell(dual_cluster_display['persistent_core'])} | "
+            f"{_clean_runtime_cell(dual_cluster_display['persistent_core_evidence'])} | "
+            f"{_clean_runtime_cell(dual_cluster_display['gaps'])} |"
+        ),
+        (
+            "| 动态冲击端 | "
+            f"{_clean_runtime_cell(dual_cluster_display['dynamic_impact'])} | "
+            f"{_clean_runtime_cell(dual_cluster_display['dynamic_impact_evidence'])} | "
+            "单日冲击不自动迁移为持续核心 |"
+        ),
+        (
+            "| 中间迁移带 | "
+            f"{_clean_runtime_cell(dual_cluster_display['transition'])} | "
+            f"{_clean_runtime_cell(dual_cluster_display['transition_evidence'])} | "
+            f"{_clean_runtime_cell(dual_cluster_display['counter_evidence'])} |"
+        ),
+        "",
+        f"> **双群聚作用范围**：{_clean_runtime_cell(dual_cluster_display['scope_text'])}",
+        (
+            f"<!-- sector_tournament_dual_cluster artifact_hash="
+            f"{_clean_runtime_cell(dual_cluster_display['artifact_hash'])} -->"
+            if dual_cluster_display["artifact_hash"]
+            else "<!-- sector_tournament_dual_cluster unavailable -->"
+        ),
+        (
+            f"> **空间坐标**：{_clean_runtime_cell(three_axis_display['space_stage'])}；"
+            f"**时间坐标**：{_clean_runtime_cell(three_axis_display['time_stage'])}；"
+            f"**认知坐标**：{_clean_runtime_cell(three_axis_display['cognition_stage'])}"
+        ),
+        (
+            f"> **反事实**：{_clean_runtime_cell(three_axis_display['counterfactual'])}；"
+            f"**当前优势来源**：{_clean_runtime_cell(three_axis_display['edge_source'])}"
+        ),
+        (
+            f"> **阶段主线**：{_clean_runtime_cell(three_axis_display['stage_mainline_status'])}；"
+            f"**板块指数位置**：{_clean_runtime_cell(three_axis_display['stage_mainline_context'])}"
+        ),
+        f"> **阶段主线证据**：{_clean_runtime_cell(three_axis_display['stage_mainline_evidence'])}",
+        (
+            f"> **阶段方向**：已确认={_clean_runtime_cell(three_axis_display['confirmed_directions_text'])}；"
+            f"候选={_clean_runtime_cell(three_axis_display['candidate_directions_text'])}"
+        ),
+        f"> **阶段日期**：{_clean_runtime_cell(three_axis_display['stage_date_text'])}；跨度={_clean_runtime_cell(three_axis_display['stage_span_text'])}",
+        (
+            f"> **阶段复算**：{_clean_runtime_cell(three_axis_display['reflow_text'])}；"
+            f"相对强度={_clean_runtime_cell(three_axis_display['relative_strength_text'])}；"
+            f"内部趋势股={_clean_runtime_cell(three_axis_display['trend_density_text'])}；"
+            f"分歧检验={_clean_runtime_cell(three_axis_display['divergence_test_text'])}"
+        ),
+        f"> **同起点价格路径**：{_clean_runtime_cell(three_axis_display['relative_path_text'])}",
+        f"> **量能与市场宽度**：{_clean_runtime_cell(three_axis_display['liquidity_allocation_text'])}",
+        f"> **T+1/T+2 板块竞争假设**：{_clean_runtime_cell(three_axis_display['cross_day_competition_text'])}",
+        f"> **故事与价格**：{_clean_runtime_cell(three_axis_display['story_price_relation'])}",
+        f"> **剩余传播空间**：{_clean_runtime_cell(three_axis_display['remaining_consensus_space'])}",
+        f"> **三坐标作用范围**：{_clean_runtime_cell(three_axis_display['scope_text'])}",
+        (
+            f"<!-- sector_tournament_three_axis artifact_hash="
+            f"{_clean_runtime_cell(three_axis_display['artifact_hash'])} -->"
+            if three_axis_display["artifact_hash"]
+            else "<!-- sector_tournament_three_axis unavailable -->"
+        ),
+        (
+            f"> **当前传导阶段**：{_clean_runtime_cell(stage_display['stage'])}；"
+            f"方向={_clean_runtime_cell(stage_display['direction'])}；"
+            f"下一环={_clean_runtime_cell(stage_display['next_link'])}"
+        ),
+        f"> **剩余传播证据**：{_clean_runtime_cell(stage_display['remaining_text'])}",
+        (
+            f"> **事实缺口与反方证据**：缺口={_clean_runtime_cell(stage_display['missing_text'])}；"
+            f"反方={_clean_runtime_cell(stage_display['counter_text'])}"
+        ),
+        f"> **来源日期**：{_clean_runtime_cell(stage_display['source_dates_text'])}",
+        f"> **作用范围**：{_clean_runtime_cell(stage_display['scope_text'])}",
+        "",
         "| 层级 | 输入 | 淘汰 | 剩余 | 关键理由 | 下一层依据 |",
         "|---|---:|---|---|---|---|",
     ]
@@ -5474,6 +6340,28 @@ def _render_sector_capital_preflight_front_summary(payload):
             final_action=final_action,
         )
     )
+    questions = list(three_axis_display.get("ten_questions") or [])
+    if questions:
+        lines.extend(
+            [
+                "### 淘汰赛十问",
+                "",
+                "| 问题 | 当前结论 | 事实依据 | 反方证据 | 下一复核 |",
+                "|---|---|---|---|---|",
+            ]
+        )
+        for row in questions:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                "| "
+                f"{_clean_runtime_cell(row.get('question') or '未提供复核问题')} | "
+                f"{_clean_runtime_cell(row.get('conclusion') or '未形成可复核结论')} | "
+                f"{_clean_runtime_cell(row.get('evidence') or '未取得相应事实')} | "
+                f"{_clean_runtime_cell(row.get('counter_evidence') or '暂无明确反方证据')} | "
+                f"{_clean_runtime_cell(row.get('next_check') or '下一交易日继续验证')} |"
+            )
+        lines.append("")
     lines.extend(_render_tplus_rehearsal_front_summary(payload))
     lines.extend(_render_rhythm_reset_review_front_summary(payload))
     return lines
@@ -6128,6 +7016,11 @@ def _build_current_judgment_context_for_panel(
         execution_stage_context.get("mainline_name"),
         market_research_snapshot.get("mainline_name"),
     )
+    competition = resolve_unconfirmed_mainline_summary(
+        {"mainline_turnover_summary": mainline_turnover_summary}
+    )
+    if competition:
+        mainline = competition.get("cycle_label") or mainline
 
     core_candidates = []
     final_gate = final_gate if isinstance(final_gate, dict) else {}
@@ -6190,6 +7083,11 @@ def _build_current_judgment_context_for_panel(
         selected_position_candidate = {}
         participation_rehearsal = ""
         cancellation_condition = ""
+    no_trade_reason = (
+        competition.get("daily_label")
+        if competition
+        else "当前没有取得买入资格的候选"
+    )
     return {
         "market_state": market_state,
         "mainline": mainline,
@@ -6201,6 +7099,9 @@ def _build_current_judgment_context_for_panel(
         "suppress_participation_fallback": final_action_blocks_core_candidate,
         "participation_rehearsal": participation_rehearsal,
         "cancellation_condition": cancellation_condition,
+        "no_trade_core_candidate_text": f"无明日执行对象；{no_trade_reason}",
+        "no_trade_participation_text": "明日新仓0%不参与，不进入B1/B2窗口",
+        "no_trade_cancellation_text": "0%计划无需取消；没有合格对象就继续不参与",
     }
 
 
@@ -6216,11 +7117,26 @@ def _build_daily_judgment_front_panel_lines(
     extreme_conviction_list=None,
     final_target_resolution=None,
     final_gate=None,
+    snapshot_data=None,
+    root_dir=None,
 ):
     build_panel = globals().get("build_daily_judgment_review_panel") or _default_build_daily_judgment_review_panel
     render_panel = globals().get("render_daily_judgment_review_panel_lines") or _default_render_daily_judgment_review_panel_lines
     if not index or not callable(build_panel) or not callable(render_panel):
         return []
+    if isinstance(snapshot_data, dict) and root_dir:
+        refresh_reviews = (
+            globals().get("refresh_daily_judgment_reviews_for_display")
+            or _default_refresh_daily_judgment_reviews_for_display
+        )
+        if callable(refresh_reviews):
+            index = refresh_reviews(
+                index,
+                trade_date=target_date,
+                root_dir=root_dir,
+                snapshot_data=snapshot_data,
+                snapshot=_runtime_decision_ledger(snapshot_data, target_date=target_date),
+            )
     current_context = _build_current_judgment_context_for_panel(
         index=index,
         target_date=target_date,
@@ -6436,7 +7352,18 @@ def _runtime_selected_target_solution_lines(
         else {}
     )
     execution_target = _runtime_final_resolution_core_candidate(final_target_resolution)
-    if capital_priority in {"new_entry", "new_entry_after_old_exit"} and execution_target:
+    formal_account = (
+        final_target_resolution.get("formal_account_decision")
+        if isinstance(final_target_resolution.get("formal_account_decision"), dict)
+        else {}
+    )
+    formal_account_active = (
+        formal_account.get("schema_version") == FORMAL_ACCOUNT_DECISION_SCHEMA_VERSION
+    )
+    if (
+        capital_priority in {"new_entry", "new_entry_after_old_exit"}
+        or formal_account_active
+    ) and execution_target:
         candidate = _runtime_merge_same_stock_candidate_evidence(
             execution_target,
             candidate,
@@ -6449,7 +7376,11 @@ def _runtime_selected_target_solution_lines(
         execution_stage_context,
         final_target_resolution,
     )
-    final_execution_object = two_layer_execution_object or sector_capital_execution_object
+    final_execution_object = (
+        execution_target
+        if formal_account_active
+        else two_layer_execution_object or sector_capital_execution_object
+    )
     if old_position_first and watch_target:
         if not _candidate_can_be_current_observation_target(watch_target):
             return []
@@ -6629,28 +7560,41 @@ def _remove_report_reading_map(report_lines):
     return cleaned
 
 
-def _build_report_reading_map_lines():
+def _build_report_reading_map_lines(*, include_account_timeline=True):
+    rows = [
+        ("日报裁决总览 / 明日执行结论 / 执行条件 / 不执行条件", "账户姿态、仓位、最终对象、执行资格和取消条件", "先确定明日动作，避免被过程候选干扰"),
+        ("研究与执行分层 / 市场语言翻译 / 板块资金扩散淘汰赛 / T0推演", "企业、估值、价格、仓位身份、板块路径和T+1/T+2环境", "只解释动作依据，不新增明日对象"),
+        ("判断纠偏与今日五项结论", "已结算复盘、上一交易日结算、今日判断", "给后续复盘和 AI 批改使用"),
+        ("市场基底 / 主线 / 个股解读 / 执行计划", "指数、成交、主线关系、三段窗口", "判断市场和个股条件是否支持执行"),
+        ("详细附录", "推导链、过程样本、数据源和运行记录", "只作复盘证据，不新增明日对象"),
+    ]
+    if include_account_timeline:
+        rows.insert(1, ("账户日序表", "时间位置、Ta-Te路径", "用时间轴校对账户位置"))
     return [
         "## 阅读地图",
         "| 顺序 | 模块 | 读什么 | 用途 |",
         "|---:|---|---|---|",
-        "| 1 | 日报裁决总览 / 明日执行结论 / 执行条件 / 不执行条件 | 账户姿态、仓位、最终对象、执行资格和取消条件 | 先确定明日动作，避免被过程候选干扰 |",
-        "| 2 | 账户日序表 | 时间位置、Ta-Te路径 | 用时间轴校对账户位置 |",
-        "| 3 | 板块资金扩散淘汰赛 / T0推演 | 板块路径、资金载体、T+1和T+2环境 | 只解释动作依据，不新增明日对象 |",
-        "| 4 | 判断纠偏与今日五项结论 | 已结算复盘、上一交易日结算、今日判断 | 给后续复盘和 AI 批改使用 |",
-        "| 5 | 市场基底 / 主线 / 个股解读 / 执行计划 | 指数、成交、主线关系、三段窗口 | 判断市场和个股条件是否支持执行 |",
-        "| 6 | 详细附录 | 推导链、过程样本、数据源和运行记录 | 只作复盘证据，不新增明日对象 |",
+        *[
+            f"| {index} | {module} | {content} | {purpose} |"
+            for index, (module, content, purpose) in enumerate(rows, start=1)
+        ],
     ]
 
 
-def _insert_report_reading_map(report_lines):
+def _insert_report_reading_map(report_lines, *, include_account_timeline=True):
     report_lines = _remove_report_reading_map(report_lines)
     insert_at = 0
     if report_lines and str(report_lines[0]).startswith("#"):
         insert_at = 1
         while insert_at < len(report_lines) and str(report_lines[insert_at]).strip() == "":
             insert_at += 1
-    return report_lines[:insert_at] + [""] + _build_report_reading_map_lines() + [""] + report_lines[insert_at:]
+    return (
+        report_lines[:insert_at]
+        + [""]
+        + _build_report_reading_map_lines(include_account_timeline=include_account_timeline)
+        + [""]
+        + report_lines[insert_at:]
+    )
 
 
 def _normalize_runtime_stock_code(value):
@@ -6932,17 +7876,48 @@ def _is_runtime_countertrend_attack_day(data=None, market_research_snapshot=None
     market_research_snapshot = market_research_snapshot or {}
     final_gate = final_gate or {}
     state_machine = market_research_snapshot.get("state_machine") if isinstance(market_research_snapshot, dict) else {}
+    current_style_sources = [
+        market_research_snapshot.get("style_switch") if isinstance(market_research_snapshot, dict) else {},
+        state_machine or {},
+        data.get("market_style_switch") if isinstance(data, dict) else {},
+    ]
+    current_style_text = " ".join(
+        part for source in current_style_sources for part in _iter_runtime_text_values(source)
+    )
+    markers = ("逆势试攻", "逆势攻击", "放量杀跌", "先防踩踏", "踩踏")
+    if any(marker in current_style_text for marker in markers):
+        return True
+
     sources = [
         data.get("mainline_turnover_summary") if isinstance(data, dict) else {},
-        data.get("current_mainline_history_record") if isinstance(data, dict) else {},
-        market_research_snapshot,
         market_research_snapshot.get("mainline_turnover_summary") if isinstance(market_research_snapshot, dict) else {},
-        market_research_snapshot.get("current_mainline_history_record") if isinstance(market_research_snapshot, dict) else {},
-        state_machine or {},
         final_gate,
     ]
     text = " ".join(part for source in sources for part in _iter_runtime_text_values(source))
-    return any(marker in text for marker in ("逆势试攻", "逆势攻击", "放量杀跌", "先防踩踏", "踩踏"))
+    if not any(marker in text for marker in markers):
+        return False
+
+    observation = market_research_snapshot.get("observation") if isinstance(market_research_snapshot, dict) else {}
+    observation = observation if isinstance(observation, dict) else {}
+    indices = data.get("indices") if isinstance(data, dict) else {}
+    indices = indices if isinstance(indices, dict) else {}
+    sh_index = indices.get("上证指数") if isinstance(indices.get("上证指数"), dict) else {}
+    benchmark_change = _runtime_cell_float(
+        observation.get("benchmark_change_pct", sh_index.get("涨跌幅", sh_index.get("change_pct")))
+    )
+    market_stats = data.get("market_stats") if isinstance(data, dict) else {}
+    market_stats = market_stats if isinstance(market_stats, dict) else {}
+    up_count = _runtime_cell_float(observation.get("up_count", market_stats.get("up_count")))
+    down_count = _runtime_cell_float(observation.get("down_count", market_stats.get("down_count")))
+    rise_fall_ratio = _runtime_cell_float(observation.get("rise_fall_ratio"))
+    if rise_fall_ratio is None and up_count is not None and down_count not in (None, 0):
+        rise_fall_ratio = up_count / down_count
+    index_supports = benchmark_change is not None and benchmark_change <= 0
+    breadth_supports = bool(
+        (rise_fall_ratio is not None and rise_fall_ratio < 1)
+        or (up_count is not None and down_count is not None and down_count > up_count)
+    )
+    return index_supports or breadth_supports
 
 
 def _force_observation_position_decision(position_decision):
@@ -7256,6 +8231,25 @@ def _resolve_front_page_target_candidate(data=None, execution_stage_context=None
         if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
             data["market_research_snapshot"] = market_research_snapshot
         return {}
+    workflow_execution_target = _runtime_selection_workflow_positive_target_from_sources(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    if workflow_execution_target:
+        canonical_target = _runtime_merge_same_stock_candidate_evidence(
+            workflow_execution_target,
+            (data or {}).get("selected_position_candidate") if isinstance(data, dict) else {},
+            data,
+            execution_stage_context,
+            market_research_snapshot,
+        )
+        return _store_runtime_current_core_candidate(
+            canonical_target,
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
     workflow_observation_target = _runtime_selection_workflow_zero_observation_target_from_sources(
         data=data,
         execution_stage_context=execution_stage_context,
@@ -7662,6 +8656,14 @@ def _normalize_market_snapshot_risk_text(value):
 def _normalize_unknown_position_visible_text(value):
     text = str(value or "")
     replacements = (
+        (
+            "环境已转撤退，先退出，等下一轮新脉冲。",
+            "环境已转撤退；明日新仓保持0%不参与。先核对实际持仓，只有确认持有旧仓且触发原定认错线时才执行退出。",
+        ),
+        (
+            "🟠 只处理旧仓",
+            "0%不参与；旧仓待核对",
+        ),
         (
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
             "明日不新增参与；先核对实际持仓，不预设旧仓动作",
@@ -8652,8 +9654,9 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("参与窗口", "观察窗口")
     text = text.replace("参与窗", "观察窗")
     text = text.replace("回封参与", "回封观察")
-    text = text.replace("| 50% |", "| 0%不参与 |")
-    text = text.replace("| 100% |", "| 0%不参与 |")
+    if not text.lstrip().startswith("| **总计** |"):
+        text = text.replace("| 50% |", "| 0%不参与 |")
+        text = text.replace("| 100% |", "| 0%不参与 |")
     text = text.replace("买入资格后", "观察资格成立后")
     text = text.replace("给出买入资格", "给出观察资格")
     text = text.replace("优化买点", "优化观察点")
@@ -9614,10 +10617,33 @@ def _normalize_positive_final_action_appendix_lines(
     return normalized
 
 
-def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_result=None, *, target_date="", execution_stage_context=None, final_action=None):
-    current_codes = _current_extreme_conviction_codes(execution_stage_context)
-    if not current_codes:
+def _prune_decision_ledger_result_for_current_extreme_list(
+    decision_ledger_result=None,
+    *,
+    target_date="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    final_action=None,
+):
+    current_extreme_list = _resolve_decision_ledger_extreme_conviction_list(
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    replay_mode = bool(
+        isinstance(data, dict)
+        and str(data.get("run_mode") or "").strip() == LEDGER_MODE_REPLAY
+    )
+    if current_extreme_list is _MISSING and not replay_mode:
         return decision_ledger_result
+    current_codes = (
+        _current_extreme_conviction_codes(
+            {"extreme_conviction_list": current_extreme_list}
+        )
+        if current_extreme_list is not _MISSING
+        else []
+    )
     if not isinstance(decision_ledger_result, dict):
         index = _read_decision_ledger_index_for_tracking(globals().get("decision_ledger_root_dir", "."))
         if not index:
@@ -9634,11 +10660,40 @@ def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_resul
         globals().get("prune_replaced_same_day_extreme_mentions")
         or _default_prune_replaced_same_day_extreme_mentions
     )
-    if not callable(prune_mentions):
+    if not callable(prune_mentions) and not replay_mode:
         return decision_ledger_result
-    pruned_index = prune_mentions(index, trade_date=target_date, current_codes=current_codes)
+    pruned_index = (
+        prune_mentions(index, trade_date=target_date, current_codes=current_codes)
+        if callable(prune_mentions) and current_extreme_list is not _MISSING
+        else index
+    )
     updated = dict(decision_ledger_result)
     updated["index"] = pruned_index
+    if replay_mode:
+        from replay.report_replay import isolate_replay_decision_ledger_artifacts
+
+        updated, posterior = isolate_replay_decision_ledger_artifacts(
+            updated,
+            target_date,
+            posterior=data.get("replay_posterior_facts"),
+        )
+        if posterior.get("decision_reviews") or posterior.get("decision_outcomes"):
+            data["replay_posterior_facts"] = posterior
+        refresh_reviews = (
+            globals().get("refresh_daily_judgment_reviews_for_display")
+            or _default_refresh_daily_judgment_reviews_for_display
+        )
+        if callable(refresh_reviews) and isinstance(updated.get("index"), dict):
+            updated["index"] = refresh_reviews(
+                updated["index"],
+                trade_date=target_date,
+                root_dir=(
+                    globals().get("decision_ledger_root_dir")
+                    or str(Path(__file__).resolve().parents[2])
+                ),
+                snapshot_data=data,
+                snapshot=_runtime_decision_ledger(data, target_date=target_date),
+            )
     updated["tracking_lines"] = _build_decision_ledger_tracking_lines(
         updated,
         target_date=target_date,
@@ -9838,7 +10893,10 @@ def _build_appendix_b_continuity_payload(
     mainline_turnover_summary=None,
     target_date=None,
 ):
-    from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+    from report.mainline_turnover_summary_support import (
+        resolve_mainline_attack_evidence_summary,
+        resolve_unconfirmed_mainline_summary,
+    )
 
     attack_summary = resolve_mainline_attack_evidence_summary({"mainline_turnover_summary": mainline_turnover_summary or {}})
     has_unconfirmed_attack = bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
@@ -9866,11 +10924,14 @@ def _build_appendix_b_continuity_payload(
             "note": item.get("interpretation") or item.get("note") or item.get("structure_state") or "",
         }
         if has_unconfirmed_attack and _is_current_item(record):
-            evidence = attack_summary.get("confirmation_evidence") or "板块攻击证据不足"
-            record["mainline"] = "暂无确认主线"
+            competition = resolve_unconfirmed_mainline_summary(
+                {"mainline_attack_evidence_summary": attack_summary}
+            )
+            evidence = competition.get("competition_summary") or "资金未形成明确进攻方向"
+            record["mainline"] = competition.get("cycle_label") or "未形成跨日胜出方向"
             record["mainline_degree"] = "待确认"
             record["replacement"] = "待确认"
-            record["interpretation"] = f"中枢只记录候选方向，不把单日热度升级为周期主线；{evidence}。"
+            record["interpretation"] = f"中枢只记录竞争方向，不把单日热度升级为周期主线；{evidence}。"
             record["note"] = record["interpretation"]
         return record
 
@@ -10342,6 +11403,7 @@ def _clear_front_page_placeholders(report_lines):
         "<!-- FRONT_PAGE_PIVOT_MAINLINE_PLACEHOLDER -->",
         "<!-- FRONT_PAGE_CAPITAL_INTENT_PLACEHOLDER -->",
         "<!-- FRONT_PAGE_STOCK_INTERPRETATION_PLACEHOLDER -->",
+        "<!-- MARKET_RESEARCH_SNAPSHOT_PLACEHOLDER -->",
     ):
         _replace_all_placeholder_lines(report_lines, marker, [])
 
@@ -10960,6 +12022,92 @@ def _attach_topic_lifecycle_snapshot(data):
     return snapshot
 
 
+_LLM_WIKI_FORMAL_ROOT_KEYS = (
+    "selection_workflow",
+    "final_target_resolution",
+    "selected_position_candidate",
+    "current_core_candidate",
+    "execution_object",
+    "execution_nature",
+    "position_decision",
+    "position_plan",
+    "planned_participation",
+    "b1_b2",
+    "old_position_handling",
+    "exit_action",
+    "account_action",
+    "two_layer_decision_payload",
+    "tomorrow_account_action",
+    "monthly_rhythm",
+    "front_page_final_gate",
+    "formal_decision_input",
+    "formal_account_decision",
+    "position_lifecycle_records",
+)
+_LLM_WIKI_FORMAL_CONTAINER_KEYS = (
+    "market_research_snapshot",
+    "execution_stage_context",
+)
+
+
+def _llm_wiki_complete_formal_decision_projection(data):
+    if not isinstance(data, dict):
+        return {}
+    projection = {
+        "roots": {
+            key: {"present": key in data, "value": deepcopy(data.get(key))}
+            for key in _LLM_WIKI_FORMAL_ROOT_KEYS
+        },
+        "containers": {},
+    }
+    for container_key in _LLM_WIKI_FORMAL_CONTAINER_KEYS:
+        container = data.get(container_key) if isinstance(data.get(container_key), dict) else {}
+        projection["containers"][container_key] = {
+            "present": isinstance(data.get(container_key), dict),
+            "fields": {
+                key: {"present": key in container, "value": deepcopy(container.get(key))}
+                for key in _LLM_WIKI_FORMAL_ROOT_KEYS
+            },
+        }
+    return projection
+
+
+def _restore_llm_wiki_formal_decision_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    roots = state.get("roots") if isinstance(state.get("roots"), dict) else {}
+    for key in _LLM_WIKI_FORMAL_ROOT_KEYS:
+        saved = roots.get(key) if isinstance(roots.get(key), dict) else {}
+        if saved.get("present"):
+            data[key] = deepcopy(saved.get("value"))
+        else:
+            data.pop(key, None)
+    containers = state.get("containers") if isinstance(state.get("containers"), dict) else {}
+    for container_key in _LLM_WIKI_FORMAL_CONTAINER_KEYS:
+        saved_container = (
+            containers.get(container_key)
+            if isinstance(containers.get(container_key), dict)
+            else {}
+        )
+        current = data.get(container_key) if isinstance(data.get(container_key), dict) else {}
+        current = dict(current)
+        fields = (
+            saved_container.get("fields")
+            if isinstance(saved_container.get("fields"), dict)
+            else {}
+        )
+        for key in _LLM_WIKI_FORMAL_ROOT_KEYS:
+            saved = fields.get(key) if isinstance(fields.get(key), dict) else {}
+            if saved.get("present"):
+                current[key] = deepcopy(saved.get("value"))
+            else:
+                current.pop(key, None)
+        if saved_container.get("present") or current:
+            data[container_key] = current
+        else:
+            data.pop(container_key, None)
+
+
 def _llm_wiki_formal_decision_projection(data):
     if not isinstance(data, dict):
         return {}
@@ -10972,6 +12120,23 @@ def _llm_wiki_formal_decision_projection(data):
     two_layer = (
         data.get("two_layer_decision_payload")
         if isinstance(data.get("two_layer_decision_payload"), dict)
+        else {}
+    )
+    market_snapshot = (
+        data.get("market_research_snapshot")
+        if isinstance(data.get("market_research_snapshot"), dict)
+        else {}
+    )
+    execution_context = (
+        data.get("execution_stage_context")
+        if isinstance(data.get("execution_stage_context"), dict)
+        else {}
+    )
+    front_page_final_gate = (
+        data.get("front_page_final_gate")
+        if isinstance(data.get("front_page_final_gate"), dict)
+        else market_snapshot.get("front_page_final_gate")
+        if isinstance(market_snapshot.get("front_page_final_gate"), dict)
         else {}
     )
     return {
@@ -10987,6 +12152,11 @@ def _llm_wiki_formal_decision_projection(data):
                 "participation_mode",
                 "participation_script",
                 "final_action",
+                "execution_nature",
+                "planned_participation",
+                "b1_action",
+                "b2_action",
+                "exit_action",
             )
         },
         "planned_participation": deepcopy(data.get("planned_participation")),
@@ -10997,12 +12167,50 @@ def _llm_wiki_formal_decision_projection(data):
         "two_layer_next_day_action": deepcopy(two_layer.get("next_day_action")),
         "two_layer_b_level_conditions": deepcopy(two_layer.get("b_level_conditions")),
         "old_position_action_rows": deepcopy(two_layer.get("old_position_action_rows")),
+        "front_page_final_gate": {
+            key: deepcopy(front_page_final_gate.get(key))
+            for key in (
+                "gate_status",
+                "operation_state",
+                "position_level",
+                "can_new_entry",
+                "should_reduce",
+                "allow_attack_50_ready",
+                "base_position_cap_pct",
+                "final_action",
+                "final_participation",
+                "gate_reason",
+                "capital_action_reason",
+            )
+        },
+        "execution_context_formal": {
+            key: deepcopy(execution_context.get(key))
+            for key in (
+                "selection_workflow",
+                "final_target_resolution",
+                "position_decision",
+                "two_layer_decision_payload",
+                "front_page_final_gate",
+            )
+        },
+        "market_snapshot_formal": {
+            key: deepcopy(market_snapshot.get(key))
+            for key in (
+                "selection_workflow",
+                "final_target_resolution",
+                "position_decision",
+                "two_layer_decision_payload",
+                "front_page_final_gate",
+            )
+        },
+        "complete_formal_state": _llm_wiki_complete_formal_decision_projection(data),
     }
 
 
 def _attach_llm_wiki_knowledge_hits(data, llm_wiki_context):
     if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
         return []
+    formal_state = _llm_wiki_complete_formal_decision_projection(data)
     before_projection = _llm_wiki_formal_decision_projection(data)
     before_hash = stable_json_hash(before_projection)
     fact_bundle = build_llm_wiki_fact_bundle(data)
@@ -11037,6 +12245,7 @@ def _attach_llm_wiki_knowledge_hits(data, llm_wiki_context):
     }
     llm_wiki_context["decision_isolation"] = isolation
     if not unchanged:
+        _restore_llm_wiki_formal_decision_state(data, formal_state)
         warning = "知识引用与既定决定不一致，停止生成知识解释"
         trace["hits"] = []
         trace["warnings"] = list(dict.fromkeys([*(trace.get("warnings") or []), warning]))
@@ -11078,6 +12287,1485 @@ def _get_or_build_llm_wiki_context(target_date, query_date, *, shared_cache=None
     return deepcopy(context)
 
 
+_RESEARCH_EXECUTION_HEADING = "## 研究与执行分层（研究证据）"
+_CFFEX_EVIDENCE_HEADING = "## 股指期货持仓结构（研究证据）"
+_MARKET_POLARIZATION_EVIDENCE_HEADING = "## 8月热门股双群聚与动态迁移（研究证据）"
+_RESEARCH_EXECUTION_INSERT_BEFORE = (
+    "## 市场语言翻译（研究证据）",
+    "## 板块资金扩散淘汰赛",
+    "## 板块资金载体预案",
+    "## 板块资金载体差异复核",
+    "## T0推演T+1/T+2交易环境",
+    "## 判断纠偏与今日五项结论",
+    "## 八、详细附录",
+)
+_RESEARCH_EXECUTION_FORMAL_ROOT_KEYS = (
+    "selection_workflow",
+    "final_target_resolution",
+    "selected_position_candidate",
+    "current_core_candidate",
+    "execution_object",
+    "execution_nature",
+    "position_decision",
+    "position_plan",
+    "planned_participation",
+    "b1_b2",
+    "old_position_handling",
+    "exit_action",
+    "account_action",
+    "two_layer_decision_payload",
+    "tomorrow_account_action",
+    "monthly_rhythm",
+    "front_page_final_gate",
+    "formal_decision_input",
+    "formal_account_decision",
+    "position_lifecycle_records",
+)
+_RESEARCH_EXECUTION_FORMAL_CONTAINER_KEYS = (
+    "market_research_snapshot",
+    "execution_stage_context",
+)
+_RUNTIME_DETACHED_EVIDENCE_KEYS = (
+    "knowledge",
+    "candidate_decision_evidence",
+    "candidate_decision_evidence_review",
+    "candidate_decision_evidence_facts",
+    "decision_robustness_version_health",
+    "decision_robustness_version_health_review",
+    "decision_robustness_version_health_facts",
+    "research_execution_evidence",
+    "research_execution_evidence_review",
+    "research_execution_facts",
+    "market_polarization_evidence",
+    "market_polarization_evidence_review",
+    "cffex_index_futures_position_evidence",
+    "cffex_index_futures_position_evidence_review",
+)
+_FORMAL_DECISION_PREPARATION_KEYS = (
+    "formal_decision_input",
+    "formal_account_decision",
+    "position_lifecycle_records",
+)
+_RUNTIME_PRELEGACY_DERIVED_KEYS = (
+    "market_structure_judgement",
+    "market_research_snapshot",
+    "knowledge_updates",
+)
+_RUNTIME_DECISION_PRODUCT_STATE_KEYS = (
+    "run_mode",
+    DECISION_PRODUCT_FREEZE_KEY,
+    "decision_product_freeze_review",
+    _RUNTIME_REPLAY_DECISION_FREEZE_LOCK_KEY,
+    *_RUNTIME_DECISION_PROJECTION_ROOT_KEYS,
+)
+
+
+def _capture_formal_decision_preparation_state(data):
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: {"present": key in data, "value": deepcopy(data.get(key))}
+        for key in _FORMAL_DECISION_PREPARATION_KEYS
+    }
+
+
+def _restore_formal_decision_preparation_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    for key in _FORMAL_DECISION_PREPARATION_KEYS:
+        snapshot = state.get(key) if isinstance(state.get(key), dict) else {}
+        if snapshot.get("present"):
+            data[key] = deepcopy(snapshot.get("value"))
+        else:
+            data.pop(key, None)
+
+
+def _capture_runtime_prelegacy_derived_state(data):
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: {"present": key in data, "value": deepcopy(data.get(key))}
+        for key in _RUNTIME_PRELEGACY_DERIVED_KEYS
+    }
+
+
+def _restore_runtime_prelegacy_derived_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    for key in _RUNTIME_PRELEGACY_DERIVED_KEYS:
+        snapshot = state.get(key) if isinstance(state.get(key), dict) else {}
+        if snapshot.get("present"):
+            data[key] = deepcopy(snapshot.get("value"))
+        else:
+            data.pop(key, None)
+
+
+def _capture_runtime_decision_product_state(data):
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: {"present": key in data, "value": deepcopy(data.get(key))}
+        for key in _RUNTIME_DECISION_PRODUCT_STATE_KEYS
+    }
+
+
+def _restore_runtime_decision_product_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    for key in _RUNTIME_DECISION_PRODUCT_STATE_KEYS:
+        snapshot = state.get(key) if isinstance(state.get(key), dict) else {}
+        if snapshot.get("present"):
+            data[key] = deepcopy(snapshot.get("value"))
+        else:
+            data.pop(key, None)
+
+
+def _store_runtime_decision_projection_roots(data, projection):
+    if not isinstance(data, dict) or not isinstance(projection, dict):
+        return
+    targets = [data]
+    for source in (data.get("execution_stage_context"), data.get("market_research_snapshot")):
+        if isinstance(source, dict):
+            targets.append(source)
+            nested = source.get("market_research_snapshot")
+            if isinstance(nested, dict):
+                targets.append(nested)
+    seen = set()
+    for target in targets:
+        marker = id(target)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        for key in _RUNTIME_DECISION_PROJECTION_ROOT_KEYS:
+            value = projection.get(key)
+            if isinstance(value, dict) and value:
+                target[key] = deepcopy(value)
+            else:
+                target.pop(key, None)
+
+
+def _capture_runtime_detached_evidence_state(data):
+    if not isinstance(data, dict):
+        return {}
+    return {
+        key: {"present": key in data, "value": deepcopy(data.get(key))}
+        for key in _RUNTIME_DETACHED_EVIDENCE_KEYS
+    }
+
+
+def _restore_runtime_detached_evidence_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    for key in _RUNTIME_DETACHED_EVIDENCE_KEYS:
+        snapshot = state.get(key) if isinstance(state.get(key), dict) else {}
+        if snapshot.get("present"):
+            data[key] = deepcopy(snapshot.get("value"))
+        else:
+            data.pop(key, None)
+
+
+def _detach_candidate_decision_evidence(data):
+    if not isinstance(data, dict):
+        return {}
+    artifact = data.pop("candidate_decision_evidence", None)
+    data.pop("candidate_decision_evidence_review", None)
+    return deepcopy(artifact) if isinstance(artifact, dict) else {}
+
+
+def _detach_candidate_decision_evidence_facts(data):
+    if not isinstance(data, dict):
+        return _MISSING
+    return data.pop("candidate_decision_evidence_facts", _MISSING)
+
+
+def _restore_candidate_decision_evidence_facts(data, facts):
+    if not isinstance(data, dict):
+        return
+    if facts is _MISSING:
+        data.pop("candidate_decision_evidence_facts", None)
+    else:
+        data["candidate_decision_evidence_facts"] = facts
+
+
+def _detach_decision_robustness_version_health(data):
+    if not isinstance(data, dict):
+        return {}
+    artifact = data.pop("decision_robustness_version_health", None)
+    data.pop("decision_robustness_version_health_review", None)
+    return deepcopy(artifact) if isinstance(artifact, dict) else {}
+
+
+def _detach_decision_robustness_version_health_facts(data):
+    if not isinstance(data, dict):
+        return _MISSING
+    return data.pop("decision_robustness_version_health_facts", _MISSING)
+
+
+def _restore_decision_robustness_version_health_facts(data, facts):
+    if not isinstance(data, dict):
+        return
+    if facts is _MISSING:
+        data.pop("decision_robustness_version_health_facts", None)
+    else:
+        data["decision_robustness_version_health_facts"] = facts
+
+
+def _detach_research_execution_evidence(data):
+    if not isinstance(data, dict):
+        return {}
+    artifact = data.pop("research_execution_evidence", None)
+    data.pop("research_execution_evidence_review", None)
+    return deepcopy(artifact) if isinstance(artifact, dict) else {}
+
+
+def _detach_research_execution_facts(data):
+    if not isinstance(data, dict):
+        return _MISSING
+    return data.pop("research_execution_facts", _MISSING)
+
+
+def _restore_research_execution_facts(data, facts):
+    if not isinstance(data, dict):
+        return
+    if facts is _MISSING:
+        data.pop("research_execution_facts", None)
+    else:
+        data["research_execution_facts"] = facts
+
+
+def _detach_market_polarization_evidence(data):
+    if not isinstance(data, dict):
+        return {}
+    artifact = data.pop("market_polarization_evidence", None)
+    data.pop("market_polarization_evidence_review", None)
+    return deepcopy(artifact) if isinstance(artifact, dict) else {}
+
+
+def _market_polarization_evidence_source_date(data, target_date, *, frozen_artifact=None):
+    candidates = []
+    if isinstance(frozen_artifact, dict):
+        candidates.append(frozen_artifact.get("source_date"))
+    if isinstance(data, dict):
+        # An explicit research source date lets a report dated after the
+        # market close point at the exact frozen research file.
+        candidates.append(data.get("market_polarization_source_date"))
+        candidates.append(data.get("source_date"))
+    candidates.append(target_date)
+    for value in candidates:
+        text = str(value or "").strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return text
+    return ""
+
+
+def _canonical_market_polarization_runtime_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = date.fromisoformat(text)
+    except ValueError:
+        return ""
+    return parsed.isoformat() if parsed.isoformat() == text else ""
+
+
+def _market_polarization_evidence_available_on(target_date, query_date):
+    """Use the earliest known report/query date as the availability boundary."""
+    raw_dates = [str(value or "").strip() for value in (target_date, query_date)]
+    if any(value and not _canonical_market_polarization_runtime_date(value) for value in raw_dates):
+        return ""
+    dates = [
+        _canonical_market_polarization_runtime_date(value)
+        for value in raw_dates
+        if value
+    ]
+    return min(dates) if dates else ""
+
+
+def _research_execution_formal_decision_projection(data):
+    if not isinstance(data, dict):
+        return {}
+    projection = {
+        "roots": {
+            key: {"present": key in data, "value": deepcopy(data.get(key))}
+            for key in _RESEARCH_EXECUTION_FORMAL_ROOT_KEYS
+        },
+        "containers": {},
+    }
+    for container_key in _RESEARCH_EXECUTION_FORMAL_CONTAINER_KEYS:
+        container = data.get(container_key) if isinstance(data.get(container_key), dict) else {}
+        projection["containers"][container_key] = {
+            "present": isinstance(data.get(container_key), dict),
+            "fields": {
+                key: {"present": key in container, "value": deepcopy(container.get(key))}
+                for key in _RESEARCH_EXECUTION_FORMAL_ROOT_KEYS
+            },
+        }
+    return projection
+
+
+def _capture_research_execution_formal_state(data):
+    return _research_execution_formal_decision_projection(data)
+
+
+def _restore_research_execution_formal_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    roots = state.get("roots") if isinstance(state.get("roots"), dict) else {}
+    for key in _RESEARCH_EXECUTION_FORMAL_ROOT_KEYS:
+        saved = roots.get(key) if isinstance(roots.get(key), dict) else {}
+        if saved.get("present"):
+            data[key] = deepcopy(saved.get("value"))
+        else:
+            data.pop(key, None)
+    containers = state.get("containers") if isinstance(state.get("containers"), dict) else {}
+    for container_key in _RESEARCH_EXECUTION_FORMAL_CONTAINER_KEYS:
+        saved_container = (
+            containers.get(container_key)
+            if isinstance(containers.get(container_key), dict)
+            else {}
+        )
+        current = data.get(container_key) if isinstance(data.get(container_key), dict) else {}
+        current = dict(current)
+        fields = (
+            saved_container.get("fields")
+            if isinstance(saved_container.get("fields"), dict)
+            else {}
+        )
+        for key in _RESEARCH_EXECUTION_FORMAL_ROOT_KEYS:
+            saved = fields.get(key) if isinstance(fields.get(key), dict) else {}
+            if saved.get("present"):
+                current[key] = deepcopy(saved.get("value"))
+            else:
+                current.pop(key, None)
+        if saved_container.get("present") or current:
+            data[container_key] = current
+        else:
+            data.pop(container_key, None)
+
+
+_DECISION_ROBUSTNESS_LIFECYCLE_FIELDS = (
+    "decision_date",
+    "b1_buy_date",
+    "review_date",
+    "b2_buy_date",
+    "b1_earliest_sell_date",
+    "b2_earliest_sell_date",
+    "planned_exit",
+    "exit_confirmation",
+    "funds_released",
+)
+
+
+def _decision_robustness_approved_fields_hash(data):
+    fields = data.get("approved_formal_fields") if isinstance(data, dict) else None
+    return stable_json_hash({"fields": fields}) if isinstance(fields, list) else ""
+
+
+def _decision_robustness_formal_decision_projection(data):
+    if not isinstance(data, dict):
+        return {}
+    lifecycle_records = (
+        data.get("position_lifecycle_records")
+        if isinstance(data.get("position_lifecycle_records"), list)
+        else []
+    )
+    candidate = (
+        data.get("candidate_decision_evidence")
+        if isinstance(data.get("candidate_decision_evidence"), dict)
+        else {}
+    )
+    capital_options = (
+        candidate.get("capital_options")
+        if isinstance(candidate.get("capital_options"), dict)
+        else {}
+    )
+    return {
+        "formal_decision": _research_execution_formal_decision_projection(data),
+        "position_lifecycle_records": {
+            "present": "position_lifecycle_records" in data,
+            "value": deepcopy(data.get("position_lifecycle_records")),
+        },
+        "lifecycle_fields": [
+            {
+                "record_index": index,
+                "fields": {
+                    field: {
+                        "present": field in record,
+                        "value": deepcopy(record.get(field)),
+                    }
+                    for field in _DECISION_ROBUSTNESS_LIFECYCLE_FIELDS
+                },
+            }
+            for index, record in enumerate(lifecycle_records)
+            if isinstance(record, dict)
+        ],
+        "account_options": {
+            name: {
+                "present": name in capital_options,
+                "value": deepcopy(capital_options.get(name)),
+            }
+            for name in ("hold", "add", "replace", "cash")
+        },
+        "candidate_decision_evidence": {
+            "present": "candidate_decision_evidence" in data,
+            "hash": (
+                canonical_candidate_decision_evidence_hash(candidate)
+                if candidate
+                else ""
+            ),
+        },
+        "approved_formal_fields": {
+            "present": "approved_formal_fields" in data,
+            "value": deepcopy(data.get("approved_formal_fields")),
+            "hash": _decision_robustness_approved_fields_hash(data),
+        },
+    }
+
+
+def _capture_decision_robustness_state(data):
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "formal_state": _capture_research_execution_formal_state(data),
+        "lifecycle_present": "position_lifecycle_records" in data,
+        "lifecycle_value": deepcopy(data.get("position_lifecycle_records")),
+        "approved_fields_present": "approved_formal_fields" in data,
+        "approved_fields_value": deepcopy(data.get("approved_formal_fields")),
+        "candidate_present": "candidate_decision_evidence" in data,
+        "candidate_value": deepcopy(data.get("candidate_decision_evidence")),
+    }
+
+
+def _restore_decision_robustness_state(data, state):
+    if not isinstance(data, dict) or not isinstance(state, dict):
+        return
+    _restore_research_execution_formal_state(data, state.get("formal_state"))
+    if state.get("lifecycle_present"):
+        data["position_lifecycle_records"] = deepcopy(state.get("lifecycle_value"))
+    else:
+        data.pop("position_lifecycle_records", None)
+    if state.get("approved_fields_present"):
+        data["approved_formal_fields"] = deepcopy(state.get("approved_fields_value"))
+    else:
+        data.pop("approved_formal_fields", None)
+    if state.get("candidate_present"):
+        data["candidate_decision_evidence"] = deepcopy(state.get("candidate_value"))
+    else:
+        data.pop("candidate_decision_evidence", None)
+
+
+def _candidate_decision_evidence_review(
+    *,
+    availability,
+    before_hash,
+    after_hash,
+    source_artifact_hash="",
+    artifact_usage="",
+    warnings=None,
+):
+    return {
+        "schema_version": "candidate_decision_evidence_review.v1",
+        "availability": str(availability or "unavailable"),
+        "before_hash": str(before_hash or ""),
+        "after_hash": str(after_hash or ""),
+        "unchanged": bool(before_hash and before_hash == after_hash),
+        "source_artifact_hash": str(source_artifact_hash or ""),
+        "artifact_usage": str(artifact_usage or ""),
+        "warnings": list(dict.fromkeys(str(item) for item in warnings or [] if str(item or "").strip())),
+    }
+
+
+def _resolve_candidate_decision_evidence(
+    data,
+    *,
+    target_date,
+    run_mode,
+    source_decision_hash,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = candidate_decision_evidence_cache_key(target_date, analysis_mode=analysis_mode)
+    if isinstance(shared_cache, dict) and cache_key in shared_cache:
+        cached = shared_cache.get(cache_key)
+        valid, errors = validate_candidate_decision_evidence(
+            cached,
+            report_date=target_date,
+            source_decision_hash=source_decision_hash,
+        )
+        return (deepcopy(cached), []) if valid else ({}, errors)
+    if analysis_mode == "replay":
+        if not isinstance(frozen_artifact, dict) or not frozen_artifact:
+            return {}, ["historical_candidate_decision_evidence_missing"]
+        valid, errors = validate_candidate_decision_evidence(
+            frozen_artifact,
+            report_date=target_date,
+            source_decision_hash=source_decision_hash,
+        )
+        return (deepcopy(frozen_artifact), []) if valid else ({}, errors)
+    artifact = build_candidate_decision_evidence(
+        deepcopy(data),
+        report_date=target_date,
+        source_decision_hash=source_decision_hash,
+    )
+    valid, errors = validate_candidate_decision_evidence(
+        artifact,
+        report_date=target_date,
+        source_decision_hash=source_decision_hash,
+    )
+    return (artifact, []) if valid else ({}, errors)
+
+
+def _attach_candidate_decision_evidence(
+    data,
+    *,
+    target_date,
+    run_mode,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    if not isinstance(data, dict):
+        return {}, {}
+    formal_state = _capture_research_execution_formal_state(data)
+    before_projection = _research_execution_formal_decision_projection(data)
+    before_hash = stable_json_hash(before_projection)
+    artifact, errors = _resolve_candidate_decision_evidence(
+        data,
+        target_date=target_date,
+        run_mode=run_mode,
+        source_decision_hash=before_hash,
+        frozen_artifact=frozen_artifact,
+        shared_cache=shared_cache,
+    )
+    after_projection = _research_execution_formal_decision_projection(data)
+    after_hash = stable_json_hash(after_projection)
+    if before_projection != after_projection:
+        _restore_research_execution_formal_state(data, formal_state)
+        restored_hash = stable_json_hash(_research_execution_formal_decision_projection(data))
+        review = _candidate_decision_evidence_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=restored_hash,
+            warnings=[*errors, "candidate_decision_evidence_changed_formal_decision"],
+        )
+        data["candidate_decision_evidence_review"] = review
+        data.pop("candidate_decision_evidence", None)
+        return {}, review
+    if not artifact:
+        review = _candidate_decision_evidence_review(
+            availability=(
+                "historical_evidence_missing" if run_mode == LEDGER_MODE_REPLAY else "unavailable"
+            ),
+            before_hash=before_hash,
+            after_hash=after_hash,
+            artifact_usage=(
+                "historical_snapshot_missing"
+                if run_mode == LEDGER_MODE_REPLAY
+                else "computed_target_date"
+            ),
+            warnings=errors,
+        )
+        data["candidate_decision_evidence_review"] = review
+        data.pop("candidate_decision_evidence", None)
+        return {}, review
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = candidate_decision_evidence_cache_key(target_date, analysis_mode=analysis_mode)
+    if isinstance(shared_cache, dict) and cache_key not in shared_cache:
+        shared_cache[cache_key] = deepcopy(artifact)
+    source_artifact = shared_cache.get(cache_key) if isinstance(shared_cache, dict) else artifact
+    source_artifact_hash = canonical_candidate_decision_evidence_hash(source_artifact)
+    data["candidate_decision_evidence"] = deepcopy(artifact)
+    review = _candidate_decision_evidence_review(
+        availability=artifact.get("availability"),
+        before_hash=before_hash,
+        after_hash=after_hash,
+        source_artifact_hash=source_artifact_hash,
+        artifact_usage=(
+            "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "computed_target_date"
+        ),
+        warnings=artifact.get("warnings"),
+    )
+    data["candidate_decision_evidence_review"] = review
+    return deepcopy(artifact), review
+
+
+def _decision_robustness_version_health_review(
+    *,
+    availability,
+    before_hash,
+    after_hash,
+    approved_fields_before_hash="",
+    approved_fields_after_hash="",
+    source_artifact_hash="",
+    source_candidate_hash="",
+    source_facts_hash="",
+    artifact_usage="",
+    warnings=None,
+):
+    return {
+        "schema_version": "decision_robustness_version_health_review.v1",
+        "availability": str(availability or "unavailable"),
+        "before_hash": str(before_hash or ""),
+        "after_hash": str(after_hash or ""),
+        "unchanged": bool(before_hash and before_hash == after_hash),
+        "approved_fields_before_hash": str(approved_fields_before_hash or ""),
+        "approved_fields_after_hash": str(approved_fields_after_hash or ""),
+        "approved_fields_unchanged": bool(
+            approved_fields_before_hash
+            and approved_fields_before_hash == approved_fields_after_hash
+        ),
+        "source_artifact_hash": str(source_artifact_hash or ""),
+        "source_candidate_hash": str(source_candidate_hash or ""),
+        "source_facts_hash": str(source_facts_hash or ""),
+        "artifact_usage": str(artifact_usage or ""),
+        "warnings": list(
+            dict.fromkeys(str(item) for item in warnings or [] if str(item or "").strip())
+        ),
+    }
+
+
+def _resolve_decision_robustness_version_health(
+    data,
+    *,
+    target_date,
+    run_mode,
+    source_decision_hash,
+    candidate_artifact,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    if analysis_mode == "replay" and (
+        not isinstance(frozen_artifact, dict) or not frozen_artifact
+    ):
+        return {}, ["historical_decision_robustness_version_health_missing"]
+    candidate_artifact = candidate_artifact if isinstance(candidate_artifact, dict) else {}
+    source_candidate_hash = str(candidate_artifact.get("artifact_hash") or "").strip()
+    if not source_candidate_hash:
+        return {}, ["decision_robustness_candidate_evidence_missing"]
+    if not isinstance(data, dict) or data.get("approved_formal_fields") != []:
+        return {}, ["decision_robustness_approved_fields_not_empty"]
+    facts = (
+        data.get("decision_robustness_version_health_facts")
+        if isinstance(data, dict)
+        else None
+    )
+    source_facts_hash = canonical_decision_robustness_version_health_facts_hash(
+        facts,
+        report_date=target_date,
+    )
+
+    if analysis_mode == "replay":
+        valid, errors = validate_decision_robustness_version_health(
+            frozen_artifact,
+            report_date=target_date,
+            source_decision_hash=source_decision_hash,
+            source_candidate_hash=source_candidate_hash,
+            source_facts_hash=source_facts_hash,
+        )
+        return (deepcopy(frozen_artifact), []) if valid else ({}, errors)
+
+    if not source_facts_hash:
+        return {}, ["decision_robustness_target_date_facts_missing_or_invalid"]
+    cache_key = decision_robustness_version_health_cache_key(
+        target_date,
+        analysis_mode=analysis_mode,
+        source_decision_hash=source_decision_hash,
+        source_candidate_hash=source_candidate_hash,
+        source_facts_hash=source_facts_hash,
+    )
+    if isinstance(shared_cache, dict) and cache_key in shared_cache:
+        cached = shared_cache.get(cache_key)
+        valid, errors = validate_decision_robustness_version_health(
+            cached,
+            report_date=target_date,
+            source_decision_hash=source_decision_hash,
+            source_candidate_hash=source_candidate_hash,
+            source_facts_hash=source_facts_hash,
+        )
+        return (deepcopy(cached), []) if valid else ({}, errors)
+
+    artifact = build_decision_robustness_version_health(
+        deepcopy(data),
+        report_date=target_date,
+        source_decision_hash=source_decision_hash,
+        candidate_decision_evidence=deepcopy(candidate_artifact),
+    )
+    if not artifact:
+        return {}, ["decision_robustness_artifact_unavailable"]
+    valid, errors = validate_decision_robustness_version_health(
+        artifact,
+        report_date=target_date,
+        source_decision_hash=source_decision_hash,
+        source_candidate_hash=source_candidate_hash,
+        source_facts_hash=source_facts_hash,
+    )
+    return (artifact, []) if valid else ({}, errors)
+
+
+def _attach_decision_robustness_version_health(
+    data,
+    *,
+    target_date,
+    run_mode,
+    candidate_artifact,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    if not isinstance(data, dict):
+        return {}, {}
+    saved_state = _capture_decision_robustness_state(data)
+    before_projection = _decision_robustness_formal_decision_projection(data)
+    before_hash = stable_json_hash(before_projection)
+    approved_before_hash = _decision_robustness_approved_fields_hash(data)
+    artifact, errors = _resolve_decision_robustness_version_health(
+        data,
+        target_date=target_date,
+        run_mode=run_mode,
+        source_decision_hash=before_hash,
+        candidate_artifact=candidate_artifact,
+        frozen_artifact=frozen_artifact,
+        shared_cache=shared_cache,
+    )
+    after_projection = _decision_robustness_formal_decision_projection(data)
+    after_hash = stable_json_hash(after_projection)
+    approved_after_hash = _decision_robustness_approved_fields_hash(data)
+    if before_projection != after_projection or approved_before_hash != approved_after_hash:
+        _restore_decision_robustness_state(data, saved_state)
+        restored_projection = _decision_robustness_formal_decision_projection(data)
+        restored_hash = stable_json_hash(restored_projection)
+        restored_approved_hash = _decision_robustness_approved_fields_hash(data)
+        review = _decision_robustness_version_health_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=restored_hash,
+            approved_fields_before_hash=approved_before_hash,
+            approved_fields_after_hash=restored_approved_hash,
+            warnings=[*errors, "decision_robustness_changed_formal_decision"],
+        )
+        data["decision_robustness_version_health_review"] = review
+        data.pop("decision_robustness_version_health", None)
+        return {}, review
+    if not artifact:
+        review = _decision_robustness_version_health_review(
+            availability=(
+                "historical_evidence_missing" if run_mode == LEDGER_MODE_REPLAY else "unavailable"
+            ),
+            before_hash=before_hash,
+            after_hash=after_hash,
+            approved_fields_before_hash=approved_before_hash,
+            approved_fields_after_hash=approved_after_hash,
+            source_candidate_hash=str((candidate_artifact or {}).get("artifact_hash") or ""),
+            artifact_usage=(
+                "historical_snapshot_missing"
+                if run_mode == LEDGER_MODE_REPLAY
+                else "computed_target_date"
+            ),
+            warnings=errors,
+        )
+        data["decision_robustness_version_health_review"] = review
+        data.pop("decision_robustness_version_health", None)
+        return {}, review
+
+    source_hashes = artifact.get("source_hashes") if isinstance(artifact.get("source_hashes"), dict) else {}
+    source_candidate_hash = str(source_hashes.get("candidate_decision_evidence") or "")
+    source_facts_hash = str(source_hashes.get("fact_bundle") or "")
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = decision_robustness_version_health_cache_key(
+        target_date,
+        analysis_mode=analysis_mode,
+        source_decision_hash=before_hash,
+        source_candidate_hash=source_candidate_hash,
+        source_facts_hash=source_facts_hash,
+    )
+    if isinstance(shared_cache, dict) and cache_key not in shared_cache:
+        shared_cache[cache_key] = deepcopy(artifact)
+    source_artifact = shared_cache.get(cache_key) if isinstance(shared_cache, dict) else artifact
+    source_artifact_hash = canonical_decision_robustness_version_health_hash(source_artifact)
+    data["decision_robustness_version_health"] = deepcopy(artifact)
+    review = _decision_robustness_version_health_review(
+        availability=artifact.get("availability"),
+        before_hash=before_hash,
+        after_hash=after_hash,
+        approved_fields_before_hash=approved_before_hash,
+        approved_fields_after_hash=approved_after_hash,
+        source_artifact_hash=source_artifact_hash,
+        source_candidate_hash=source_candidate_hash,
+        source_facts_hash=source_facts_hash,
+        artifact_usage=(
+            "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "computed_target_date"
+        ),
+        warnings=artifact.get("warnings"),
+    )
+    data["decision_robustness_version_health_review"] = review
+    return deepcopy(artifact), review
+
+
+def _remove_research_execution_section(report):
+    lines = str(report or "").splitlines()
+    result = []
+    index = 0
+    while index < len(lines):
+        if str(lines[index] or "").strip() != _RESEARCH_EXECUTION_HEADING:
+            result.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and not str(lines[index] or "").strip().startswith("## "):
+            index += 1
+        while result and not str(result[-1] or "").strip():
+            result.pop()
+    return "\n".join(result).strip()
+
+
+def _insert_research_execution_section(report, section_lines):
+    section_lines = list(section_lines or [])
+    report = _remove_research_execution_section(report)
+    if not section_lines:
+        return report
+    lines = str(report or "").splitlines()
+    action_positions = [
+        index
+        for index, line in enumerate(lines)
+        if str(line or "").strip() in {"## 明日执行结论", "### 明日行动清单"}
+    ]
+    action_start = min(action_positions) if action_positions else -1
+    insert_at = len(lines)
+    for marker in _RESEARCH_EXECUTION_INSERT_BEFORE:
+        for index, line in enumerate(lines):
+            if index > action_start and str(line or "").strip() == marker:
+                insert_at = min(insert_at, index)
+                break
+    while insert_at > 0 and not str(lines[insert_at - 1] or "").strip():
+        insert_at -= 1
+    prefix = lines[:insert_at]
+    suffix = lines[insert_at:]
+    if prefix and str(prefix[-1] or "").strip():
+        prefix.append("")
+    inserted = prefix + section_lines
+    if suffix:
+        inserted.append("")
+        inserted.extend(suffix)
+    return "\n".join(inserted).strip()
+
+
+def _remove_cffex_evidence_section(report):
+    lines = str(report or "").splitlines()
+    result = []
+    index = 0
+    while index < len(lines):
+        if str(lines[index] or "").strip() != _CFFEX_EVIDENCE_HEADING:
+            result.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and not str(lines[index] or "").strip().startswith("## "):
+            index += 1
+        while result and not str(result[-1] or "").strip():
+            result.pop()
+    return "\n".join(result).strip()
+
+
+def _insert_cffex_evidence_section(report, section_lines):
+    section_lines = list(section_lines or [])
+    report = _remove_cffex_evidence_section(report)
+    if not section_lines:
+        return report
+    lines = str(report or "").splitlines()
+    action_positions = [
+        index
+        for index, line in enumerate(lines)
+        if str(line or "").strip() in {"## 明日执行结论", "### 明日行动清单"}
+    ]
+    action_start = min(action_positions) if action_positions else -1
+    insert_at = len(lines)
+    for marker in (
+        "## 市场语言翻译（研究证据）",
+        "## 板块资金扩散淘汰赛",
+        "## 板块资金载体预案",
+        "## T0推演T+1/T+2交易环境",
+        "## 判断纠偏与今日五项结论",
+        "## 八、详细附录",
+    ):
+        for index, line in enumerate(lines):
+            if index > action_start and str(line or "").strip() == marker:
+                insert_at = min(insert_at, index)
+                break
+    while insert_at > 0 and not str(lines[insert_at - 1] or "").strip():
+        insert_at -= 1
+    prefix = lines[:insert_at]
+    suffix = lines[insert_at:]
+    if prefix and str(prefix[-1] or "").strip():
+        prefix.append("")
+    inserted = prefix + section_lines
+    if suffix:
+        inserted.append("")
+        inserted.extend(suffix)
+    return "\n".join(inserted).strip()
+
+
+def _attach_cffex_index_futures_position_evidence(
+    report,
+    data,
+    *,
+    target_date,
+    run_mode,
+    source_payload=None,
+):
+    if not isinstance(data, dict):
+        return str(report or ""), {}, {}
+    formal_state = _capture_research_execution_formal_state(data)
+    before_projection = _research_execution_formal_decision_projection(data)
+    before_hash = stable_json_hash(before_projection)
+    warnings = []
+    payload = deepcopy(source_payload) if isinstance(source_payload, dict) else {}
+    valid, errors = validate_cffex_evidence(payload, target_date=target_date)
+    if not valid:
+        warnings.extend(errors)
+        payload = build_unavailable_cffex_evidence(
+            target_date,
+            reason="目标日中金所股指期货持仓事实缺失",
+        )
+    source_hash_before = canonical_cffex_evidence_hash(payload)
+    section_lines = render_cffex_evidence_lines(deepcopy(payload))
+    rendered = _insert_cffex_evidence_section(report, section_lines)
+    source_hash_after = canonical_cffex_evidence_hash(payload)
+    after_projection = _research_execution_formal_decision_projection(data)
+    after_hash = stable_json_hash(after_projection)
+    unchanged = before_projection == after_projection and source_hash_before == source_hash_after
+    review = {
+        "schema_version": "cffex_index_futures_position_evidence_review.v1",
+        "availability": str(payload.get("availability") or "unavailable"),
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+        "unchanged": unchanged,
+        "source_artifact_hash": source_hash_before,
+        "artifact_usage": "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "target_date_fact",
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+    if not unchanged:
+        _restore_research_execution_formal_state(data, formal_state)
+        review["availability"] = "decision_mismatch"
+        review["warnings"] = [*review["warnings"], "股指期货研究证据与既定决定不一致，停止生成本段"]
+        data["cffex_index_futures_position_evidence_review"] = review
+        data.pop("cffex_index_futures_position_evidence", None)
+        return _remove_cffex_evidence_section(rendered), {}, review
+    data["cffex_index_futures_position_evidence"] = deepcopy(payload)
+    data["cffex_index_futures_position_evidence_review"] = deepcopy(review)
+    return rendered, deepcopy(payload), review
+
+
+def _remove_market_polarization_evidence_section(report):
+    lines = str(report or "").splitlines()
+    result = []
+    index = 0
+    while index < len(lines):
+        if str(lines[index] or "").strip() != _MARKET_POLARIZATION_EVIDENCE_HEADING:
+            result.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and not str(lines[index] or "").strip().startswith("## "):
+            index += 1
+        while result and not str(result[-1] or "").strip():
+            result.pop()
+    return "\n".join(result).strip()
+
+
+def _insert_market_polarization_evidence_section(report, section_lines):
+    section_lines = list(section_lines or [])
+    report = _remove_market_polarization_evidence_section(report)
+    if not section_lines:
+        return report
+    lines = str(report or "").splitlines()
+    action_positions = [
+        index
+        for index, line in enumerate(lines)
+        if str(line or "").strip() in {"## 明日执行结论", "### 明日行动清单"}
+    ]
+    action_start = min(action_positions) if action_positions else -1
+    insert_at = len(lines)
+    for marker in _RESEARCH_EXECUTION_INSERT_BEFORE:
+        for index, line in enumerate(lines):
+            if index > action_start and str(line or "").strip() == marker:
+                insert_at = min(insert_at, index)
+                break
+    while insert_at > 0 and not str(lines[insert_at - 1] or "").strip():
+        insert_at -= 1
+    prefix = lines[:insert_at]
+    suffix = lines[insert_at:]
+    if prefix and str(prefix[-1] or "").strip():
+        prefix.append("")
+    inserted = prefix + section_lines
+    if suffix:
+        inserted.append("")
+        inserted.extend(suffix)
+    return "\n".join(inserted).strip()
+
+
+def _market_polarization_evidence_review(
+    *,
+    availability,
+    before_hash,
+    after_hash,
+    source_artifact_hash="",
+    artifact_usage="",
+    evidence_date="",
+    query_date="",
+    evidence_hash_before="",
+    evidence_hash_after="",
+    complete_formal_state_unchanged=True,
+    warnings=None,
+):
+    formal_unchanged = bool(
+        before_hash
+        and before_hash == after_hash
+        and complete_formal_state_unchanged
+    )
+    evidence_unchanged = bool(
+        evidence_hash_before
+        and evidence_hash_before == evidence_hash_after
+    )
+    return {
+        "schema_version": "market_polarization_evidence_review.v1",
+        "availability": str(availability or "unavailable"),
+        "before_hash": str(before_hash or ""),
+        "after_hash": str(after_hash or ""),
+        "unchanged": formal_unchanged and evidence_unchanged
+        if evidence_hash_before
+        else formal_unchanged,
+        "formal_decision_unchanged": formal_unchanged,
+        "complete_formal_state_unchanged": bool(complete_formal_state_unchanged),
+        "source_artifact_hash": str(source_artifact_hash or ""),
+        "artifact_usage": str(artifact_usage or ""),
+        "evidence_date": str(evidence_date or ""),
+        "query_date": str(query_date or ""),
+        "evidence_hash_before": str(evidence_hash_before or ""),
+        "evidence_hash_after": str(evidence_hash_after or ""),
+        "evidence_unchanged": evidence_unchanged,
+        "warnings": list(
+            dict.fromkeys(
+                str(item) for item in warnings or [] if str(item or "").strip()
+            )
+        ),
+    }
+
+
+def _resolve_market_polarization_evidence(
+    data,
+    *,
+    target_date,
+    query_date,
+    run_mode,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    evidence_date = _market_polarization_evidence_source_date(
+        data,
+        target_date,
+        frozen_artifact=frozen_artifact if analysis_mode == "replay" else None,
+    )
+    if not evidence_date:
+        return {}, ["market_polarization_evidence_source_date_missing"], evidence_date
+    available_on = _market_polarization_evidence_available_on(target_date, query_date)
+    if not available_on:
+        return {}, ["market_polarization_evidence_available_on_invalid"], evidence_date
+    cache_key = market_polarization_evidence_cache_key(
+        evidence_date,
+        query_date,
+        analysis_mode=analysis_mode,
+    )
+    if isinstance(shared_cache, dict) and cache_key in shared_cache:
+        cached = shared_cache.get(cache_key)
+        valid, errors = validate_market_polarization_evidence(
+            cached,
+            expected_source_date=evidence_date,
+            available_on=available_on,
+        )
+        if valid:
+            return deepcopy(cached), [], evidence_date
+        return {}, errors, evidence_date
+
+    if analysis_mode == "replay":
+        if not isinstance(frozen_artifact, dict) or not frozen_artifact:
+            return {}, ["historical_market_polarization_evidence_missing"], evidence_date
+        payload = deepcopy(frozen_artifact)
+        valid, errors = validate_market_polarization_evidence(
+            payload,
+            expected_source_date=evidence_date,
+            available_on=available_on,
+        )
+        if valid:
+            return deepcopy(payload), [], evidence_date
+        return {}, errors, evidence_date
+    else:
+        try:
+            payload = load_market_polarization_evidence(
+                evidence_date=evidence_date,
+                query_date=query_date,
+                replay=False,
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            return {}, [str(error) or f"market_polarization_evidence_load_error:{type(error).__name__}"], evidence_date
+    if not payload:
+        return {}, ["market_polarization_evidence_unavailable"], evidence_date
+    valid, errors = validate_market_polarization_evidence(
+        payload,
+        expected_source_date=evidence_date,
+        available_on=available_on,
+    )
+    if valid:
+        return deepcopy(payload), [], evidence_date
+    return {}, errors, evidence_date
+
+
+def _attach_market_polarization_evidence(
+    report,
+    data,
+    *,
+    target_date,
+    query_date,
+    run_mode,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    if not isinstance(data, dict):
+        return str(report or ""), {}, {}
+    formal_state = _capture_research_execution_formal_state(data)
+    before_projection = build_decision_projection(data, target_date=target_date)
+    before_hash = canonical_decision_projection_hash(before_projection)
+    before_complete_formal_state = deepcopy(formal_state)
+    resolved = _resolve_market_polarization_evidence(
+        data,
+        target_date=target_date,
+        query_date=query_date,
+        run_mode=run_mode,
+        frozen_artifact=frozen_artifact,
+        shared_cache=shared_cache,
+    )
+    artifact, errors = resolved[0], resolved[1]
+    evidence_date = resolved[2]
+    after_build_projection = build_decision_projection(data, target_date=target_date)
+    after_build_hash = canonical_decision_projection_hash(after_build_projection)
+    after_build_complete_formal_state = _capture_research_execution_formal_state(data)
+    if (
+        before_projection != after_build_projection
+        or before_complete_formal_state != after_build_complete_formal_state
+    ):
+        _restore_research_execution_formal_state(data, formal_state)
+        restored_projection = build_decision_projection(data, target_date=target_date)
+        restored_hash = canonical_decision_projection_hash(restored_projection)
+        review = _market_polarization_evidence_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=restored_hash,
+            artifact_usage=(
+                "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "target_date_fact"
+            ),
+            evidence_date=evidence_date,
+            query_date=query_date,
+            complete_formal_state_unchanged=False,
+            warnings=[*errors, "market_polarization_evidence_changed_formal_decision"],
+        )
+        data["market_polarization_evidence_review"] = review
+        data.pop("market_polarization_evidence", None)
+        return _remove_market_polarization_evidence_section(report), {}, review
+
+    if not artifact:
+        review = _market_polarization_evidence_review(
+            availability=(
+                "historical_evidence_missing"
+                if run_mode == LEDGER_MODE_REPLAY
+                else "unavailable"
+            ),
+            before_hash=before_hash,
+            after_hash=after_build_hash,
+            artifact_usage=(
+                "historical_snapshot_missing"
+                if run_mode == LEDGER_MODE_REPLAY
+                else "target_date_fact"
+            ),
+            evidence_date=evidence_date,
+            query_date=query_date,
+            warnings=errors,
+        )
+        data["market_polarization_evidence_review"] = review
+        data.pop("market_polarization_evidence", None)
+        return _remove_market_polarization_evidence_section(report), {}, review
+
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = market_polarization_evidence_cache_key(
+        evidence_date,
+        query_date,
+        analysis_mode=analysis_mode,
+    )
+    if isinstance(shared_cache, dict) and cache_key not in shared_cache:
+        shared_cache[cache_key] = deepcopy(artifact)
+    source_artifact = (
+        shared_cache.get(cache_key) if isinstance(shared_cache, dict) else artifact
+    )
+    evidence_hash_before = canonical_market_polarization_evidence_hash(artifact)
+    source_hash_before = canonical_market_polarization_evidence_hash(source_artifact)
+    section_lines = render_market_polarization_evidence_lines(deepcopy(artifact))
+    rendered = _insert_market_polarization_evidence_section(report, section_lines)
+    evidence_hash_after = canonical_market_polarization_evidence_hash(artifact)
+    source_hash_after = canonical_market_polarization_evidence_hash(source_artifact)
+    after_render_projection = build_decision_projection(data, target_date=target_date)
+    after_render_hash = canonical_decision_projection_hash(after_render_projection)
+    after_render_complete_formal_state = _capture_research_execution_formal_state(data)
+    formal_unchanged = (
+        before_projection == after_render_projection
+        and before_complete_formal_state == after_render_complete_formal_state
+    )
+    evidence_unchanged = (
+        evidence_hash_before == evidence_hash_after
+        and source_hash_before == source_hash_after
+        and evidence_hash_before == source_hash_before
+    )
+    if not formal_unchanged or not evidence_unchanged:
+        _restore_research_execution_formal_state(data, formal_state)
+        warning = (
+            "双群聚研究证据源产物在渲染期间被改写，停止生成本段"
+            if not evidence_unchanged
+            else "双群聚研究证据与既定决定不一致，停止生成本段"
+        )
+        review = _market_polarization_evidence_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=after_render_hash,
+            source_artifact_hash=source_hash_before,
+            artifact_usage=(
+                "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "target_date_fact"
+            ),
+            evidence_date=evidence_date,
+            query_date=query_date,
+            evidence_hash_before=evidence_hash_before,
+            evidence_hash_after=evidence_hash_after,
+            complete_formal_state_unchanged=formal_unchanged,
+            warnings=[warning],
+        )
+        data["market_polarization_evidence_review"] = review
+        data.pop("market_polarization_evidence", None)
+        return _remove_market_polarization_evidence_section(rendered), {}, review
+
+    data["market_polarization_evidence"] = deepcopy(artifact)
+    review = _market_polarization_evidence_review(
+        availability="available",
+        before_hash=before_hash,
+        after_hash=after_render_hash,
+        source_artifact_hash=source_hash_before,
+        artifact_usage=(
+            "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "target_date_fact"
+        ),
+        evidence_date=evidence_date,
+        query_date=query_date,
+        evidence_hash_before=evidence_hash_before,
+        evidence_hash_after=evidence_hash_after,
+        complete_formal_state_unchanged=formal_unchanged,
+        warnings=[*errors, *(artifact.get("warnings") or [])],
+    )
+    data["market_polarization_evidence_review"] = review
+    return rendered, deepcopy(artifact), review
+
+
+def _research_execution_review(
+    *,
+    availability,
+    before_hash,
+    after_hash,
+    source_artifact_hash="",
+    artifact_usage="",
+    warnings=None,
+):
+    return {
+        "schema_version": "research_execution_evidence_review.v1",
+        "availability": str(availability or "unavailable"),
+        "before_hash": str(before_hash or ""),
+        "after_hash": str(after_hash or ""),
+        "unchanged": bool(before_hash and before_hash == after_hash),
+        "source_artifact_hash": str(source_artifact_hash or ""),
+        "artifact_usage": str(artifact_usage or ""),
+        "warnings": list(dict.fromkeys(str(item) for item in warnings or [] if str(item or "").strip())),
+    }
+
+
+def _research_execution_objects_required(data):
+    if not isinstance(data, dict):
+        return False
+    if "final_target_resolution" not in data:
+        return True
+    resolution = data.get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return True
+    try:
+        return bool(resolve_research_execution_objects(resolution))
+    except Exception:
+        return True
+
+
+def _resolve_research_execution_source_artifact(
+    data,
+    *,
+    target_date,
+    run_mode,
+    source_decision_hash,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = research_execution_evidence_cache_key(target_date, analysis_mode=analysis_mode)
+    if isinstance(shared_cache, dict) and cache_key in shared_cache:
+        cached = shared_cache.get(cache_key)
+        valid, errors = validate_research_execution_evidence(
+            cached,
+            target_date=target_date,
+            source_decision_hash=source_decision_hash,
+            final_target_resolution=data.get("final_target_resolution"),
+            formal_data=data,
+        )
+        return (deepcopy(cached), []) if valid else ({}, errors)
+
+    if analysis_mode == "replay":
+        if not isinstance(frozen_artifact, dict) or not frozen_artifact:
+            return {}, ["historical_research_execution_evidence_missing"]
+        valid, errors = validate_research_execution_evidence(
+            frozen_artifact,
+            target_date=target_date,
+            source_decision_hash=source_decision_hash,
+            final_target_resolution=data.get("final_target_resolution"),
+            formal_data=data,
+        )
+        return (deepcopy(frozen_artifact), []) if valid else ({}, errors)
+
+    artifact = build_research_execution_evidence(
+        data,
+        target_date=target_date,
+        analysis_mode="fresh",
+        source_decision_hash=source_decision_hash,
+    )
+    valid, errors = validate_research_execution_evidence(
+        artifact,
+        target_date=target_date,
+        source_decision_hash=source_decision_hash,
+        final_target_resolution=data.get("final_target_resolution"),
+        formal_data=data,
+    )
+    return (artifact, []) if valid else ({}, errors)
+
+
+def _attach_research_execution_evidence(
+    report,
+    data,
+    *,
+    target_date,
+    run_mode,
+    frozen_artifact=None,
+    shared_cache=None,
+):
+    if not isinstance(data, dict):
+        return str(report or ""), {}, {}
+    formal_state = _capture_research_execution_formal_state(data)
+    before_projection = _research_execution_formal_decision_projection(data)
+    before_hash = stable_json_hash(before_projection)
+    if not _research_execution_objects_required(data):
+        review = _research_execution_review(
+            availability="not_required",
+            before_hash=before_hash,
+            after_hash=before_hash,
+            artifact_usage="no_formal_object",
+            warnings=["research_execution_object_missing"],
+        )
+        data["research_execution_evidence_review"] = review
+        data.pop("research_execution_evidence", None)
+        return _remove_research_execution_section(report), {}, review
+    artifact, errors = _resolve_research_execution_source_artifact(
+        data,
+        target_date=target_date,
+        run_mode=run_mode,
+        source_decision_hash=before_hash,
+        frozen_artifact=frozen_artifact,
+        shared_cache=shared_cache,
+    )
+    after_build_projection = _research_execution_formal_decision_projection(data)
+    after_build_hash = stable_json_hash(after_build_projection)
+    if before_projection != after_build_projection:
+        _restore_research_execution_formal_state(data, formal_state)
+        warning = "研究证据与既定决定不一致，停止生成本段"
+        review = _research_execution_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=after_build_hash,
+            warnings=[*errors, warning],
+        )
+        data["research_execution_evidence_review"] = review
+        data.pop("research_execution_evidence", None)
+        return _remove_research_execution_section(report), {}, review
+
+    if not artifact:
+        availability = "historical_evidence_missing" if run_mode == LEDGER_MODE_REPLAY else "unavailable"
+        review = _research_execution_review(
+            availability=availability,
+            before_hash=before_hash,
+            after_hash=after_build_hash,
+            artifact_usage=(
+                "historical_snapshot_missing"
+                if run_mode == LEDGER_MODE_REPLAY
+                else "computed_target_date"
+            ),
+            warnings=errors,
+        )
+        data["research_execution_evidence_review"] = review
+        data.pop("research_execution_evidence", None)
+        return _remove_research_execution_section(report), {}, review
+
+    analysis_mode = "replay" if run_mode == LEDGER_MODE_REPLAY else "fresh"
+    cache_key = research_execution_evidence_cache_key(target_date, analysis_mode=analysis_mode)
+    if isinstance(shared_cache, dict) and cache_key not in shared_cache:
+        shared_cache[cache_key] = deepcopy(artifact)
+    source_artifact = shared_cache.get(cache_key) if isinstance(shared_cache, dict) else artifact
+    source_hash_before = canonical_research_execution_evidence_hash(source_artifact)
+    section_lines = render_research_execution_evidence_lines(deepcopy(artifact))
+    rendered = _insert_research_execution_section(report, section_lines)
+    source_hash_after = canonical_research_execution_evidence_hash(source_artifact)
+    after_render_projection = _research_execution_formal_decision_projection(data)
+    after_render_hash = stable_json_hash(after_render_projection)
+    if source_hash_before != source_hash_after or before_projection != after_render_projection:
+        _restore_research_execution_formal_state(data, formal_state)
+        warning = (
+            "研究证据源产物在渲染期间被改写，停止生成本段"
+            if source_hash_before != source_hash_after
+            else "研究证据与既定决定不一致，停止生成本段"
+        )
+        review = _research_execution_review(
+            availability="decision_mismatch",
+            before_hash=before_hash,
+            after_hash=after_render_hash,
+            source_artifact_hash=source_hash_before,
+            warnings=[warning],
+        )
+        data["research_execution_evidence_review"] = review
+        data.pop("research_execution_evidence", None)
+        return _remove_research_execution_section(rendered), {}, review
+
+    data["research_execution_evidence"] = deepcopy(artifact)
+    review = _research_execution_review(
+        availability=artifact.get("availability"),
+        before_hash=before_hash,
+        after_hash=after_render_hash,
+        source_artifact_hash=source_hash_before,
+        artifact_usage=(
+            "frozen_target_date"
+            if run_mode == LEDGER_MODE_REPLAY
+            else "computed_target_date"
+        ),
+        warnings=artifact.get("warnings"),
+    )
+    data["research_execution_evidence_review"] = review
+    return rendered, deepcopy(artifact), review
+
+
 def _append_report_note_once(report, lines, marker):
     report_text = str(report or "").rstrip()
     if not lines:
@@ -11091,17 +13779,148 @@ def _compact_execution_stage_context_for_persistence(
     execution_stage_context,
     *,
     effective_final_gate=None,
+    canonical_data=None,
 ):
     if not isinstance(execution_stage_context, dict):
         return {}
-    compacted = {
-        key: value
-        for key, value in execution_stage_context.items()
-        if key != "data" and not callable(value)
+    canonical_data = canonical_data if isinstance(canonical_data, dict) else {}
+    context_owned_fields = {
+        "candidates",
+        "watchlist",
+        "extreme_conviction_list",
     }
+    compacted = {}
+    for key, value in execution_stage_context.items():
+        if key == "data" or callable(value):
+            continue
+        if key in {"market_research_bundle", "step2_bundle"}:
+            continue
+        if key in canonical_data and key not in context_owned_fields:
+            try:
+                is_canonical_mirror = value is canonical_data[key] or bool(value == canonical_data[key])
+            except (TypeError, ValueError):
+                is_canonical_mirror = False
+            if is_canonical_mirror:
+                continue
+        compacted[key] = value
     if isinstance(effective_final_gate, dict):
         compacted["final_gate"] = dict(effective_final_gate)
     return compacted
+
+
+def _finalize_runtime_decision_product_freeze(
+    data,
+    *,
+    target_date,
+    run_mode,
+    source_artifact,
+    source_accepted,
+    before_projection,
+):
+    if not isinstance(data, dict):
+        return {}, {}, False
+    normalized_date = str(target_date or "").strip()
+    before_projection = before_projection if isinstance(before_projection, dict) else {}
+    after_projection = build_decision_projection(data, target_date=normalized_date)
+    before_hash = canonical_decision_projection_hash(before_projection)
+    after_hash = canonical_decision_projection_hash(after_projection)
+    projection_changed = bool(before_projection and before_hash != after_hash)
+    if projection_changed:
+        if source_accepted and source_artifact:
+            apply_decision_product_freeze(
+                data,
+                source_artifact,
+                target_date=normalized_date,
+            )
+        else:
+            _store_runtime_decision_projection_roots(data, before_projection)
+        review = _runtime_decision_product_review(
+            target_date=normalized_date,
+            artifact=source_artifact,
+            availability="explanation_projection_mismatch",
+            errors=[
+                f"decision_projection_changed:{before_hash}:{after_hash}",
+            ],
+            valid=False,
+        )
+        data["decision_product_freeze_review"] = review
+        return deepcopy(source_artifact) if source_artifact else {}, review, True
+
+    if source_accepted and source_artifact:
+        artifact_to_store = deepcopy(source_artifact)
+        # A fresh run may start from a valid older freeze.  Once the current
+        # target-date research payload has been attached, rebuild the freeze
+        # only when that read-only copy is missing or stale; replay must keep
+        # its historical artifact byte-for-byte unchanged.
+        if run_mode != LEDGER_MODE_REPLAY:
+            current_evidence = data.get("market_polarization_evidence")
+            frozen_evidence = (
+                (source_artifact.get("read_only_evidence") or {}).get(
+                    "market_polarization_evidence"
+                )
+                if isinstance(source_artifact.get("read_only_evidence"), dict)
+                else None
+            )
+            if isinstance(current_evidence, dict) and (
+                not isinstance(frozen_evidence, dict)
+                or canonical_market_polarization_evidence_hash(current_evidence)
+                != canonical_market_polarization_evidence_hash(frozen_evidence)
+            ):
+                rebuilt = build_decision_product_freeze(
+                    data,
+                    target_date=normalized_date,
+                    artifact_origin="fresh",
+                )
+                rebuilt_valid, _ = validate_decision_product_freeze(
+                    rebuilt,
+                    target_date=normalized_date,
+                ) if rebuilt else (False, [])
+                if rebuilt_valid:
+                    artifact_to_store = rebuilt
+        data[DECISION_PRODUCT_FREEZE_KEY] = deepcopy(artifact_to_store)
+        review = data.get("decision_product_freeze_review")
+        review = deepcopy(review) if isinstance(review, dict) else {}
+        return deepcopy(artifact_to_store), review, False
+
+    if run_mode == LEDGER_MODE_REPLAY:
+        artifact = data.get(DECISION_PRODUCT_FREEZE_KEY)
+        review = data.get("decision_product_freeze_review")
+        return (
+            deepcopy(artifact) if isinstance(artifact, dict) else {},
+            deepcopy(review) if isinstance(review, dict) else {},
+            False,
+        )
+
+    artifact = build_decision_product_freeze(
+        data,
+        target_date=normalized_date,
+        artifact_origin="fresh",
+    )
+    valid, errors = validate_decision_product_freeze(
+        artifact,
+        target_date=normalized_date,
+    ) if artifact else (False, ["decision_product_freeze_missing"])
+    if not valid:
+        review = _runtime_decision_product_review(
+            target_date=normalized_date,
+            artifact=artifact,
+            availability="fresh_freeze_invalid",
+            errors=errors,
+            valid=False,
+        )
+        data["decision_product_freeze_review"] = review
+        data.pop(DECISION_PRODUCT_FREEZE_KEY, None)
+        return {}, review, False
+    data[DECISION_PRODUCT_FREEZE_KEY] = deepcopy(artifact)
+    review = _runtime_decision_product_review(
+        target_date=normalized_date,
+        artifact=artifact,
+        availability=str(artifact.get("availability") or "available"),
+        errors=[],
+        valid=True,
+    )
+    data["decision_product_freeze_review"] = review
+    return deepcopy(artifact), review, False
 
 
 def render_markdown_report_runtime(
@@ -11112,54 +13931,384 @@ def render_markdown_report_runtime(
     run_mode=LEDGER_MODE_FROZEN,
     persist_strategy_tracking=True,
     market_language_translation=None,
+    cffex_index_futures_position_evidence=None,
     *,
     helpers=None,
     config=None,
 ):
+    runtime_timing_rows = (helpers or {}).get("REPORT_RUNTIME_TIMING_ROWS")
+    runtime_timing_started_at = time.monotonic()
     query_date = (
         str((data or {}).get("query_date") or "").strip()
         if isinstance(data, dict)
         else ""
-    ) or datetime.now(_SHANGHAI_TZ).date().isoformat()
-    frozen_context = _detach_llm_wiki_context(data)
-    if run_mode == LEDGER_MODE_REPLAY:
-        llm_wiki_context = build_replay_llm_wiki_context(
-            frozen_context,
-            target_date=str(target_date or "").strip(),
-            query_date=query_date,
+    )
+    if not query_date:
+        # A historical report without an explicit query date must not use
+        # today's availability to pull research that was not known then.
+        query_date = (
+            str(target_date or "").strip()
+            or datetime.now(_SHANGHAI_TZ).date().isoformat()
         )
-    else:
-        llm_wiki_context = _get_or_build_llm_wiki_context(
-            target_date,
-            query_date,
-            shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
-        )
-    _attach_market_structure_judgement(data)
-    bindings = {}
-    bindings.update(helpers or {})
-    bindings.update(config or {})
-    previous = _install_runtime_bindings(bindings)
+    prelegacy_derived_state = _capture_runtime_prelegacy_derived_state(data)
+    formal_decision_preparation_state = _capture_formal_decision_preparation_state(
+        data
+    )
+    decision_product_state = _capture_runtime_decision_product_state(data)
     try:
-        report = _render_markdown_report_legacy_body(
+        (
+            source_decision_product_freeze,
+            decision_product_freeze_review,
+            source_decision_product_accepted,
+        ) = _prepare_runtime_decision_product_freeze(
             data,
-            target_date,
-            supplementary_perspective=supplementary_perspective,
-            has_personal_positions=has_personal_positions,
+            target_date=str(target_date or "").strip(),
             run_mode=run_mode,
-            persist_strategy_tracking=persist_strategy_tracking,
-            market_language_translation=market_language_translation,
         )
-        if isinstance(data, dict):
-            report_lines = str(report or "").splitlines()
-            report_lines = _append_decision_revision_lines_once(report_lines, data.get("decision_ledger_artifacts"))
-            report = "\n".join(report_lines)
-    finally:
-        _restore_runtime_bindings(previous)
+        if (
+            not source_decision_product_accepted
+            and not _runtime_replay_decision_freeze_locked(data)
+        ):
+            prepare_formal_decision_input(
+                data,
+                report_date=str(target_date or "").strip(),
+            )
+    except Exception:
+        _restore_runtime_prelegacy_derived_state(data, prelegacy_derived_state)
+        _restore_formal_decision_preparation_state(
+            data,
+            formal_decision_preparation_state,
+        )
+        _restore_runtime_decision_product_state(data, decision_product_state)
+        raise
+    detached_evidence_state = _capture_runtime_detached_evidence_state(data)
+    frozen_context = _detach_llm_wiki_context(data)
+    frozen_candidate_decision_evidence = _detach_candidate_decision_evidence(data)
+    candidate_decision_evidence_facts = _detach_candidate_decision_evidence_facts(data)
+    frozen_decision_robustness_version_health = _detach_decision_robustness_version_health(data)
+    decision_robustness_version_health_facts = (
+        _detach_decision_robustness_version_health_facts(data)
+    )
+    frozen_research_execution_evidence = _detach_research_execution_evidence(data)
+    research_execution_facts = _detach_research_execution_facts(data)
+    frozen_market_polarization_evidence = _detach_market_polarization_evidence(data)
+    frozen_cffex_evidence = {}
+    if isinstance(data, dict):
+        frozen_cffex_evidence = data.pop("cffex_index_futures_position_evidence", None)
+        data.pop("cffex_index_futures_position_evidence_review", None)
+    source_cffex_evidence = (
+        deepcopy(cffex_index_futures_position_evidence)
+        if isinstance(cffex_index_futures_position_evidence, dict)
+        else deepcopy(frozen_cffex_evidence)
+        if isinstance(frozen_cffex_evidence, dict)
+        else {}
+    )
+    try:
+        if run_mode == LEDGER_MODE_REPLAY:
+            llm_wiki_context = build_replay_llm_wiki_context(
+                frozen_context,
+                target_date=str(target_date or "").strip(),
+                query_date=query_date,
+            )
+        else:
+            llm_wiki_context = _get_or_build_llm_wiki_context(
+                target_date,
+                query_date,
+                shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+            )
+        _attach_market_structure_judgement(data)
+        runtime_timing_started_at = _record_report_runtime_timing(
+            runtime_timing_rows,
+            "完整版/运行时/知识上下文准备",
+            runtime_timing_started_at,
+        )
+        bindings = {}
+        bindings.update(helpers or {})
+        bindings.update(config or {})
+        with strategy_performance_ledger_read_cache(
+            (helpers or {}).get("REPORT_RUNTIME_CACHE")
+        ):
+            previous = _install_runtime_bindings(bindings)
+            try:
+                report = _render_markdown_report_legacy_body(
+                    data,
+                    target_date,
+                    supplementary_perspective=supplementary_perspective,
+                    has_personal_positions=has_personal_positions,
+                    run_mode=run_mode,
+                    persist_strategy_tracking=persist_strategy_tracking,
+                    market_language_translation=market_language_translation,
+                )
+                if isinstance(data, dict):
+                    report_lines = str(report or "").splitlines()
+                    report_lines = _append_decision_revision_lines_once(
+                        report_lines,
+                        data.get("decision_ledger_artifacts"),
+                    )
+                    report = "\n".join(report_lines)
+            finally:
+                _restore_candidate_decision_evidence_facts(
+                    data,
+                    candidate_decision_evidence_facts,
+                )
+                _restore_decision_robustness_version_health_facts(
+                    data,
+                    decision_robustness_version_health_facts,
+                )
+                _restore_research_execution_facts(data, research_execution_facts)
+                _restore_runtime_bindings(previous)
+    except Exception:
+        _restore_runtime_detached_evidence_state(data, detached_evidence_state)
+        _restore_runtime_prelegacy_derived_state(data, prelegacy_derived_state)
+        _restore_formal_decision_preparation_state(
+            data,
+            formal_decision_preparation_state,
+        )
+        _restore_runtime_decision_product_state(data, decision_product_state)
+        raise
+    runtime_timing_started_at = time.monotonic()
+    decision_projection_before_explanations = {}
     if isinstance(data, dict):
         if run_mode == LEDGER_MODE_REPLAY:
             data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
         else:
             _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
+        decision_projection_before_explanations = build_decision_projection(
+            data,
+            target_date=str(target_date or "").strip(),
+        )
+        candidate_formal_state = _capture_research_execution_formal_state(data)
+        candidate_before_hash = stable_json_hash(
+            _research_execution_formal_decision_projection(data)
+        )
+        try:
+            candidate_decision_evidence, candidate_decision_evidence_review = (
+                _attach_candidate_decision_evidence(
+                    data,
+                    target_date=str(target_date or "").strip(),
+                    run_mode=run_mode,
+                    frozen_artifact=frozen_candidate_decision_evidence,
+                    shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+                )
+            )
+        except Exception as error:
+            _restore_research_execution_formal_state(data, candidate_formal_state)
+            candidate_decision_evidence = {}
+            candidate_after_hash = stable_json_hash(
+                _research_execution_formal_decision_projection(data)
+            )
+            candidate_decision_evidence_review = _candidate_decision_evidence_review(
+                availability="unavailable",
+                before_hash=candidate_before_hash,
+                after_hash=candidate_after_hash,
+                warnings=[f"candidate_decision_evidence_error:{type(error).__name__}"],
+            )
+            data["candidate_decision_evidence_review"] = candidate_decision_evidence_review
+            data.pop("candidate_decision_evidence", None)
+        data.setdefault("approved_formal_fields", [])
+        robustness_formal_state = _capture_decision_robustness_state(data)
+        robustness_before_projection = _decision_robustness_formal_decision_projection(data)
+        robustness_before_hash = stable_json_hash(robustness_before_projection)
+        robustness_approved_before_hash = _decision_robustness_approved_fields_hash(data)
+        try:
+            (
+                decision_robustness_version_health,
+                decision_robustness_version_health_review,
+            ) = _attach_decision_robustness_version_health(
+                data,
+                target_date=str(target_date or "").strip(),
+                run_mode=run_mode,
+                candidate_artifact=candidate_decision_evidence,
+                frozen_artifact=frozen_decision_robustness_version_health,
+                shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+            )
+        except Exception as error:
+            _restore_decision_robustness_state(data, robustness_formal_state)
+            decision_robustness_version_health = {}
+            robustness_after_hash = stable_json_hash(
+                _decision_robustness_formal_decision_projection(data)
+            )
+            robustness_approved_after_hash = _decision_robustness_approved_fields_hash(data)
+            decision_robustness_version_health_review = (
+                _decision_robustness_version_health_review(
+                    availability="unavailable",
+                    before_hash=robustness_before_hash,
+                    after_hash=robustness_after_hash,
+                    approved_fields_before_hash=robustness_approved_before_hash,
+                    approved_fields_after_hash=robustness_approved_after_hash,
+                    source_candidate_hash=str(
+                        (candidate_decision_evidence or {}).get("artifact_hash") or ""
+                    ),
+                    warnings=[
+                        f"decision_robustness_version_health_error:{type(error).__name__}"
+                    ],
+                )
+            )
+            data["decision_robustness_version_health_review"] = (
+                decision_robustness_version_health_review
+            )
+            data.pop("decision_robustness_version_health", None)
+        research_formal_state = _capture_research_execution_formal_state(data)
+        research_before_hash = stable_json_hash(
+            _research_execution_formal_decision_projection(data)
+        )
+        try:
+            report, research_execution_evidence, research_execution_review = _attach_research_execution_evidence(
+                report,
+                data,
+                target_date=str(target_date or "").strip(),
+                run_mode=run_mode,
+                frozen_artifact=frozen_research_execution_evidence,
+                shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+            )
+        except Exception as error:
+            _restore_research_execution_formal_state(data, research_formal_state)
+            report = _remove_research_execution_section(report)
+            research_execution_evidence = {}
+            research_after_hash = stable_json_hash(
+                _research_execution_formal_decision_projection(data)
+            )
+            research_execution_review = _research_execution_review(
+                availability="unavailable",
+                before_hash=research_before_hash,
+                after_hash=research_after_hash,
+                warnings=[f"research_execution_evidence_error:{type(error).__name__}"],
+            )
+            data["research_execution_evidence_review"] = research_execution_review
+            data.pop("research_execution_evidence", None)
+        cffex_formal_state = _capture_research_execution_formal_state(data)
+        cffex_before_hash = stable_json_hash(
+            _research_execution_formal_decision_projection(data)
+        )
+        try:
+            (
+                report,
+                cffex_index_futures_position_evidence_artifact,
+                cffex_index_futures_position_evidence_review,
+            ) = _attach_cffex_index_futures_position_evidence(
+                report,
+                data,
+                target_date=str(target_date or "").strip(),
+                run_mode=run_mode,
+                source_payload=source_cffex_evidence,
+            )
+        except Exception as error:
+            _restore_research_execution_formal_state(data, cffex_formal_state)
+            report = _remove_cffex_evidence_section(report)
+            cffex_index_futures_position_evidence_artifact = {}
+            cffex_after_hash = stable_json_hash(
+                _research_execution_formal_decision_projection(data)
+            )
+            cffex_index_futures_position_evidence_review = {
+                "schema_version": "cffex_index_futures_position_evidence_review.v1",
+                "availability": "unavailable",
+                "before_hash": cffex_before_hash,
+                "after_hash": cffex_after_hash,
+                "unchanged": cffex_before_hash == cffex_after_hash,
+                "source_artifact_hash": "",
+                "artifact_usage": "frozen_target_date" if run_mode == LEDGER_MODE_REPLAY else "target_date_fact",
+                "warnings": [f"cffex_evidence_error:{type(error).__name__}"],
+            }
+            data["cffex_index_futures_position_evidence_review"] = (
+                cffex_index_futures_position_evidence_review
+            )
+            data.pop("cffex_index_futures_position_evidence", None)
+        market_polarization_formal_state = _capture_research_execution_formal_state(data)
+        market_polarization_before_projection = build_decision_projection(
+            data,
+            target_date=str(target_date or "").strip(),
+        )
+        try:
+            (
+                report,
+                market_polarization_evidence,
+                market_polarization_evidence_review,
+            ) = _attach_market_polarization_evidence(
+                report,
+                data,
+                target_date=str(target_date or "").strip(),
+                query_date=query_date,
+                run_mode=run_mode,
+                frozen_artifact=frozen_market_polarization_evidence,
+                shared_cache=(helpers or {}).get("REPORT_RUNTIME_CACHE"),
+            )
+        except Exception as error:
+            _restore_research_execution_formal_state(
+                data,
+                market_polarization_formal_state,
+            )
+            report = _remove_market_polarization_evidence_section(report)
+            market_polarization_evidence = {}
+            market_polarization_after_projection = build_decision_projection(
+                data,
+                target_date=str(target_date or "").strip(),
+            )
+            market_polarization_evidence_review = _market_polarization_evidence_review(
+                availability="unavailable",
+                before_hash=canonical_decision_projection_hash(
+                    market_polarization_before_projection
+                ),
+                after_hash=canonical_decision_projection_hash(
+                    market_polarization_after_projection
+                ),
+                artifact_usage=(
+                    "frozen_target_date"
+                    if run_mode == LEDGER_MODE_REPLAY
+                    else "target_date_fact"
+                ),
+                query_date=query_date,
+                warnings=[
+                    f"market_polarization_evidence_error:{type(error).__name__}"
+                ],
+            )
+            data["market_polarization_evidence_review"] = (
+                market_polarization_evidence_review
+            )
+            data.pop("market_polarization_evidence", None)
+    else:
+        candidate_decision_evidence = {}
+        candidate_decision_evidence_review = {}
+        decision_robustness_version_health = {}
+        decision_robustness_version_health_review = {}
+        research_execution_evidence = {}
+        research_execution_review = {}
+        market_polarization_evidence = {}
+        market_polarization_evidence_review = {}
+        cffex_index_futures_position_evidence_artifact = {}
+        cffex_index_futures_position_evidence_review = {}
+    (
+        decision_product_freeze,
+        decision_product_freeze_review,
+        decision_product_projection_mismatch,
+    ) = _finalize_runtime_decision_product_freeze(
+        data,
+        target_date=str(target_date or "").strip(),
+        run_mode=run_mode,
+        source_artifact=source_decision_product_freeze,
+        source_accepted=source_decision_product_accepted,
+        before_projection=decision_projection_before_explanations,
+    )
+    if decision_product_projection_mismatch:
+        report = _remove_research_execution_section(report)
+        report = _remove_cffex_evidence_section(report)
+        report = _remove_market_polarization_evidence_section(report)
+        llm_wiki_context = {}
+        candidate_decision_evidence = {}
+        decision_robustness_version_health = {}
+        research_execution_evidence = {}
+        market_polarization_evidence = {}
+        cffex_index_futures_position_evidence_artifact = {}
+        if isinstance(data, dict):
+            for key in (
+                "candidate_decision_evidence",
+                "decision_robustness_version_health",
+                "research_execution_evidence",
+                "market_polarization_evidence",
+                "cffex_index_futures_position_evidence",
+            ):
+                data.pop(key, None)
+            if isinstance(data.get("knowledge"), dict):
+                data["knowledge"].pop("llm_wiki", None)
     _attach_topic_lifecycle_snapshot(data)
     knowledge_note_lines = build_knowledge_update_note(data if isinstance(data, dict) else {})
     report = _append_report_note_once(report, knowledge_note_lines, "## 知识复利提示")
@@ -11170,9 +14319,31 @@ def render_markdown_report_runtime(
     knowledge_hit_lines = build_knowledge_hits_note(llm_wiki_context)
     report = _append_report_note_once(report, knowledge_hit_lines, "## 经验库命中")
 
+    _record_report_runtime_timing(
+        runtime_timing_rows,
+        "完整版/运行时/知识证据收尾",
+        runtime_timing_started_at,
+    )
+
     return {
         "report": report,
-        "artifacts": {"llm_wiki": llm_wiki_context},
+        "artifacts": {
+            "llm_wiki": llm_wiki_context,
+            "candidate_decision_evidence": candidate_decision_evidence,
+            "candidate_decision_evidence_review": candidate_decision_evidence_review,
+            "decision_robustness_version_health": decision_robustness_version_health,
+            "decision_robustness_version_health_review": (
+                decision_robustness_version_health_review
+            ),
+            "research_execution_evidence": research_execution_evidence,
+            "research_execution_evidence_review": research_execution_review,
+            "market_polarization_evidence": market_polarization_evidence,
+            "market_polarization_evidence_review": market_polarization_evidence_review,
+            "cffex_index_futures_position_evidence": cffex_index_futures_position_evidence_artifact,
+            "cffex_index_futures_position_evidence_review": cffex_index_futures_position_evidence_review,
+            "decision_product_freeze": decision_product_freeze,
+            "decision_product_freeze_review": decision_product_freeze_review,
+        },
     }
 
 
@@ -11186,9 +14357,9 @@ def _render_markdown_report_legacy_body(
     market_language_translation=None,
 ):
     """生成Markdown格式的A股日报报告
-    
+
     严格遵循SKILL.md中的9步格式要求，增强AI分析能力
-    
+
     Args:
         data: 所有数据源的结果字典
         target_date: 数据日期，格式 YYYY-MM-DD
@@ -11197,6 +14368,17 @@ def _render_markdown_report_legacy_body(
     print("\n" + "=" * 60)
     print("📄 生成A股日报报告...", flush=True)
     print("=" * 60)
+    legacy_timing_rows = globals().get("REPORT_RUNTIME_TIMING_ROWS")
+    legacy_timing_started_at = time.monotonic()
+
+    def record_legacy_timing(phase):
+        nonlocal legacy_timing_started_at
+        legacy_timing_started_at = _record_report_runtime_timing(
+            legacy_timing_rows,
+            phase,
+            legacy_timing_started_at,
+        )
+
     _clear_helper_logs()
     data['target_date'] = target_date
     data['run_mode'] = run_mode
@@ -11230,6 +14412,7 @@ def _render_markdown_report_legacy_body(
     turnover = phase_context.get('turnover', 0)
     zt_count = phase_context.get('zt_count', 0)
     dt_count = phase_context.get('dt_count', 0)
+    dt_count_available = resolve_limit_down_count(data) is not None
     indices = phase_context.get('indices', {}) or {}
     sh_change = phase_context.get('sh_change', 0)
     market_stats = phase_context.get('market_stats', {}) or {}
@@ -11420,6 +14603,7 @@ def _render_markdown_report_legacy_body(
             }
         )
     )
+    record_legacy_timing("完整版/正文/市场环境与基础证据")
     
     
     # 狙击手视角主骨架（v3.0隔日预判模式重构）
@@ -11474,6 +14658,7 @@ def _render_markdown_report_legacy_body(
                 "display_position_reason": display_position_reason,
                 "get_execution_framework_text": get_execution_framework_text,
                 "dt_count": dt_count,
+                "dt_count_available": dt_count_available,
                 "turnover": turnover,
                 "rise_fall_ratio": rise_fall_ratio,
                 "up_count": up_count,
@@ -11490,6 +14675,7 @@ def _render_markdown_report_legacy_body(
         prohibition_operation_state,
         environment_headline=environment_headline,
         has_personal_positions=has_personal_positions,
+        position_context_provided=bool(data.get("position_context_provided")),
         final_gate=final_gate,
         main_sectors=unified_main_sectors,
         exit_analysis=exit_analysis,
@@ -11501,7 +14687,7 @@ def _render_markdown_report_legacy_body(
         market_research_bundle.get("market_research_snapshot", {}) or {},
         compact=DISPLAY_MVP_MODE,
     )
-    _replace_all_placeholder_lines(
+    replace_placeholder_lines(
         report,
         "<!-- MARKET_RESEARCH_SNAPSHOT_PLACEHOLDER -->",
         front_market_research_lines,
@@ -11516,6 +14702,7 @@ def _render_markdown_report_legacy_body(
         ),
     )
     _clear_front_page_placeholders(report)
+    record_legacy_timing("完整版/正文/市场研究上下文")
 
     def _render_core_mvp_digest_runtime(*args, **kwargs):
         return _render_core_mvp_digest(
@@ -11555,21 +14742,13 @@ def _render_markdown_report_legacy_body(
 
     def _render_environment_follow_stage_body_runtime(bundle, compact=False):
         bundle = bundle or {}
-        lines = []
-        lines.extend(
-            _render_market_research_snapshot_section(
-                bundle.get("market_research_snapshot", {}) or {},
-                compact=compact,
-            )
-        )
-        lines.extend(
+        return list(
             _render_step0_follow_section(
                 bundle.get("step0_plan", {}) or {},
                 bundle.get("market_research_snapshot", {}) or {},
                 compact=compact,
             )
         )
-        return lines
 
     execution_stage_specs = build_execution_stage_specs(
         {
@@ -11604,6 +14783,11 @@ def _render_markdown_report_legacy_body(
         existing_position_summary if isinstance(existing_position_summary, dict) else {}
     )
 
+    execution_stage_timing_options = (
+        {"capture_timings": True}
+        if isinstance(legacy_timing_rows, list)
+        else {}
+    )
     execution_stage_result = run_registered_execution_stages(
         execution_stage_specs,
         stage_context={
@@ -11688,11 +14872,20 @@ def _render_markdown_report_legacy_body(
             "monthly_context": monthly_context,
         },
         stage_lookup=execution_stage_lookup,
+        **execution_stage_timing_options,
     )
     report.extend(execution_stage_result.get("lines", []))
+    legacy_timing_started_at = _record_report_runtime_timing_group(
+        legacy_timing_rows,
+        "完整版/正文/执行阶段构建",
+        legacy_timing_started_at,
+        execution_stage_result.get("stage_timing_rows", []),
+    )
     data.setdefault("module_logs", []).extend(execution_stage_result.get("module_logs", []))
 
     execution_stage_context = execution_stage_result.get("context", {}) or {}
+    if run_mode == LEDGER_MODE_REPLAY:
+        isolate_replay_named_role_fields(execution_stage_context, target_date)
     zt_pool_by_sector = execution_stage_context.get('zt_pool_by_sector', {}) or {}
     dt_pool_by_sector = execution_stage_context.get('dt_pool_by_sector', {}) or {}
     zt_pool = execution_stage_context.get('zt_pool', []) or []
@@ -11758,7 +14951,9 @@ def _render_markdown_report_legacy_body(
     decision_ledger_result = _prune_decision_ledger_result_for_current_extreme_list(
         decision_ledger_result,
         target_date=target_date,
+        data=data,
         execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
     )
     if isinstance(decision_ledger_result, dict):
         data["decision_ledger_artifacts"] = decision_ledger_result
@@ -11936,12 +15131,14 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    record_legacy_timing("完整版/正文/首次决定准备")
     _backfill_selection_workflow_quote_rows(
         target_date=target_date,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    record_legacy_timing("完整版/正文/首次候选行情回填")
     position_decision = _build_front_page_position_decision(
         position_decision=position_decision,
         selected_position_candidate=selected_position_candidate,
@@ -11970,6 +15167,10 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    formal_account_decision_input_hash = _runtime_formal_account_decision_input_hash(
+        data,
+        selection_workflow,
+    )
     final_target_resolution = _build_runtime_final_target_resolution(
         data=data,
         selected_position_candidate=selected_position_candidate,
@@ -11977,7 +15178,10 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot=market_research_snapshot,
         execution_stage_context=execution_stage_context,
     )
-    _store_runtime_final_target_resolution(
+    formal_account_decision = deepcopy(
+        final_target_resolution.get("formal_account_decision") or {}
+    )
+    final_target_resolution = _store_runtime_final_target_resolution(
         final_target_resolution,
         data=data,
         execution_stage_context=execution_stage_context,
@@ -12008,7 +15212,7 @@ def _render_markdown_report_legacy_body(
         position_decision=position_decision,
         execution_stage_context=execution_stage_context,
     )
-    _store_runtime_two_layer_decision_payload(
+    two_layer_decision_payload = _store_runtime_two_layer_decision_payload(
         two_layer_decision_payload,
         data=data,
         execution_stage_context=execution_stage_context,
@@ -12096,10 +15300,20 @@ def _render_markdown_report_legacy_body(
         decision_ledger_result = _prune_decision_ledger_result_for_current_extreme_list(
             final_decision_ledger_result,
             target_date=target_date,
+            data=data,
             execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
             final_action=final_action_for_decision_ledger,
         )
         data["decision_ledger_artifacts"] = decision_ledger_result
+        decision_ledger_tracking_lines = list(
+            (decision_ledger_result or {}).get("tracking_lines")
+            or _build_decision_ledger_tracking_lines(
+                decision_ledger_result,
+                target_date=target_date,
+                final_action=final_action_for_decision_ledger,
+            )
+        )
     rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
         execution_stage_context=execution_stage_context,
         stage_lookup=execution_stage_result.get("stage_lookup"),
@@ -12150,6 +15364,7 @@ def _render_markdown_report_legacy_body(
         "<!-- MVP_FOCUS_SUMMARY_PLACEHOLDER -->",
         execution_stage_context.get("mvp_focus_summary_lines", []),
     )
+    record_legacy_timing("完整版/正文/首次决定解析")
     tail_summary_result = run_report_tail_summary(
         {
             "inputs": {
@@ -12187,6 +15402,7 @@ def _render_markdown_report_legacy_body(
                 "market_trend": market_trend,
                 "zt_count": zt_count,
                 "dt_count": dt_count,
+                "dt_count_available": dt_count_available,
                 "market_state_snapshot": market_state_snapshot,
                 "current_mainline_history_record": current_mainline_history_record,
                 "recent_mainline_history": recent_mainline_history,
@@ -12211,6 +15427,7 @@ def _render_markdown_report_legacy_body(
         report.extend(tail_summary_value.get("lines", []))
     data.setdefault("module_logs", []).extend(tail_summary_value.get("module_logs", []))
     abnormal_probe_parts = tail_summary_exports.get("abnormal_probe_parts", [])
+    record_legacy_timing("完整版/正文/首次首屏摘要")
 
     strategy_tail_result = run_strategy_performance_tail(
         {
@@ -12276,6 +15493,7 @@ def _render_markdown_report_legacy_body(
     data.setdefault("module_logs", []).extend(strategy_tail_value.get("module_logs", []))
     if decision_ledger_tracking_lines:
         report.extend(decision_ledger_tracking_lines)
+    record_legacy_timing("完整版/正文/策略跟踪")
 
     # 【已删除v2.3.34】十五、隔日操作计划（功能与狙击手视角重复，用户要求移除）
     
@@ -12354,6 +15572,7 @@ def _render_markdown_report_legacy_body(
     )
     report.extend(data["execution_appendix_lines"])
     data.setdefault("module_logs", []).extend(execution_appendix_value.get("module_logs", []))
+    record_legacy_timing("完整版/正文/附录准备")
 
     selected_position_candidate = _resolve_front_page_target_candidate(
         data=data,
@@ -12385,12 +15604,14 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    record_legacy_timing("完整版/正文/最终决定准备")
     _backfill_selection_workflow_quote_rows(
         target_date=target_date,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    record_legacy_timing("完整版/正文/最终候选行情回填")
     position_decision = _build_front_page_position_decision(
         position_decision=position_decision,
         selected_position_candidate=selected_position_candidate,
@@ -12419,14 +15640,22 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    if formal_account_decision_input_hash != _runtime_formal_account_decision_input_hash(
+        data,
+        selection_workflow,
+    ):
+        raise RuntimeError(
+            "同一次日报构建中的正式决定输入发生变化，停止生成"
+        )
     final_target_resolution = _build_runtime_final_target_resolution(
         data=data,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         market_research_snapshot=market_research_snapshot,
         execution_stage_context=execution_stage_context,
+        formal_account_decision=formal_account_decision,
     )
-    _store_runtime_final_target_resolution(
+    final_target_resolution = _store_runtime_final_target_resolution(
         final_target_resolution,
         data=data,
         execution_stage_context=execution_stage_context,
@@ -12460,7 +15689,7 @@ def _render_markdown_report_legacy_body(
         position_decision=position_decision,
         execution_stage_context=execution_stage_context,
     )
-    _store_runtime_two_layer_decision_payload(
+    two_layer_decision_payload = _store_runtime_two_layer_decision_payload(
         two_layer_decision_payload,
         data=data,
         execution_stage_context=execution_stage_context,
@@ -12593,6 +15822,7 @@ def _render_markdown_report_legacy_body(
         data["market_research_snapshot"] = market_research_snapshot
         _attach_market_structure_judgement(data)
         market_research_snapshot = data.get("market_research_snapshot") or market_research_snapshot
+    record_legacy_timing("完整版/正文/最终决定解析")
 
     front_page_market_research_snapshot = {
         **(market_research_snapshot or {}),
@@ -12629,6 +15859,8 @@ def _render_markdown_report_legacy_body(
         extreme_conviction_list=extreme_conviction_list,
         final_target_resolution=final_target_resolution,
         final_gate=front_page_final_gate,
+        snapshot_data=data,
+        root_dir=globals().get("decision_ledger_root_dir") or str(Path(__file__).resolve().parents[2]),
     )
     front_page_lines = _insert_daily_judgment_front_panel(front_page_lines, daily_judgment_front_panel_lines)
     final_target_solution_lines = _runtime_selected_target_solution_lines(
@@ -12648,7 +15880,10 @@ def _render_markdown_report_legacy_body(
         front_page_lines,
         sector_capital_preflight_payload,
     )
-    front_page_lines = _insert_report_reading_map(front_page_lines)
+    front_page_lines = _insert_report_reading_map(
+        front_page_lines,
+        include_account_timeline=not DISPLAY_MVP_MODE,
+    )
     if DISPLAY_MVP_MODE:
         report = front_page_lines
     else:
@@ -12678,6 +15913,7 @@ def _render_markdown_report_legacy_body(
         if next_day_attribution_lines:
             report = report + [""] + next_day_attribution_lines
         report = report + ["", "## 八、详细附录", ""] + appendix_lines
+    record_legacy_timing("完整版/正文/首屏与详细附录组装")
 
     report = _append_decision_revision_lines_once(report, decision_ledger_result)
     report = _normalize_positive_final_action_appendix_lines(
@@ -12715,6 +15951,7 @@ def _render_markdown_report_legacy_body(
         data["execution_stage_context"] = _compact_execution_stage_context_for_persistence(
             execution_stage_context,
             effective_final_gate=front_page_final_gate,
+            canonical_data=data,
         )
     final_action_print_text = sanitize_user_visible_text(front_page_final_gate.get("final_action", "未知"))
     final_action_print_text = _normalize_full_or_empty_account_visible_lines(
@@ -12735,6 +15972,7 @@ def _render_markdown_report_legacy_body(
         report,
         postgres_only=bool((data or {}).get("postgres_only") or globals().get("decision_ledger_postgres_only", False)),
     )
+    record_legacy_timing("完整版/正文/清理与收尾")
     return "\n".join(report)
 
 

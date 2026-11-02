@@ -594,9 +594,13 @@ def _evidence_families(profile):
 
 
 def _profile_matches_sector(profile, sector_profile):
+    explicit_sector = _clean(profile.get("sector"))
+    if explicit_sector:
+        return _terms_match_aliases(
+            {explicit_sector},
+            sector_profile.get("aliases") or [],
+        )
     terms = set(profile.get("terms") or set())
-    if profile.get("sector"):
-        terms.add(profile.get("sector"))
     return _terms_match_aliases(terms, sector_profile.get("aliases") or [])
 
 

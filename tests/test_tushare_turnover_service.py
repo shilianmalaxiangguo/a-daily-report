@@ -56,6 +56,40 @@ class _FakePro:
 
 
 class TushareTurnoverServiceTest(unittest.TestCase):
+    def test_open_trade_dates_filters_closed_rows_when_provider_ignores_request_filter(self):
+        from market_data.tushare_market_activity_service import fetch_tushare_open_trade_dates
+
+        class CalendarPro:
+            def __init__(self):
+                self.calls = []
+
+            def trade_cal(self, **kwargs):
+                self.calls.append(kwargs)
+                return _FakeFrame(
+                    [
+                        {"cal_date": "20260807", "is_open": 1},
+                        {"cal_date": "20260808", "is_open": 0},
+                        {"cal_date": "20260809", "is_open": "0"},
+                        {"cal_date": "20260810", "is_open": "1"},
+                    ]
+                )
+
+        pro = CalendarPro()
+        result = fetch_tushare_open_trade_dates("2026-08-07", "2026-08-10", pro=pro)
+
+        self.assertEqual(result, ["2026-08-07", "2026-08-10"])
+        self.assertEqual(
+            pro.calls,
+            [
+                {
+                    "exchange": "SSE",
+                    "start_date": "20260807",
+                    "end_date": "20260810",
+                    "is_open": "1",
+                }
+            ],
+        )
+
     def test_market_index_amount_uses_quicktiny_only_for_missing_target_date(self):
         from market_data.tushare_turnover_service import fetch_market_index_amount_rows
 
@@ -539,6 +573,34 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         self.assertIn("list_date", pro.calls[0]["fields"])
         self.assertEqual(result["000001"]["list_date"], "19910403")
         self.assertEqual(result["000001.SZ"]["list_date"], "19910403")
+
+    def test_fetch_stock_basic_map_normalizes_missing_text_and_placeholder_list_date(self):
+        from market_data.tushare_turnover_service import fetch_stock_basic_map
+
+        class BasicPro:
+            def stock_basic(self, **_kwargs):
+                return _FakeFrame(
+                    [
+                        {
+                            "ts_code": "301677.SZ",
+                            "name": "C欣兴",
+                            "industry": float("nan"),
+                            "list_date": "19700101",
+                        },
+                        {
+                            "ts_code": "000001.SZ",
+                            "name": "<NA>",
+                            "industry": "NaT",
+                            "list_date": "nan",
+                        },
+                    ]
+                )
+
+        result = fetch_stock_basic_map(pro=BasicPro())
+
+        self.assertEqual(result["301677"]["industry"], "")
+        self.assertEqual(result["301677"]["list_date"], "")
+        self.assertNotIn("000001", result)
 
     def test_fetch_stock_factor_pro_rows_uses_supported_page_size(self):
         from market_data.tushare_turnover_service import fetch_stock_factor_pro_rows

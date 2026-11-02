@@ -21,17 +21,16 @@ def _append_block(sections, key, lines):
         sections[key] = block
 
 
-def build_legacy_sections(data, target_date):
-    try:
-        import daily_report_entry_demo as legacy_demo
-    except (ImportError, ModuleNotFoundError):
-        import daily_report_render as legacy_render
+def build_legacy_sections(report_text, target_date=None):
+    """Split an already-produced historical report without regenerating it.
 
-        report = legacy_render.generate_markdown_report(data, target_date)
-    else:
-        report = legacy_demo.generate_markdown_report(data, target_date)
-
-    report = report or ""
+    The former implementation imported the current entry and rebuilt the
+    retired account report as a second production path.  Historical callers
+    must provide text explicitly; the current entry never invokes this bridge.
+    """
+    if isinstance(report_text, dict):
+        raise RuntimeError('旧完整报告分段桥不再生成日报；请传入已有历史文本')
+    report = str(report_text or '')
     if not report:
         return {}
 

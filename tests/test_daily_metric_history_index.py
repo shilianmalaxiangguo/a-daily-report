@@ -119,6 +119,25 @@ def _memory_fact_store_factory(service=None):
 
 
 class DailyMetricHistoryIndexTest(unittest.TestCase):
+    def test_top_level_field_decoder_starts_after_matched_field_colon(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        text = (
+            '    "total_turnover": 20886.98,\n'
+            '    "market_stats": {\n'
+            '      "up_count": 2789,\n'
+            '      "down_count": 2410\n'
+            '    },\n'
+        )
+
+        turnover, turnover_found = index._decode_top_level_data_field_from_text(text, "total_turnover")
+        market_stats, market_stats_found = index._decode_top_level_data_field_from_text(text, "market_stats")
+
+        self.assertTrue(turnover_found)
+        self.assertEqual(turnover, 20886.98)
+        self.assertTrue(market_stats_found)
+        self.assertEqual(market_stats, {"up_count": 2789, "down_count": 2410})
+
     def test_public_compact_metric_history_loader_forwards_to_compact_reader(self):
         from domains.market_state import daily_metric_history_index as index
 
@@ -142,6 +161,68 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         self.assertTrue(required_keys.issubset(set(index._COMPACT_METRIC_HISTORY_KEYS)))
+
+    def test_large_compact_field_is_skipped_without_hiding_later_fields(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshot_path = Path(temp_dir) / "snapshot.json"
+            snapshot_path.write_text(
+                """{
+  "data": {
+    "mainline_turnover_summary": {
+      "oversized_rows": [
+        "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+      ]
+    },
+    "current_mainline_history_record": {
+      "date": "2026-07-27",
+      "primary_mainline": "电力"
+    },
+    "total_turnover": 20886.98
+  }
+}
+""",
+                encoding="utf-8",
+            )
+
+            fields = index._extract_top_level_data_fields_from_file(
+                snapshot_path,
+                {
+                    "mainline_turnover_summary",
+                    "current_mainline_history_record",
+                    "total_turnover",
+                },
+                max_value_chars=96,
+            )
+
+        self.assertNotIn("mainline_turnover_summary", fields)
+        self.assertEqual(
+            fields["current_mainline_history_record"],
+            {"date": "2026-07-27", "primary_mainline": "电力"},
+        )
+        self.assertEqual(fields["total_turnover"], 20886.98)
+
+    def test_oversized_snapshot_does_not_scan_unbounded_middle(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            snapshot_path = Path(temp_dir) / "snapshot.json"
+            snapshot_path.write_text(
+                '{\n  "data": {\n    "total_turnover": 20886.98\n  }\n}\n',
+                encoding="utf-8",
+            )
+            oversized = index._MAX_COMPACT_METRIC_FULL_SCAN_BYTES + 1
+            with patch.object(Path, "stat") as stat_mock, patch.object(
+                index,
+                "_extract_top_level_data_fields_from_file",
+                side_effect=AssertionError("oversized snapshot must not scan the middle"),
+            ):
+                stat_mock.return_value.st_size = oversized
+                payload, perspective = index._load_compact_snapshot_file(snapshot_path)
+
+        self.assertEqual(payload, {"total_turnover": 20886.98})
+        self.assertEqual(perspective, "")
 
     def test_replay_snapshot_loader_blocks_postgres_only_json_read(self):
         from domains.market_state import daily_metric_history_index as index
