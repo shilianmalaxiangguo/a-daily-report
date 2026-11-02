@@ -1,9 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "日报入口修改的最小实现与验证要求"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "失败与成功运行摘要契约"}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "路径选择和运行信息记录要求"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PostgreSQL 目标日期读取与数据边界"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "融资与 ETF 日期契约跨生产、持久化和生成检查的传播清单"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/current-runtime-evidence.md", "reason": "当前选路与旧失败摘要根因证据"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/1730-asof-date-contract.md", "reason": "17:30 运行时融资与 ETF 目标日期契约及复现证据"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/recurring-asof-date-break-loop.md", "reason": "融资与 ETF 日期问题的重复根因和防复发要求"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/20260728-runtime-performance.md", "reason": "2026-07-28 会话耗时、完整快照解码与紧凑读取基准"}

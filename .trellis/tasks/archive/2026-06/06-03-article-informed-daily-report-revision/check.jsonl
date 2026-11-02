@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Check final report behavior against decision loop and replay/audit expectations"}
-{"file": "references/report-contract.md", "reason": "Check 0/50/100 participation, planned participation, and risk-reward requirements"}
-{"file": "wiki/交易思想/日报术语契约.md", "reason": "Check user-facing wording constraints"}
-{"file": "wiki/交易思想/扣分系统与动作分层.md", "reason": "Check old-position/new-entry separation and buy-point cost handling"}
-{"file": "wiki/交易思想/极度看好参与时机.md", "reason": "Check MA execution anchor and risk-reward requirements"}
-{"file": "wiki/交易思想/价格行为与能量框架.md", "reason": "Check article-derived emotion and oversold-rebound doctrine is applied as decision rules"}
-{"file": "wiki/板块补充/板块中枢与主线延续.md", "reason": "Check line representative and tail-stage follower risk doctrine"}
-{"file": ".trellis/tasks/06-03-article-informed-daily-report-revision/info.md", "reason": "Check implementation matches task-local design and verification plan"}

@@ -1,4 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"后端研究脚本与测试规范入口"}
-{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"0/1x/2x、T+1/T+2和未来事实边界"}
-{"file":".trellis/tasks/07-21-b1-b2-auction-backtest/research/source-and-sample-audit.md","reason":"历史样本、来源覆盖与缺失事实"}
-{"file":".trellis/tasks/07-21-b1-b2-auction-backtest/research/execution-protocol.md","reason":"看收益前冻结的执行方式、触发、退出和费用口径"}

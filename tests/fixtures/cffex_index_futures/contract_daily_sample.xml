@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<dailydatas>
-  <dailydata><instrumentid>IO2608-C-4600</instrumentid><tradingday>20260819</tradingday><closeprice>100</closeprice><preopeninterest>10</preopeninterest><openinterest>11</openinterest><presettlementprice>99</presettlementprice><settlementprice>101</settlementprice><volume>3</volume><productid>IO</productid></dailydata>
-  <dailydata><instrumentid>IF2608</instrumentid><tradingday>20260819</tradingday><openprice>4660.8</openprice><highestprice>4661.6</highestprice><lowestprice>4565</lowestprice><closeprice>4587.8</closeprice><preopeninterest>27638</preopeninterest><openinterest>26606</openinterest><presettlementprice>4701.2</presettlementprice><settlementpriceif>4576.6</settlementpriceif><settlementprice>4576.6</settlementprice><volume>24035</volume><turnover>33224519580</turnover><productid>IF</productid><delta></delta><expiredate></expiredate></dailydata>
-</dailydatas>

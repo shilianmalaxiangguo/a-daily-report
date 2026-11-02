@@ -1,0 +1,6 @@
+# Python 3.14; versions used for this cleanup's verification.
+numpy==2.4.4
+beautifulsoup4==4.14.3
+pandas==3.0.2
+requests==2.33.1
+tushare==1.4.29

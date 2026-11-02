@@ -1,0 +1,74 @@
+{
+ "own|2024": {
+  "days": 204,
+  "mean_ic": -0.07,
+  "t_overlap_adjusted": -3.0,
+  "positive_share": 0.324
+ },
+ "own|2025": {
+  "days": 243,
+  "mean_ic": -0.0591,
+  "t_overlap_adjusted": -3.69,
+  "positive_share": 0.296
+ },
+ "own|2026": {
+  "days": 192,
+  "mean_ic": -0.0311,
+  "t_overlap_adjusted": -1.19,
+  "positive_share": 0.432
+ },
+ "own|all": {
+  "days": 639,
+  "mean_ic": -0.0541,
+  "t_overlap_adjusted": -4.34,
+  "positive_share": 0.346
+ },
+ "t_alpha|2024": {
+  "days": 204,
+  "mean_ic": -0.0568,
+  "t_overlap_adjusted": -2.54,
+  "positive_share": 0.373
+ },
+ "t_alpha|2025": {
+  "days": 243,
+  "mean_ic": -0.0536,
+  "t_overlap_adjusted": -3.22,
+  "positive_share": 0.305
+ },
+ "t_alpha|2026": {
+  "days": 192,
+  "mean_ic": -0.0384,
+  "t_overlap_adjusted": -1.33,
+  "positive_share": 0.453
+ },
+ "t_alpha|all": {
+  "days": 639,
+  "mean_ic": -0.0501,
+  "t_overlap_adjusted": -3.88,
+  "positive_share": 0.371
+ },
+ "own5|2024": {
+  "days": 204,
+  "mean_ic": -0.0419,
+  "t_overlap_adjusted": -1.76,
+  "positive_share": 0.407
+ },
+ "own5|2025": {
+  "days": 243,
+  "mean_ic": -0.0413,
+  "t_overlap_adjusted": -2.72,
+  "positive_share": 0.35
+ },
+ "own5|2026": {
+  "days": 192,
+  "mean_ic": 0.0074,
+  "t_overlap_adjusted": 0.32,
+  "positive_share": 0.531
+ },
+ "own5|all": {
+  "days": 639,
+  "mean_ic": -0.0268,
+  "t_overlap_adjusted": -2.25,
+  "positive_share": 0.423
+ }
+}

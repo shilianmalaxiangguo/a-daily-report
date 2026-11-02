@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Verify statistics include coverage and do not create unsupported actions."}
-{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Verify statistics are not claiming more coverage than available."}
-{"file": "references/report-contract.md", "reason": "Verify statistics rendering is report-contract compliant."}
-{"file": "wiki/交易思想/日报术语契约.md", "reason": "Verify user-visible wording avoids banned engineering terms."}

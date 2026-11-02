@@ -9,10 +9,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from bs4 import BeautifulSoup
-from report.sector_reading_history import evidence_hash
+from report.fact_utils import evidence_hash
 from report.small_cap_rotation import (ACCOUNT_FEE, ANCHOR, BACKUPS, NAMES, SELL_FEE, account_orders, build_plan, day_label,
                                        growth_records, held_path, render_plan, rotation_curve, validate_plan)
-from report.strategy_backtest import history_from_artifact
+from report.small_cap_history import history_from_artifact
 from tests.test_market_alpha_beta import NEW, ST, facts, scenario, sessions
 
 COLD = [f'{601000 + i}.SH' for i in range(10)]
@@ -231,7 +231,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(orders[0]['code'], 'C')
 
     def test_period_check_tells_whether_the_pool_still_beats_small_caps(self):
-        from report.strategy_backtest import plan_periods
+        from research.alpha_beta.strategy_backtest import plan_periods
         days = calendar_through((date.fromisoformat(ANCHOR) + timedelta(days=129)).isoformat())
         steps = np.arange(len(days))
         curves = {'small_cap_plan': 1.002 ** steps, 'small_cap_plan_hold': 1.0015 ** steps, 'small_cap_pool': 1.003 ** steps,
@@ -257,22 +257,18 @@ class PlanTest(unittest.TestCase):
         self.assertIn('风格在切换', section.get_text())
 
     def test_full_page_leads_with_the_plan(self):
-        from report.sector_daily_report import render_sector_daily
-        from tests.test_sector_daily_report import DATE, SOURCE, snapshot
-        days, value = world(DATE)
-        plan, reason = build_plan(value, DATE, sessions=calendar_through(DATE), records=growth_records(fina(DATE)), chinext={})
+        from report.small_cap_report import render
+        day = end_with(5)
+        _, value = world(day)
+        plan, reason = build_plan(value, day, sessions=calendar_through(day), records=growth_records(fina(day)), chinext={})
         self.assertIsNone(reason)
-        data = snapshot()
-        data['data']['reading_market_returns'] = value
-        data['data']['reading_small_cap_plan'] = plan
-        soup = BeautifulSoup(render_sector_daily(SOURCE, DATE, snapshot=data), 'html.parser')
+        data = {'reading_market_returns': value, 'reading_small_cap_plan': plan}
+        soup = BeautifulSoup(render(data, day, source='合成测试'), 'html.parser')
         self.assertIn('执行计划：小盘轮换', soup.select_one('#daily-plan h2').get_text())
-        rule = soup.select_one('#daily-plan').get_text()
-        self.assertIn('收盘比买价高10%', rule)
-        self.assertNotIn('高开5%以上', rule)
+        self.assertIn('收盘比买价高10%', soup.select_one('#daily-plan').get_text())
+        self.assertNotIn('高开5%以上', soup.get_text())
         self.assertIsNone(soup.select_one('#daily-decision'))
-        self.assertIsNotNone(soup.select_one('#daily-plan'))
-        self.assertIn('#daily-plan', [a['href'] for a in soup.select('.daily-nav-links a')])
+        self.assertIsNotNone(soup.select_one('#small-cap-plan'))
 
     def test_take_profit_sells_at_the_next_open_and_waits_past_a_limit_down(self):
         def history(opens, closes):

@@ -1,0 +1,4008 @@
+{
+ "inputs_sha256": "85dcc793dbfda5b84885cd97ece1408adcfc76e92fca2541c5f7c362b750ca07",
+ "sessions": 682,
+ "first": "2024-01-02",
+ "last": "2026-10-29",
+ "gap": {
+  "h0|低开超过2%|全部|全部": {
+   "events": 123819,
+   "abs": {
+    "dates": 681,
+    "mean_pct": 0.752,
+    "nw_t": 8.66
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": 0.659,
+    "nw_t": 10.87
+   },
+   "median_pct": 0.219,
+   "up_share": 0.514
+  },
+  "h0|低开超过2%|全部|2024": {
+   "events": 42222,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.869,
+    "nw_t": 4.94
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.774,
+    "nw_t": 6.32
+   },
+   "median_pct": 0.189,
+   "up_share": 0.509
+  },
+  "h0|低开超过2%|全部|2025": {
+   "events": 38900,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.74,
+    "nw_t": 5.87
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.587,
+    "nw_t": 6.44
+   },
+   "median_pct": 0.403,
+   "up_share": 0.53
+  },
+  "h0|低开超过2%|全部|2026": {
+   "events": 42697,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.625,
+    "nw_t": 4.47
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.608,
+    "nw_t": 6.5
+   },
+   "median_pct": 0.077,
+   "up_share": 0.505
+  },
+  "h0|低开超过2%|前5日已涨10%以上|全部": {
+   "events": 37363,
+   "abs": {
+    "dates": 676,
+    "mean_pct": 1.022,
+    "nw_t": 11.04
+   },
+   "excess": {
+    "dates": 676,
+    "mean_pct": 0.922,
+    "nw_t": 12.92
+   },
+   "median_pct": -0.123,
+   "up_share": 0.471
+  },
+  "h0|低开超过2%|前5日已涨10%以上|2024": {
+   "events": 15916,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 1.082,
+    "nw_t": 5.92
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": 0.968,
+    "nw_t": 7.36
+   },
+   "median_pct": -0.96,
+   "up_share": 0.418
+  },
+  "h0|低开超过2%|前5日已涨10%以上|2025": {
+   "events": 11133,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 1.002,
+    "nw_t": 7.06
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.849,
+    "nw_t": 7.19
+   },
+   "median_pct": 0.143,
+   "up_share": 0.509
+  },
+  "h0|低开超过2%|前5日已涨10%以上|2026": {
+   "events": 10314,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.974,
+    "nw_t": 6.49
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.957,
+    "nw_t": 8.02
+   },
+   "median_pct": 0.199,
+   "up_share": 0.512
+  },
+  "h0|低开超过2%|前5日涨幅不到10%|全部": {
+   "events": 85644,
+   "abs": {
+    "dates": 675,
+    "mean_pct": 0.607,
+    "nw_t": 7.09
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": 0.515,
+    "nw_t": 8.54
+   },
+   "median_pct": 0.405,
+   "up_share": 0.534
+  },
+  "h0|低开超过2%|前5日涨幅不到10%|2024": {
+   "events": 25948,
+   "abs": {
+    "dates": 235,
+    "mean_pct": 0.803,
+    "nw_t": 4.78
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": 0.711,
+    "nw_t": 5.92
+   },
+   "median_pct": 0.738,
+   "up_share": 0.567
+  },
+  "h0|低开超过2%|前5日涨幅不到10%|2025": {
+   "events": 27517,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.566,
+    "nw_t": 4.56
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.413,
+    "nw_t": 4.69
+   },
+   "median_pct": 0.519,
+   "up_share": 0.54
+  },
+  "h0|低开超过2%|前5日涨幅不到10%|2026": {
+   "events": 32179,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.423,
+    "nw_t": 2.88
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.406,
+    "nw_t": 4.16
+   },
+   "median_pct": 0.058,
+   "up_share": 0.503
+  },
+  "h0|低开0至2%|全部|全部": {
+   "events": 1444652,
+   "abs": {
+    "dates": 681,
+    "mean_pct": 0.232,
+    "nw_t": 3.94
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": 0.139,
+    "nw_t": 4.65
+   },
+   "median_pct": 0.083,
+   "up_share": 0.507
+  },
+  "h0|低开0至2%|全部|2024": {
+   "events": 526674,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.246,
+    "nw_t": 1.91
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.15,
+    "nw_t": 2.29
+   },
+   "median_pct": 0.04,
+   "up_share": 0.501
+  },
+  "h0|低开0至2%|全部|2025": {
+   "events": 495704,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.301,
+    "nw_t": 4.08
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.148,
+    "nw_t": 4.59
+   },
+   "median_pct": 0.167,
+   "up_share": 0.527
+  },
+  "h0|低开0至2%|全部|2026": {
+   "events": 422274,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.131,
+    "nw_t": 1.46
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.114,
+    "nw_t": 2.2
+   },
+   "median_pct": 0.0,
+   "up_share": 0.491
+  },
+  "h0|低开0至2%|前5日已涨10%以上|全部": {
+   "events": 90779,
+   "abs": {
+    "dates": 674,
+    "mean_pct": 0.393,
+    "nw_t": 5.65
+   },
+   "excess": {
+    "dates": 674,
+    "mean_pct": 0.286,
+    "nw_t": 6.35
+   },
+   "median_pct": 0.0,
+   "up_share": 0.494
+  },
+  "h0|低开0至2%|前5日已涨10%以上|2024": {
+   "events": 35137,
+   "abs": {
+    "dates": 234,
+    "mean_pct": 0.495,
+    "nw_t": 3.46
+   },
+   "excess": {
+    "dates": 234,
+    "mean_pct": 0.361,
+    "nw_t": 4.06
+   },
+   "median_pct": 0.277,
+   "up_share": 0.523
+  },
+  "h0|低开0至2%|前5日已涨10%以上|2025": {
+   "events": 27934,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.409,
+    "nw_t": 4.26
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.256,
+    "nw_t": 3.69
+   },
+   "median_pct": -0.27,
+   "up_share": 0.462
+  },
+  "h0|低开0至2%|前5日已涨10%以上|2026": {
+   "events": 27708,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.251,
+    "nw_t": 2.19
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.234,
+    "nw_t": 3.24
+   },
+   "median_pct": -0.071,
+   "up_share": 0.489
+  },
+  "h0|低开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1341604,
+   "abs": {
+    "dates": 676,
+    "mean_pct": 0.239,
+    "nw_t": 4.11
+   },
+   "excess": {
+    "dates": 676,
+    "mean_pct": 0.139,
+    "nw_t": 4.53
+   },
+   "median_pct": 0.099,
+   "up_share": 0.509
+  },
+  "h0|低开0至2%|前5日涨幅不到10%|2024": {
+   "events": 479839,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.274,
+    "nw_t": 2.15
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": 0.159,
+    "nw_t": 2.36
+   },
+   "median_pct": 0.071,
+   "up_share": 0.504
+  },
+  "h0|低开0至2%|前5日涨幅不到10%|2025": {
+   "events": 467393,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.299,
+    "nw_t": 4.05
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.146,
+    "nw_t": 4.47
+   },
+   "median_pct": 0.18,
+   "up_share": 0.531
+  },
+  "h0|低开0至2%|前5日涨幅不到10%|2026": {
+   "events": 394372,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.124,
+    "nw_t": 1.38
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": 0.107,
+    "nw_t": 1.97
+   },
+   "median_pct": 0.0,
+   "up_share": 0.491
+  },
+  "h0|高开0至2%|全部|全部": {
+   "events": 1535144,
+   "abs": {
+    "dates": 681,
+    "mean_pct": -0.007,
+    "nw_t": -0.13
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": -0.1,
+    "nw_t": -3.21
+   },
+   "median_pct": 0.0,
+   "up_share": 0.477
+  },
+  "h0|高开0至2%|全部|2024": {
+   "events": 531633,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.06,
+    "nw_t": -0.48
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.156,
+    "nw_t": -2.32
+   },
+   "median_pct": 0.0,
+   "up_share": 0.48
+  },
+  "h0|高开0至2%|全部|2025": {
+   "events": 580427,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.137,
+    "nw_t": 2.02
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.016,
+    "nw_t": -0.46
+   },
+   "median_pct": 0.0,
+   "up_share": 0.482
+  },
+  "h0|高开0至2%|全部|2026": {
+   "events": 423084,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.12,
+    "nw_t": -1.34
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.137,
+    "nw_t": -2.53
+   },
+   "median_pct": -0.127,
+   "up_share": 0.466
+  },
+  "h0|高开0至2%|前5日已涨10%以上|全部": {
+   "events": 74147,
+   "abs": {
+    "dates": 675,
+    "mean_pct": 0.123,
+    "nw_t": 1.79
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": 0.02,
+    "nw_t": 0.41
+   },
+   "median_pct": -0.155,
+   "up_share": 0.479
+  },
+  "h0|高开0至2%|前5日已涨10%以上|2024": {
+   "events": 29021,
+   "abs": {
+    "dates": 235,
+    "mean_pct": 0.127,
+    "nw_t": 0.89
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": 0.003,
+    "nw_t": 0.03
+   },
+   "median_pct": 0.235,
+   "up_share": 0.52
+  },
+  "h0|高开0至2%|前5日已涨10%以上|2025": {
+   "events": 22251,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.211,
+    "nw_t": 2.26
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.058,
+    "nw_t": 0.89
+   },
+   "median_pct": -0.495,
+   "up_share": 0.437
+  },
+  "h0|高开0至2%|前5日已涨10%以上|2026": {
+   "events": 22875,
+   "abs": {
+    "dates": 197,
+    "mean_pct": 0.01,
+    "nw_t": 0.09
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.006,
+    "nw_t": -0.09
+   },
+   "median_pct": -0.279,
+   "up_share": 0.466
+  },
+  "h0|高开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1448889,
+   "abs": {
+    "dates": 676,
+    "mean_pct": -0.004,
+    "nw_t": -0.07
+   },
+   "excess": {
+    "dates": 676,
+    "mean_pct": -0.104,
+    "nw_t": -3.25
+   },
+   "median_pct": 0.0,
+   "up_share": 0.478
+  },
+  "h0|高开0至2%|前5日涨幅不到10%|2024": {
+   "events": 490948,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -0.04,
+    "nw_t": -0.32
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.154,
+    "nw_t": -2.29
+   },
+   "median_pct": 0.0,
+   "up_share": 0.482
+  },
+  "h0|高开0至2%|前5日涨幅不到10%|2025": {
+   "events": 557872,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.136,
+    "nw_t": 2.01
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.017,
+    "nw_t": -0.46
+   },
+   "median_pct": 0.0,
+   "up_share": 0.483
+  },
+  "h0|高开0至2%|前5日涨幅不到10%|2026": {
+   "events": 400069,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.134,
+    "nw_t": -1.49
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.15,
+    "nw_t": -2.62
+   },
+   "median_pct": -0.122,
+   "up_share": 0.466
+  },
+  "h0|高开2%至3%|全部|全部": {
+   "events": 56548,
+   "abs": {
+    "dates": 681,
+    "mean_pct": -0.152,
+    "nw_t": -2.04
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": -0.246,
+    "nw_t": -4.89
+   },
+   "median_pct": -0.196,
+   "up_share": 0.476
+  },
+  "h0|高开2%至3%|全部|2024": {
+   "events": 19186,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.327,
+    "nw_t": -2.26
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.423,
+    "nw_t": -4.32
+   },
+   "median_pct": -0.216,
+   "up_share": 0.476
+  },
+  "h0|高开2%至3%|全部|2025": {
+   "events": 15698,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.144,
+    "nw_t": 1.53
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.01,
+    "nw_t": -0.14
+   },
+   "median_pct": -0.407,
+   "up_share": 0.447
+  },
+  "h0|高开2%至3%|全部|2026": {
+   "events": 21664,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.304,
+    "nw_t": -2.16
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.321,
+    "nw_t": -3.57
+   },
+   "median_pct": 0.0,
+   "up_share": 0.498
+  },
+  "h0|高开2%至3%|前5日已涨10%以上|全部": {
+   "events": 8943,
+   "abs": {
+    "dates": 653,
+    "mean_pct": 0.098,
+    "nw_t": 0.77
+   },
+   "excess": {
+    "dates": 653,
+    "mean_pct": -0.008,
+    "nw_t": -0.07
+   },
+   "median_pct": -0.184,
+   "up_share": 0.485
+  },
+  "h0|高开2%至3%|前5日已涨10%以上|2024": {
+   "events": 3838,
+   "abs": {
+    "dates": 218,
+    "mean_pct": -0.099,
+    "nw_t": -0.37
+   },
+   "excess": {
+    "dates": 218,
+    "mean_pct": -0.198,
+    "nw_t": -0.81
+   },
+   "median_pct": 0.63,
+   "up_share": 0.536
+  },
+  "h0|高开2%至3%|前5日已涨10%以上|2025": {
+   "events": 2422,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.348,
+    "nw_t": 1.83
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.167,
+    "nw_t": 0.95
+   },
+   "median_pct": -0.844,
+   "up_share": 0.434
+  },
+  "h0|高开2%至3%|前5日已涨10%以上|2026": {
+   "events": 2683,
+   "abs": {
+    "dates": 194,
+    "mean_pct": 0.009,
+    "nw_t": 0.05
+   },
+   "excess": {
+    "dates": 194,
+    "mean_pct": -0.012,
+    "nw_t": -0.07
+   },
+   "median_pct": -0.506,
+   "up_share": 0.459
+  },
+  "h0|高开2%至3%|前5日涨幅不到10%|全部": {
+   "events": 47426,
+   "abs": {
+    "dates": 675,
+    "mean_pct": -0.161,
+    "nw_t": -2.14
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": -0.269,
+    "nw_t": -5.28
+   },
+   "median_pct": -0.191,
+   "up_share": 0.475
+  },
+  "h0|高开2%至3%|前5日涨幅不到10%|2024": {
+   "events": 15227,
+   "abs": {
+    "dates": 235,
+    "mean_pct": -0.293,
+    "nw_t": -2.02
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -0.43,
+    "nw_t": -4.53
+   },
+   "median_pct": -0.324,
+   "up_share": 0.463
+  },
+  "h0|高开2%至3%|前5日涨幅不到10%|2025": {
+   "events": 13247,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.113,
+    "nw_t": 1.2
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.041,
+    "nw_t": -0.61
+   },
+   "median_pct": -0.36,
+   "up_share": 0.449
+  },
+  "h0|高开2%至3%|前5日涨幅不到10%|2026": {
+   "events": 18952,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.341,
+    "nw_t": -2.33
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.358,
+    "nw_t": -3.61
+   },
+   "median_pct": 0.052,
+   "up_share": 0.503
+  },
+  "h0|高开3%至5%|全部|全部": {
+   "events": 34903,
+   "abs": {
+    "dates": 682,
+    "mean_pct": -0.178,
+    "nw_t": -2.26
+   },
+   "excess": {
+    "dates": 682,
+    "mean_pct": -0.265,
+    "nw_t": -4.37
+   },
+   "median_pct": -0.204,
+   "up_share": 0.483
+  },
+  "h0|高开3%至5%|全部|2024": {
+   "events": 13410,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -0.449,
+    "nw_t": -2.95
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -0.527,
+    "nw_t": -4.55
+   },
+   "median_pct": 0.353,
+   "up_share": 0.516
+  },
+  "h0|高开3%至5%|全部|2025": {
+   "events": 10304,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.089,
+    "nw_t": 0.89
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.064,
+    "nw_t": -0.77
+   },
+   "median_pct": -0.62,
+   "up_share": 0.44
+  },
+  "h0|高开3%至5%|全部|2026": {
+   "events": 11189,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.175,
+    "nw_t": -1.18
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.192,
+    "nw_t": -1.76
+   },
+   "median_pct": -0.215,
+   "up_share": 0.482
+  },
+  "h0|高开3%至5%|前5日已涨10%以上|全部": {
+   "events": 9481,
+   "abs": {
+    "dates": 663,
+    "mean_pct": -0.174,
+    "nw_t": -1.29
+   },
+   "excess": {
+    "dates": 663,
+    "mean_pct": -0.266,
+    "nw_t": -2.1
+   },
+   "median_pct": 1.463,
+   "up_share": 0.562
+  },
+  "h0|高开3%至5%|前5日已涨10%以上|2024": {
+   "events": 4666,
+   "abs": {
+    "dates": 232,
+    "mean_pct": -0.748,
+    "nw_t": -2.6
+   },
+   "excess": {
+    "dates": 232,
+    "mean_pct": -0.81,
+    "nw_t": -3.02
+   },
+   "median_pct": 3.995,
+   "up_share": 0.661
+  },
+  "h0|高开3%至5%|前5日已涨10%以上|2025": {
+   "events": 2529,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.127,
+    "nw_t": 0.77
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.045,
+    "nw_t": -0.29
+   },
+   "median_pct": -0.81,
+   "up_share": 0.452
+  },
+  "h0|高开3%至5%|前5日已涨10%以上|2026": {
+   "events": 2286,
+   "abs": {
+    "dates": 190,
+    "mean_pct": 0.144,
+    "nw_t": 0.66
+   },
+   "excess": {
+    "dates": 190,
+    "mean_pct": 0.117,
+    "nw_t": 0.57
+   },
+   "median_pct": -0.344,
+   "up_share": 0.483
+  },
+  "h0|高开3%至5%|前5日涨幅不到10%|全部": {
+   "events": 25255,
+   "abs": {
+    "dates": 676,
+    "mean_pct": -0.116,
+    "nw_t": -1.46
+   },
+   "excess": {
+    "dates": 676,
+    "mean_pct": -0.218,
+    "nw_t": -3.55
+   },
+   "median_pct": -0.498,
+   "up_share": 0.453
+  },
+  "h0|高开3%至5%|前5日涨幅不到10%|2024": {
+   "events": 8628,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -0.321,
+    "nw_t": -2.18
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.441,
+    "nw_t": -3.99
+   },
+   "median_pct": -0.699,
+   "up_share": 0.44
+  },
+  "h0|高开3%至5%|前5日涨幅不到10%|2025": {
+   "events": 7750,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.151,
+    "nw_t": 1.38
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.002,
+    "nw_t": -0.02
+   },
+   "median_pct": -0.59,
+   "up_share": 0.436
+  },
+  "h0|高开3%至5%|前5日涨幅不到10%|2026": {
+   "events": 8877,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.2,
+    "nw_t": -1.31
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.216,
+    "nw_t": -1.91
+   },
+   "median_pct": -0.201,
+   "up_share": 0.482
+  },
+  "h0|高开5%以上未到涨停|全部|全部": {
+   "events": 20229,
+   "abs": {
+    "dates": 682,
+    "mean_pct": -0.892,
+    "nw_t": -9.72
+   },
+   "excess": {
+    "dates": 682,
+    "mean_pct": -0.979,
+    "nw_t": -12.02
+   },
+   "median_pct": -1.402,
+   "up_share": 0.437
+  },
+  "h0|高开5%以上未到涨停|全部|2024": {
+   "events": 9458,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -1.349,
+    "nw_t": -7.62
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -1.427,
+    "nw_t": -9.44
+   },
+   "median_pct": -2.074,
+   "up_share": 0.409
+  },
+  "h0|高开5%以上未到涨停|全部|2025": {
+   "events": 5368,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -0.653,
+    "nw_t": -5.08
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.806,
+    "nw_t": -6.7
+   },
+   "median_pct": -0.875,
+   "up_share": 0.463
+  },
+  "h0|高开5%以上未到涨停|全部|2026": {
+   "events": 5403,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -0.627,
+    "nw_t": -3.99
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -0.643,
+    "nw_t": -4.64
+   },
+   "median_pct": -0.842,
+   "up_share": 0.46
+  },
+  "h0|高开5%以上未到涨停|前5日已涨10%以上|全部": {
+   "events": 9474,
+   "abs": {
+    "dates": 664,
+    "mean_pct": -1.151,
+    "nw_t": -8.31
+   },
+   "excess": {
+    "dates": 664,
+    "mean_pct": -1.244,
+    "nw_t": -9.59
+   },
+   "median_pct": -1.734,
+   "up_share": 0.441
+  },
+  "h0|高开5%以上未到涨停|前5日已涨10%以上|2024": {
+   "events": 5790,
+   "abs": {
+    "dates": 231,
+    "mean_pct": -1.556,
+    "nw_t": -6.2
+   },
+   "excess": {
+    "dates": 231,
+    "mean_pct": -1.616,
+    "nw_t": -6.96
+   },
+   "median_pct": -2.86,
+   "up_share": 0.405
+  },
+  "h0|高开5%以上未到涨停|前5日已涨10%以上|2025": {
+   "events": 1973,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.879,
+    "nw_t": -4.21
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -1.051,
+    "nw_t": -5.27
+   },
+   "median_pct": -0.057,
+   "up_share": 0.497
+  },
+  "h0|高开5%以上未到涨停|前5日已涨10%以上|2026": {
+   "events": 1711,
+   "abs": {
+    "dates": 192,
+    "mean_pct": -1.007,
+    "nw_t": -3.91
+   },
+   "excess": {
+    "dates": 192,
+    "mean_pct": -1.04,
+    "nw_t": -4.33
+   },
+   "median_pct": 0.0,
+   "up_share": 0.5
+  },
+  "h0|高开5%以上未到涨停|前5日涨幅不到10%|全部": {
+   "events": 10558,
+   "abs": {
+    "dates": 675,
+    "mean_pct": -0.617,
+    "nw_t": -6.39
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": -0.716,
+    "nw_t": -8.25
+   },
+   "median_pct": -1.186,
+   "up_share": 0.435
+  },
+  "h0|高开5%以上未到涨停|前5日涨幅不到10%|2024": {
+   "events": 3587,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -1.023,
+    "nw_t": -5.61
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -1.142,
+    "nw_t": -7.43
+   },
+   "median_pct": -1.495,
+   "up_share": 0.416
+  },
+  "h0|高开5%以上未到涨停|前5日涨幅不到10%|2025": {
+   "events": 3320,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -0.308,
+    "nw_t": -2.11
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.462,
+    "nw_t": -3.32
+   },
+   "median_pct": -1.046,
+   "up_share": 0.448
+  },
+  "h0|高开5%以上未到涨停|前5日涨幅不到10%|2026": {
+   "events": 3651,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.51,
+    "nw_t": -3.15
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.52,
+    "nw_t": -3.51
+   },
+   "median_pct": -1.058,
+   "up_share": 0.441
+  },
+  "h0|开盘涨停|全部|全部": {
+   "events": 8572,
+   "abs": {
+    "dates": 681,
+    "mean_pct": -1.686,
+    "nw_t": -24.79
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": -1.772,
+    "nw_t": -25.77
+   },
+   "median_pct": 0.0,
+   "up_share": 0.031
+  },
+  "h0|开盘涨停|全部|2024": {
+   "events": 4882,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -1.778,
+    "nw_t": -13.69
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -1.854,
+    "nw_t": -14.37
+   },
+   "median_pct": 0.0,
+   "up_share": 0.024
+  },
+  "h0|开盘涨停|全部|2025": {
+   "events": 2212,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -1.624,
+    "nw_t": -16.31
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -1.777,
+    "nw_t": -17.61
+   },
+   "median_pct": 0.0,
+   "up_share": 0.031
+  },
+  "h0|开盘涨停|全部|2026": {
+   "events": 1478,
+   "abs": {
+    "dates": 197,
+    "mean_pct": -1.649,
+    "nw_t": -13.52
+   },
+   "excess": {
+    "dates": 197,
+    "mean_pct": -1.666,
+    "nw_t": -13.16
+   },
+   "median_pct": 0.0,
+   "up_share": 0.052
+  },
+  "h0|开盘涨停|前5日已涨10%以上|全部": {
+   "events": 5924,
+   "abs": {
+    "dates": 650,
+    "mean_pct": -1.912,
+    "nw_t": -17.39
+   },
+   "excess": {
+    "dates": 650,
+    "mean_pct": -1.998,
+    "nw_t": -18.64
+   },
+   "median_pct": 0.0,
+   "up_share": 0.029
+  },
+  "h0|开盘涨停|前5日已涨10%以上|2024": {
+   "events": 3925,
+   "abs": {
+    "dates": 227,
+    "mean_pct": -2.129,
+    "nw_t": -9.88
+   },
+   "excess": {
+    "dates": 227,
+    "mean_pct": -2.228,
+    "nw_t": -10.71
+   },
+   "median_pct": -0.553,
+   "up_share": 0.024
+  },
+  "h0|开盘涨停|前5日已涨10%以上|2025": {
+   "events": 1251,
+   "abs": {
+    "dates": 240,
+    "mean_pct": -1.8,
+    "nw_t": -11.27
+   },
+   "excess": {
+    "dates": 240,
+    "mean_pct": -1.963,
+    "nw_t": -12.83
+   },
+   "median_pct": 0.0,
+   "up_share": 0.033
+  },
+  "h0|开盘涨停|前5日已涨10%以上|2026": {
+   "events": 748,
+   "abs": {
+    "dates": 183,
+    "mean_pct": -1.79,
+    "nw_t": -9.4
+   },
+   "excess": {
+    "dates": 183,
+    "mean_pct": -1.759,
+    "nw_t": -9.22
+   },
+   "median_pct": 0.0,
+   "up_share": 0.049
+  },
+  "h0|开盘涨停|前5日涨幅不到10%|全部": {
+   "events": 2065,
+   "abs": {
+    "dates": 608,
+    "mean_pct": -1.335,
+    "nw_t": -16.13
+   },
+   "excess": {
+    "dates": 608,
+    "mean_pct": -1.399,
+    "nw_t": -15.43
+   },
+   "median_pct": 0.0,
+   "up_share": 0.041
+  },
+  "h0|开盘涨停|前5日涨幅不到10%|2024": {
+   "events": 753,
+   "abs": {
+    "dates": 212,
+    "mean_pct": -1.435,
+    "nw_t": -9.4
+   },
+   "excess": {
+    "dates": 212,
+    "mean_pct": -1.498,
+    "nw_t": -9.04
+   },
+   "median_pct": 0.0,
+   "up_share": 0.027
+  },
+  "h0|开盘涨停|前5日涨幅不到10%|2025": {
+   "events": 718,
+   "abs": {
+    "dates": 214,
+    "mean_pct": -1.173,
+    "nw_t": -9.89
+   },
+   "excess": {
+    "dates": 214,
+    "mean_pct": -1.308,
+    "nw_t": -9.59
+   },
+   "median_pct": 0.0,
+   "up_share": 0.035
+  },
+  "h0|开盘涨停|前5日涨幅不到10%|2026": {
+   "events": 594,
+   "abs": {
+    "dates": 182,
+    "mean_pct": -1.408,
+    "nw_t": -8.9
+   },
+   "excess": {
+    "dates": 182,
+    "mean_pct": -1.391,
+    "nw_t": -8.21
+   },
+   "median_pct": 0.0,
+   "up_share": 0.066
+  },
+  "h1|低开超过2%|全部|全部": {
+   "events": 123390,
+   "abs": {
+    "dates": 680,
+    "mean_pct": 0.21,
+    "nw_t": 1.29
+   },
+   "excess": {
+    "dates": 680,
+    "mean_pct": 0.072,
+    "nw_t": 0.71
+   },
+   "median_pct": -0.117,
+   "up_share": 0.489
+  },
+  "h1|低开超过2%|全部|2024": {
+   "events": 42194,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.268,
+    "nw_t": 0.77
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.104,
+    "nw_t": 0.5
+   },
+   "median_pct": -0.462,
+   "up_share": 0.469
+  },
+  "h1|低开超过2%|全部|2025": {
+   "events": 38853,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.278,
+    "nw_t": 1.32
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.008,
+    "nw_t": 0.06
+   },
+   "median_pct": 0.066,
+   "up_share": 0.502
+  },
+  "h1|低开超过2%|全部|2026": {
+   "events": 42343,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 0.054,
+    "nw_t": 0.21
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.11,
+    "nw_t": 0.66
+   },
+   "median_pct": -0.0,
+   "up_share": 0.496
+  },
+  "h1|低开超过2%|前5日已涨10%以上|全部": {
+   "events": 37277,
+   "abs": {
+    "dates": 675,
+    "mean_pct": 0.164,
+    "nw_t": 0.98
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": 0.014,
+    "nw_t": 0.12
+   },
+   "median_pct": -1.2,
+   "up_share": 0.43
+  },
+  "h1|低开超过2%|前5日已涨10%以上|2024": {
+   "events": 15910,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.084,
+    "nw_t": 0.24
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.116,
+    "nw_t": -0.54
+   },
+   "median_pct": -2.074,
+   "up_share": 0.384
+  },
+  "h1|低开超过2%|前5日已涨10%以上|2025": {
+   "events": 11122,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.223,
+    "nw_t": 0.95
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.046,
+    "nw_t": -0.25
+   },
+   "median_pct": -0.612,
+   "up_share": 0.459
+  },
+  "h1|低开超过2%|前5日已涨10%以上|2026": {
+   "events": 10245,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 0.188,
+    "nw_t": 0.7
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.244,
+    "nw_t": 1.24
+   },
+   "median_pct": -0.583,
+   "up_share": 0.468
+  },
+  "h1|低开超过2%|前5日涨幅不到10%|全部": {
+   "events": 85304,
+   "abs": {
+    "dates": 674,
+    "mean_pct": 0.258,
+    "nw_t": 1.61
+   },
+   "excess": {
+    "dates": 674,
+    "mean_pct": 0.126,
+    "nw_t": 1.21
+   },
+   "median_pct": 0.253,
+   "up_share": 0.515
+  },
+  "h1|低开超过2%|前5日涨幅不到10%|2024": {
+   "events": 25927,
+   "abs": {
+    "dates": 235,
+    "mean_pct": 0.426,
+    "nw_t": 1.26
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": 0.278,
+    "nw_t": 1.24
+   },
+   "median_pct": 0.389,
+   "up_share": 0.522
+  },
+  "h1|低开超过2%|前5日涨幅不到10%|2025": {
+   "events": 27481,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.333,
+    "nw_t": 1.62
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.064,
+    "nw_t": 0.5
+   },
+   "median_pct": 0.333,
+   "up_share": 0.521
+  },
+  "h1|低开超过2%|前5日涨幅不到10%|2026": {
+   "events": 31896,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.036,
+    "nw_t": -0.14
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.019,
+    "nw_t": 0.11
+   },
+   "median_pct": 0.09,
+   "up_share": 0.505
+  },
+  "h1|低开0至2%|全部|全部": {
+   "events": 1441495,
+   "abs": {
+    "dates": 680,
+    "mean_pct": 0.282,
+    "nw_t": 2.44
+   },
+   "excess": {
+    "dates": 680,
+    "mean_pct": 0.144,
+    "nw_t": 2.66
+   },
+   "median_pct": 0.0,
+   "up_share": 0.492
+  },
+  "h1|低开0至2%|全部|2024": {
+   "events": 526602,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.303,
+    "nw_t": 1.15
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.139,
+    "nw_t": 1.14
+   },
+   "median_pct": -0.125,
+   "up_share": 0.479
+  },
+  "h1|低开0至2%|全部|2025": {
+   "events": 495584,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.437,
+    "nw_t": 3.39
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.168,
+    "nw_t": 3.47
+   },
+   "median_pct": 0.157,
+   "up_share": 0.518
+  },
+  "h1|低开0至2%|全部|2026": {
+   "events": 419309,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 0.063,
+    "nw_t": 0.39
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.119,
+    "nw_t": 1.26
+   },
+   "median_pct": -0.136,
+   "up_share": 0.478
+  },
+  "h1|低开0至2%|前5日已涨10%以上|全部": {
+   "events": 90679,
+   "abs": {
+    "dates": 673,
+    "mean_pct": 0.176,
+    "nw_t": 1.39
+   },
+   "excess": {
+    "dates": 673,
+    "mean_pct": 0.021,
+    "nw_t": 0.31
+   },
+   "median_pct": -0.255,
+   "up_share": 0.476
+  },
+  "h1|低开0至2%|前5日已涨10%以上|2024": {
+   "events": 35130,
+   "abs": {
+    "dates": 234,
+    "mean_pct": 0.246,
+    "nw_t": 0.9
+   },
+   "excess": {
+    "dates": 234,
+    "mean_pct": 0.033,
+    "nw_t": 0.26
+   },
+   "median_pct": -0.0,
+   "up_share": 0.493
+  },
+  "h1|低开0至2%|前5日已涨10%以上|2025": {
+   "events": 27924,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.227,
+    "nw_t": 1.45
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.042,
+    "nw_t": -0.43
+   },
+   "median_pct": -0.547,
+   "up_share": 0.447
+  },
+  "h1|低开0至2%|前5日已涨10%以上|2026": {
+   "events": 27625,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 0.029,
+    "nw_t": 0.14
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.084,
+    "nw_t": 0.7
+   },
+   "median_pct": -0.184,
+   "up_share": 0.483
+  },
+  "h1|低开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1338548,
+   "abs": {
+    "dates": 675,
+    "mean_pct": 0.305,
+    "nw_t": 2.65
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": 0.154,
+    "nw_t": 2.75
+   },
+   "median_pct": 0.0,
+   "up_share": 0.495
+  },
+  "h1|低开0至2%|前5日涨幅不到10%|2024": {
+   "events": 479774,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.359,
+    "nw_t": 1.35
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": 0.158,
+    "nw_t": 1.24
+   },
+   "median_pct": -0.071,
+   "up_share": 0.483
+  },
+  "h1|低开0至2%|前5日涨幅不到10%|2025": {
+   "events": 467283,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.45,
+    "nw_t": 3.49
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.181,
+    "nw_t": 3.68
+   },
+   "median_pct": 0.181,
+   "up_share": 0.522
+  },
+  "h1|低开0至2%|前5日涨幅不到10%|2026": {
+   "events": 391491,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 0.061,
+    "nw_t": 0.37
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 0.117,
+    "nw_t": 1.16
+   },
+   "median_pct": -0.134,
+   "up_share": 0.477
+  },
+  "h1|高开0至2%|全部|全部": {
+   "events": 1533459,
+   "abs": {
+    "dates": 680,
+    "mean_pct": 0.075,
+    "nw_t": 0.64
+   },
+   "excess": {
+    "dates": 680,
+    "mean_pct": -0.063,
+    "nw_t": -1.07
+   },
+   "median_pct": -0.108,
+   "up_share": 0.476
+  },
+  "h1|高开0至2%|全部|2024": {
+   "events": 531546,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.0,
+    "nw_t": 0.0
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.164,
+    "nw_t": -1.3
+   },
+   "median_pct": -0.221,
+   "up_share": 0.466
+  },
+  "h1|高开0至2%|全部|2025": {
+   "events": 580263,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.342,
+    "nw_t": 2.75
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.073,
+    "nw_t": 1.03
+   },
+   "median_pct": 0.0,
+   "up_share": 0.5
+  },
+  "h1|高开0至2%|全部|2026": {
+   "events": 421650,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.164,
+    "nw_t": -0.96
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.108,
+    "nw_t": -1.1
+   },
+   "median_pct": -0.276,
+   "up_share": 0.456
+  },
+  "h1|高开0至2%|前5日已涨10%以上|全部": {
+   "events": 74084,
+   "abs": {
+    "dates": 674,
+    "mean_pct": -0.106,
+    "nw_t": -0.76
+   },
+   "excess": {
+    "dates": 674,
+    "mean_pct": -0.254,
+    "nw_t": -2.83
+   },
+   "median_pct": -0.451,
+   "up_share": 0.461
+  },
+  "h1|高开0至2%|前5日已涨10%以上|2024": {
+   "events": 29008,
+   "abs": {
+    "dates": 235,
+    "mean_pct": -0.336,
+    "nw_t": -1.12
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -0.527,
+    "nw_t": -2.69
+   },
+   "median_pct": -0.139,
+   "up_share": 0.488
+  },
+  "h1|高开0至2%|前5日已涨10%以上|2025": {
+   "events": 22233,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.223,
+    "nw_t": 1.37
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.046,
+    "nw_t": -0.43
+   },
+   "median_pct": -0.733,
+   "up_share": 0.433
+  },
+  "h1|高开0至2%|前5日已涨10%以上|2026": {
+   "events": 22843,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.239,
+    "nw_t": -1.02
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.184,
+    "nw_t": -1.29
+   },
+   "median_pct": -0.492,
+   "up_share": 0.456
+  },
+  "h1|高开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1447270,
+   "abs": {
+    "dates": 675,
+    "mean_pct": 0.095,
+    "nw_t": 0.82
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": -0.056,
+    "nw_t": -0.92
+   },
+   "median_pct": -0.078,
+   "up_share": 0.479
+  },
+  "h1|高开0至2%|前5日涨幅不到10%|2024": {
+   "events": 490874,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.053,
+    "nw_t": 0.2
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.147,
+    "nw_t": -1.14
+   },
+   "median_pct": -0.18,
+   "up_share": 0.47
+  },
+  "h1|高开0至2%|前5日涨幅不到10%|2025": {
+   "events": 557729,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.347,
+    "nw_t": 2.77
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.078,
+    "nw_t": 1.05
+   },
+   "median_pct": 0.045,
+   "up_share": 0.503
+  },
+  "h1|高开0至2%|前5日涨幅不到10%|2026": {
+   "events": 398667,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.167,
+    "nw_t": -0.98
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.112,
+    "nw_t": -1.08
+   },
+   "median_pct": -0.268,
+   "up_share": 0.456
+  },
+  "h1|高开2%至3%|全部|全部": {
+   "events": 56472,
+   "abs": {
+    "dates": 680,
+    "mean_pct": -0.158,
+    "nw_t": -1.05
+   },
+   "excess": {
+    "dates": 680,
+    "mean_pct": -0.297,
+    "nw_t": -3.26
+   },
+   "median_pct": -0.0,
+   "up_share": 0.494
+  },
+  "h1|高开2%至3%|全部|2024": {
+   "events": 19182,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.428,
+    "nw_t": -1.35
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.592,
+    "nw_t": -3.19
+   },
+   "median_pct": 0.108,
+   "up_share": 0.504
+  },
+  "h1|高开2%至3%|全部|2025": {
+   "events": 15688,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.282,
+    "nw_t": 1.59
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.013,
+    "nw_t": 0.1
+   },
+   "median_pct": -0.092,
+   "up_share": 0.486
+  },
+  "h1|高开2%至3%|全部|2026": {
+   "events": 21602,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.373,
+    "nw_t": -1.47
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.317,
+    "nw_t": -2.23
+   },
+   "median_pct": -0.091,
+   "up_share": 0.491
+  },
+  "h1|高开2%至3%|前5日已涨10%以上|全部": {
+   "events": 8933,
+   "abs": {
+    "dates": 652,
+    "mean_pct": -0.196,
+    "nw_t": -0.96
+   },
+   "excess": {
+    "dates": 652,
+    "mean_pct": -0.366,
+    "nw_t": -2.17
+   },
+   "median_pct": -0.575,
+   "up_share": 0.466
+  },
+  "h1|高开2%至3%|前5日已涨10%以上|2024": {
+   "events": 3835,
+   "abs": {
+    "dates": 218,
+    "mean_pct": -0.708,
+    "nw_t": -1.58
+   },
+   "excess": {
+    "dates": 218,
+    "mean_pct": -0.933,
+    "nw_t": -2.56
+   },
+   "median_pct": 0.523,
+   "up_share": 0.518
+  },
+  "h1|高开2%至3%|前5日已涨10%以上|2025": {
+   "events": 2420,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.172,
+    "nw_t": 0.63
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.132,
+    "nw_t": -0.53
+   },
+   "median_pct": -1.271,
+   "up_share": 0.406
+  },
+  "h1|高开2%至3%|前5日已涨10%以上|2026": {
+   "events": 2678,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.075,
+    "nw_t": -0.25
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.018,
+    "nw_t": -0.08
+   },
+   "median_pct": -0.908,
+   "up_share": 0.446
+  },
+  "h1|高开2%至3%|前5日涨幅不到10%|全部": {
+   "events": 47360,
+   "abs": {
+    "dates": 674,
+    "mean_pct": -0.109,
+    "nw_t": -0.72
+   },
+   "excess": {
+    "dates": 674,
+    "mean_pct": -0.267,
+    "nw_t": -2.89
+   },
+   "median_pct": 0.0,
+   "up_share": 0.5
+  },
+  "h1|高开2%至3%|前5日涨幅不到10%|2024": {
+   "events": 15226,
+   "abs": {
+    "dates": 235,
+    "mean_pct": -0.298,
+    "nw_t": -0.93
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -0.521,
+    "nw_t": -2.78
+   },
+   "median_pct": 0.079,
+   "up_share": 0.503
+  },
+  "h1|高开2%至3%|前5日涨幅不到10%|2025": {
+   "events": 13239,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.295,
+    "nw_t": 1.67
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.026,
+    "nw_t": 0.21
+   },
+   "median_pct": 0.019,
+   "up_share": 0.501
+  },
+  "h1|高开2%至3%|前5日涨幅不到10%|2026": {
+   "events": 18895,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.383,
+    "nw_t": -1.46
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.327,
+    "nw_t": -2.11
+   },
+   "median_pct": 0.0,
+   "up_share": 0.497
+  },
+  "h1|高开3%至5%|全部|全部": {
+   "events": 34842,
+   "abs": {
+    "dates": 681,
+    "mean_pct": -0.181,
+    "nw_t": -1.15
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": -0.302,
+    "nw_t": -2.89
+   },
+   "median_pct": 0.0,
+   "up_share": 0.498
+  },
+  "h1|高开3%至5%|全部|2024": {
+   "events": 13406,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -0.703,
+    "nw_t": -2.16
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -0.82,
+    "nw_t": -4.14
+   },
+   "median_pct": 0.704,
+   "up_share": 0.533
+  },
+  "h1|高开3%至5%|全部|2025": {
+   "events": 10292,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.359,
+    "nw_t": 1.87
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.09,
+    "nw_t": 0.58
+   },
+   "median_pct": -0.329,
+   "up_share": 0.474
+  },
+  "h1|高开3%至5%|全部|2026": {
+   "events": 11144,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.205,
+    "nw_t": -0.78
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.149,
+    "nw_t": -0.89
+   },
+   "median_pct": -0.343,
+   "up_share": 0.478
+  },
+  "h1|高开3%至5%|前5日已涨10%以上|全部": {
+   "events": 9467,
+   "abs": {
+    "dates": 662,
+    "mean_pct": -0.363,
+    "nw_t": -1.5
+   },
+   "excess": {
+    "dates": 662,
+    "mean_pct": -0.485,
+    "nw_t": -2.28
+   },
+   "median_pct": 1.301,
+   "up_share": 0.542
+  },
+  "h1|高开3%至5%|前5日已涨10%以上|2024": {
+   "events": 4665,
+   "abs": {
+    "dates": 232,
+    "mean_pct": -1.586,
+    "nw_t": -3.1
+   },
+   "excess": {
+    "dates": 232,
+    "mean_pct": -1.686,
+    "nw_t": -3.93
+   },
+   "median_pct": 6.042,
+   "up_share": 0.641
+  },
+  "h1|高开3%至5%|前5日已涨10%以上|2025": {
+   "events": 2522,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.3,
+    "nw_t": 1.06
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.016,
+    "nw_t": 0.06
+   },
+   "median_pct": -1.385,
+   "up_share": 0.428
+  },
+  "h1|高开3%至5%|前5日已涨10%以上|2026": {
+   "events": 2280,
+   "abs": {
+    "dates": 189,
+    "mean_pct": 0.293,
+    "nw_t": 0.76
+   },
+   "excess": {
+    "dates": 189,
+    "mean_pct": 0.351,
+    "nw_t": 1.02
+   },
+   "median_pct": -0.709,
+   "up_share": 0.465
+  },
+  "h1|高开3%至5%|前5日涨幅不到10%|全部": {
+   "events": 25209,
+   "abs": {
+    "dates": 675,
+    "mean_pct": -0.05,
+    "nw_t": -0.32
+   },
+   "excess": {
+    "dates": 675,
+    "mean_pct": -0.192,
+    "nw_t": -1.8
+   },
+   "median_pct": -0.204,
+   "up_share": 0.483
+  },
+  "h1|高开3%至5%|前5日涨幅不到10%|2024": {
+   "events": 8625,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -0.397,
+    "nw_t": -1.25
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.571,
+    "nw_t": -2.92
+   },
+   "median_pct": -0.272,
+   "up_share": 0.478
+  },
+  "h1|高开3%至5%|前5日涨幅不到10%|2025": {
+   "events": 7745,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.42,
+    "nw_t": 2.04
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.151,
+    "nw_t": 0.91
+   },
+   "median_pct": -0.107,
+   "up_share": 0.489
+  },
+  "h1|高开3%至5%|前5日涨幅不到10%|2026": {
+   "events": 8839,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.217,
+    "nw_t": -0.79
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.161,
+    "nw_t": -0.89
+   },
+   "median_pct": -0.276,
+   "up_share": 0.482
+  },
+  "h1|高开5%以上未到涨停|全部|全部": {
+   "events": 20194,
+   "abs": {
+    "dates": 681,
+    "mean_pct": -0.572,
+    "nw_t": -3.23
+   },
+   "excess": {
+    "dates": 681,
+    "mean_pct": -0.693,
+    "nw_t": -5.05
+   },
+   "median_pct": -2.003,
+   "up_share": 0.414
+  },
+  "h1|高开5%以上未到涨停|全部|2024": {
+   "events": 9452,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -1.215,
+    "nw_t": -3.31
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -1.332,
+    "nw_t": -5.06
+   },
+   "median_pct": -3.621,
+   "up_share": 0.382
+  },
+  "h1|高开5%以上未到涨停|全部|2025": {
+   "events": 5364,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -0.175,
+    "nw_t": -0.8
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.444,
+    "nw_t": -2.41
+   },
+   "median_pct": -1.007,
+   "up_share": 0.449
+  },
+  "h1|高开5%以上未到涨停|全部|2026": {
+   "events": 5378,
+   "abs": {
+    "dates": 196,
+    "mean_pct": -0.27,
+    "nw_t": -0.93
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": -0.214,
+    "nw_t": -0.9
+   },
+   "median_pct": -1.215,
+   "up_share": 0.436
+  },
+  "h1|高开5%以上未到涨停|前5日已涨10%以上|全部": {
+   "events": 9468,
+   "abs": {
+    "dates": 664,
+    "mean_pct": -0.544,
+    "nw_t": -2.13
+   },
+   "excess": {
+    "dates": 664,
+    "mean_pct": -0.652,
+    "nw_t": -2.84
+   },
+   "median_pct": -4.149,
+   "up_share": 0.395
+  },
+  "h1|高开5%以上未到涨停|前5日已涨10%以上|2024": {
+   "events": 5786,
+   "abs": {
+    "dates": 231,
+    "mean_pct": -1.063,
+    "nw_t": -2.2
+   },
+   "excess": {
+    "dates": 231,
+    "mean_pct": -1.154,
+    "nw_t": -2.74
+   },
+   "median_pct": -8.038,
+   "up_share": 0.356
+  },
+  "h1|高开5%以上未到涨停|前5日已涨10%以上|2025": {
+   "events": 1971,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.38,
+    "nw_t": -1.07
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.658,
+    "nw_t": -1.98
+   },
+   "median_pct": -1.84,
+   "up_share": 0.439
+  },
+  "h1|高开5%以上未到涨停|前5日已涨10%以上|2026": {
+   "events": 1711,
+   "abs": {
+    "dates": 192,
+    "mean_pct": -0.125,
+    "nw_t": -0.26
+   },
+   "excess": {
+    "dates": 192,
+    "mean_pct": -0.039,
+    "nw_t": -0.09
+   },
+   "median_pct": -0.514,
+   "up_share": 0.476
+  },
+  "h1|高开5%以上未到涨停|前5日涨幅不到10%|全部": {
+   "events": 10529,
+   "abs": {
+    "dates": 674,
+    "mean_pct": -0.324,
+    "nw_t": -1.81
+   },
+   "excess": {
+    "dates": 674,
+    "mean_pct": -0.466,
+    "nw_t": -3.22
+   },
+   "median_pct": -1.137,
+   "up_share": 0.435
+  },
+  "h1|高开5%以上未到涨停|前5日涨幅不到10%|2024": {
+   "events": 3585,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -0.888,
+    "nw_t": -2.4
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -1.062,
+    "nw_t": -3.9
+   },
+   "median_pct": -1.269,
+   "up_share": 0.428
+  },
+  "h1|高开5%以上未到涨停|前5日涨幅不到10%|2025": {
+   "events": 3318,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.24,
+    "nw_t": 0.96
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.029,
+    "nw_t": -0.13
+   },
+   "median_pct": -0.659,
+   "up_share": 0.46
+  },
+  "h1|高开5%以上未到涨停|前5日涨幅不到10%|2026": {
+   "events": 3626,
+   "abs": {
+    "dates": 195,
+    "mean_pct": -0.343,
+    "nw_t": -1.29
+   },
+   "excess": {
+    "dates": 195,
+    "mean_pct": -0.288,
+    "nw_t": -1.29
+   },
+   "median_pct": -1.428,
+   "up_share": 0.418
+  },
+  "h1|开盘涨停|全部|全部": {
+   "events": 8551,
+   "abs": {
+    "dates": 680,
+    "mean_pct": 1.585,
+    "nw_t": 7.58
+   },
+   "excess": {
+    "dates": 680,
+    "mean_pct": 1.463,
+    "nw_t": 7.94
+   },
+   "median_pct": -2.233,
+   "up_share": 0.455
+  },
+  "h1|开盘涨停|全部|2024": {
+   "events": 4878,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 1.181,
+    "nw_t": 2.77
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 1.063,
+    "nw_t": 3.03
+   },
+   "median_pct": -7.468,
+   "up_share": 0.357
+  },
+  "h1|开盘涨停|全部|2025": {
+   "events": 2206,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 1.745,
+    "nw_t": 6.13
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 1.476,
+    "nw_t": 5.46
+   },
+   "median_pct": 3.585,
+   "up_share": 0.583
+  },
+  "h1|开盘涨停|全部|2026": {
+   "events": 1467,
+   "abs": {
+    "dates": 196,
+    "mean_pct": 1.883,
+    "nw_t": 5.35
+   },
+   "excess": {
+    "dates": 196,
+    "mean_pct": 1.939,
+    "nw_t": 6.01
+   },
+   "median_pct": 3.144,
+   "up_share": 0.586
+  },
+  "h1|开盘涨停|前5日已涨10%以上|全部": {
+   "events": 5913,
+   "abs": {
+    "dates": 649,
+    "mean_pct": 1.157,
+    "nw_t": 4.04
+   },
+   "excess": {
+    "dates": 649,
+    "mean_pct": 1.027,
+    "nw_t": 3.83
+   },
+   "median_pct": -6.058,
+   "up_share": 0.389
+  },
+  "h1|开盘涨停|前5日已涨10%以上|2024": {
+   "events": 3923,
+   "abs": {
+    "dates": 227,
+    "mean_pct": 0.519,
+    "nw_t": 0.88
+   },
+   "excess": {
+    "dates": 227,
+    "mean_pct": 0.357,
+    "nw_t": 0.67
+   },
+   "median_pct": -9.824,
+   "up_share": 0.289
+  },
+  "h1|开盘涨停|前5日已涨10%以上|2025": {
+   "events": 1249,
+   "abs": {
+    "dates": 240,
+    "mean_pct": 1.531,
+    "nw_t": 3.76
+   },
+   "excess": {
+    "dates": 240,
+    "mean_pct": 1.244,
+    "nw_t": 3.17
+   },
+   "median_pct": 4.398,
+   "up_share": 0.592
+  },
+  "h1|开盘涨停|前5日已涨10%以上|2026": {
+   "events": 741,
+   "abs": {
+    "dates": 182,
+    "mean_pct": 1.459,
+    "nw_t": 3.29
+   },
+   "excess": {
+    "dates": 182,
+    "mean_pct": 1.576,
+    "nw_t": 3.55
+   },
+   "median_pct": 3.444,
+   "up_share": 0.578
+  },
+  "h1|开盘涨停|前5日涨幅不到10%|全部": {
+   "events": 2059,
+   "abs": {
+    "dates": 607,
+    "mean_pct": 1.554,
+    "nw_t": 6.62
+   },
+   "excess": {
+    "dates": 607,
+    "mean_pct": 1.471,
+    "nw_t": 6.65
+   },
+   "median_pct": 2.377,
+   "up_share": 0.584
+  },
+  "h1|开盘涨停|前5日涨幅不到10%|2024": {
+   "events": 751,
+   "abs": {
+    "dates": 212,
+    "mean_pct": 1.489,
+    "nw_t": 3.45
+   },
+   "excess": {
+    "dates": 212,
+    "mean_pct": 1.435,
+    "nw_t": 3.76
+   },
+   "median_pct": 2.875,
+   "up_share": 0.617
+  },
+  "h1|开盘涨停|前5日涨幅不到10%|2025": {
+   "events": 717,
+   "abs": {
+    "dates": 214,
+    "mean_pct": 1.283,
+    "nw_t": 3.49
+   },
+   "excess": {
+    "dates": 214,
+    "mean_pct": 1.041,
+    "nw_t": 2.85
+   },
+   "median_pct": 1.95,
+   "up_share": 0.556
+  },
+  "h1|开盘涨停|前5日涨幅不到10%|2026": {
+   "events": 591,
+   "abs": {
+    "dates": 181,
+    "mean_pct": 1.952,
+    "nw_t": 4.68
+   },
+   "excess": {
+    "dates": 181,
+    "mean_pct": 2.022,
+    "nw_t": 5.13
+   },
+   "median_pct": 2.118,
+   "up_share": 0.575
+  },
+  "h4|低开超过2%|全部|全部": {
+   "events": 122601,
+   "abs": {
+    "dates": 677,
+    "mean_pct": -0.302,
+    "nw_t": -0.77
+   },
+   "excess": {
+    "dates": 677,
+    "mean_pct": -0.556,
+    "nw_t": -2.52
+   },
+   "median_pct": -0.726,
+   "up_share": 0.463
+  },
+  "h4|低开超过2%|全部|2024": {
+   "events": 42139,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.404,
+    "nw_t": -0.45
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.686,
+    "nw_t": -1.35
+   },
+   "median_pct": -0.837,
+   "up_share": 0.466
+  },
+  "h4|低开超过2%|全部|2025": {
+   "events": 38762,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.114,
+    "nw_t": 0.28
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.544,
+    "nw_t": -2.32
+   },
+   "median_pct": -0.301,
+   "up_share": 0.482
+  },
+  "h4|低开超过2%|全部|2026": {
+   "events": 41700,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.699,
+    "nw_t": -1.2
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.408,
+    "nw_t": -1.29
+   },
+   "median_pct": -1.062,
+   "up_share": 0.442
+  },
+  "h4|低开超过2%|前5日已涨10%以上|全部": {
+   "events": 37095,
+   "abs": {
+    "dates": 672,
+    "mean_pct": -1.032,
+    "nw_t": -2.57
+   },
+   "excess": {
+    "dates": 672,
+    "mean_pct": -1.309,
+    "nw_t": -5.27
+   },
+   "median_pct": -3.021,
+   "up_share": 0.379
+  },
+  "h4|低开超过2%|前5日已涨10%以上|2024": {
+   "events": 15895,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -1.488,
+    "nw_t": -1.62
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -1.839,
+    "nw_t": -3.37
+   },
+   "median_pct": -4.261,
+   "up_share": 0.343
+  },
+  "h4|低开超过2%|前5日已涨10%以上|2025": {
+   "events": 11104,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -0.6,
+    "nw_t": -1.36
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -1.258,
+    "nw_t": -4.04
+   },
+   "median_pct": -2.296,
+   "up_share": 0.394
+  },
+  "h4|低开超过2%|前5日已涨10%以上|2026": {
+   "events": 10096,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -1.018,
+    "nw_t": -1.74
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.727,
+    "nw_t": -2.06
+   },
+   "median_pct": -2.134,
+   "up_share": 0.419
+  },
+  "h4|低开超过2%|前5日涨幅不到10%|全部": {
+   "events": 84703,
+   "abs": {
+    "dates": 671,
+    "mean_pct": 0.146,
+    "nw_t": 0.36
+   },
+   "excess": {
+    "dates": 671,
+    "mean_pct": -0.131,
+    "nw_t": -0.56
+   },
+   "median_pct": 0.0,
+   "up_share": 0.501
+  },
+  "h4|低开超过2%|前5日涨幅不到10%|2024": {
+   "events": 25889,
+   "abs": {
+    "dates": 235,
+    "mean_pct": 0.279,
+    "nw_t": 0.3
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -0.07,
+    "nw_t": -0.13
+   },
+   "median_pct": 1.094,
+   "up_share": 0.544
+  },
+  "h4|低开超过2%|前5日涨幅不到10%|2025": {
+   "events": 27409,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.627,
+    "nw_t": 1.54
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.031,
+    "nw_t": -0.13
+   },
+   "median_pct": 0.319,
+   "up_share": 0.517
+  },
+  "h4|低开超过2%|前5日涨幅不到10%|2026": {
+   "events": 31405,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.622,
+    "nw_t": -1.04
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.331,
+    "nw_t": -0.99
+   },
+   "median_pct": -0.824,
+   "up_share": 0.45
+  },
+  "h4|低开0至2%|全部|全部": {
+   "events": 1434620,
+   "abs": {
+    "dates": 677,
+    "mean_pct": 0.474,
+    "nw_t": 1.6
+   },
+   "excess": {
+    "dates": 677,
+    "mean_pct": 0.22,
+    "nw_t": 1.73
+   },
+   "median_pct": -0.053,
+   "up_share": 0.492
+  },
+  "h4|低开0至2%|全部|2024": {
+   "events": 526339,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.457,
+    "nw_t": 0.65
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.176,
+    "nw_t": 0.61
+   },
+   "median_pct": -0.489,
+   "up_share": 0.462
+  },
+  "h4|低开0至2%|全部|2025": {
+   "events": 495126,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.937,
+    "nw_t": 3.31
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.278,
+    "nw_t": 2.63
+   },
+   "median_pct": 0.457,
+   "up_share": 0.543
+  },
+  "h4|低开0至2%|全部|2026": {
+   "events": 413155,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.089,
+    "nw_t": -0.22
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": 0.203,
+    "nw_t": 0.89
+   },
+   "median_pct": -0.373,
+   "up_share": 0.469
+  },
+  "h4|低开0至2%|前5日已涨10%以上|全部": {
+   "events": 90244,
+   "abs": {
+    "dates": 670,
+    "mean_pct": -0.133,
+    "nw_t": -0.39
+   },
+   "excess": {
+    "dates": 670,
+    "mean_pct": -0.395,
+    "nw_t": -2.4
+   },
+   "median_pct": -0.475,
+   "up_share": 0.472
+  },
+  "h4|低开0至2%|前5日已涨10%以上|2024": {
+   "events": 35097,
+   "abs": {
+    "dates": 234,
+    "mean_pct": -0.358,
+    "nw_t": -0.48
+   },
+   "excess": {
+    "dates": 234,
+    "mean_pct": -0.664,
+    "nw_t": -1.96
+   },
+   "median_pct": -0.383,
+   "up_share": 0.477
+  },
+  "h4|低开0至2%|前5日已涨10%以上|2025": {
+   "events": 27877,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.292,
+    "nw_t": 0.78
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.366,
+    "nw_t": -1.71
+   },
+   "median_pct": -0.696,
+   "up_share": 0.455
+  },
+  "h4|低开0至2%|前5日已涨10%以上|2026": {
+   "events": 27270,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.396,
+    "nw_t": -0.71
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.104,
+    "nw_t": -0.38
+   },
+   "median_pct": -0.337,
+   "up_share": 0.482
+  },
+  "h4|低开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1332111,
+   "abs": {
+    "dates": 672,
+    "mean_pct": 0.538,
+    "nw_t": 1.8
+   },
+   "excess": {
+    "dates": 672,
+    "mean_pct": 0.26,
+    "nw_t": 1.92
+   },
+   "median_pct": -0.0,
+   "up_share": 0.496
+  },
+  "h4|低开0至2%|前5日涨幅不到10%|2024": {
+   "events": 479546,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.624,
+    "nw_t": 0.87
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": 0.272,
+    "nw_t": 0.88
+   },
+   "median_pct": -0.405,
+   "up_share": 0.467
+  },
+  "h4|低开0至2%|前5日涨幅不到10%|2025": {
+   "events": 466873,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.969,
+    "nw_t": 3.44
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.311,
+    "nw_t": 2.87
+   },
+   "median_pct": 0.499,
+   "up_share": 0.549
+  },
+  "h4|低开0至2%|前5日涨幅不到10%|2026": {
+   "events": 385692,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.111,
+    "nw_t": -0.28
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": 0.181,
+    "nw_t": 0.73
+   },
+   "median_pct": -0.375,
+   "up_share": 0.468
+  },
+  "h4|高开0至2%|全部|全部": {
+   "events": 1525585,
+   "abs": {
+    "dates": 677,
+    "mean_pct": 0.261,
+    "nw_t": 0.88
+   },
+   "excess": {
+    "dates": 677,
+    "mean_pct": 0.008,
+    "nw_t": 0.06
+   },
+   "median_pct": -0.139,
+   "up_share": 0.485
+  },
+  "h4|高开0至2%|全部|2024": {
+   "events": 531274,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.143,
+    "nw_t": 0.21
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.138,
+    "nw_t": -0.43
+   },
+   "median_pct": -0.463,
+   "up_share": 0.463
+  },
+  "h4|高开0至2%|全部|2025": {
+   "events": 579786,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.85,
+    "nw_t": 3.16
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.192,
+    "nw_t": 1.74
+   },
+   "median_pct": 0.337,
+   "up_share": 0.534
+  },
+  "h4|高开0至2%|全部|2026": {
+   "events": 414525,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.334,
+    "nw_t": -0.8
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.042,
+    "nw_t": -0.19
+   },
+   "median_pct": -0.676,
+   "up_share": 0.443
+  },
+  "h4|高开0至2%|前5日已涨10%以上|全部": {
+   "events": 73847,
+   "abs": {
+    "dates": 671,
+    "mean_pct": -0.514,
+    "nw_t": -1.47
+   },
+   "excess": {
+    "dates": 671,
+    "mean_pct": -0.78,
+    "nw_t": -4.03
+   },
+   "median_pct": -0.722,
+   "up_share": 0.458
+  },
+  "h4|高开0至2%|前5日已涨10%以上|2024": {
+   "events": 28972,
+   "abs": {
+    "dates": 235,
+    "mean_pct": -1.145,
+    "nw_t": -1.53
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -1.464,
+    "nw_t": -3.53
+   },
+   "median_pct": -0.751,
+   "up_share": 0.456
+  },
+  "h4|高开0至2%|前5日已涨10%以上|2025": {
+   "events": 22204,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.191,
+    "nw_t": 0.49
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.468,
+    "nw_t": -1.95
+   },
+   "median_pct": -0.788,
+   "up_share": 0.449
+  },
+  "h4|高开0至2%|前5日已涨10%以上|2026": {
+   "events": 22671,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.633,
+    "nw_t": -1.06
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.341,
+    "nw_t": -1.21
+   },
+   "median_pct": -0.591,
+   "up_share": 0.469
+  },
+  "h4|高开0至2%|前5日涨幅不到10%|全部": {
+   "events": 1439638,
+   "abs": {
+    "dates": 672,
+    "mean_pct": 0.31,
+    "nw_t": 1.03
+   },
+   "excess": {
+    "dates": 672,
+    "mean_pct": 0.033,
+    "nw_t": 0.23
+   },
+   "median_pct": -0.083,
+   "up_share": 0.489
+  },
+  "h4|高开0至2%|前5日涨幅不到10%|2024": {
+   "events": 490639,
+   "abs": {
+    "dates": 236,
+    "mean_pct": 0.278,
+    "nw_t": 0.39
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.073,
+    "nw_t": -0.22
+   },
+   "median_pct": -0.359,
+   "up_share": 0.47
+  },
+  "h4|高开0至2%|前5日涨幅不到10%|2025": {
+   "events": 557284,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.867,
+    "nw_t": 3.23
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.208,
+    "nw_t": 1.83
+   },
+   "median_pct": 0.362,
+   "up_share": 0.538
+  },
+  "h4|高开0至2%|前5日涨幅不到10%|2026": {
+   "events": 391715,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.351,
+    "nw_t": -0.84
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.059,
+    "nw_t": -0.25
+   },
+   "median_pct": -0.68,
+   "up_share": 0.441
+  },
+  "h4|高开2%至3%|全部|全部": {
+   "events": 55955,
+   "abs": {
+    "dates": 677,
+    "mean_pct": -0.101,
+    "nw_t": -0.27
+   },
+   "excess": {
+    "dates": 677,
+    "mean_pct": -0.354,
+    "nw_t": -1.83
+   },
+   "median_pct": -0.082,
+   "up_share": 0.494
+  },
+  "h4|高开2%至3%|全部|2024": {
+   "events": 19170,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.638,
+    "nw_t": -0.8
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.92,
+    "nw_t": -2.15
+   },
+   "median_pct": -0.646,
+   "up_share": 0.462
+  },
+  "h4|高开2%至3%|全部|2025": {
+   "events": 15668,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.833,
+    "nw_t": 2.23
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.174,
+    "nw_t": 0.86
+   },
+   "median_pct": 0.0,
+   "up_share": 0.501
+  },
+  "h4|高开2%至3%|全部|2026": {
+   "events": 21117,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.604,
+    "nw_t": -0.96
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.312,
+    "nw_t": -1.07
+   },
+   "median_pct": 0.336,
+   "up_share": 0.517
+  },
+  "h4|高开2%至3%|前5日已涨10%以上|全部": {
+   "events": 8904,
+   "abs": {
+    "dates": 649,
+    "mean_pct": -0.513,
+    "nw_t": -1.18
+   },
+   "excess": {
+    "dates": 649,
+    "mean_pct": -0.771,
+    "nw_t": -2.44
+   },
+   "median_pct": -1.332,
+   "up_share": 0.432
+  },
+  "h4|高开2%至3%|前5日已涨10%以上|2024": {
+   "events": 3831,
+   "abs": {
+    "dates": 218,
+    "mean_pct": -1.132,
+    "nw_t": -1.16
+   },
+   "excess": {
+    "dates": 218,
+    "mean_pct": -1.408,
+    "nw_t": -1.96
+   },
+   "median_pct": -1.206,
+   "up_share": 0.423
+  },
+  "h4|高开2%至3%|前5日已涨10%以上|2025": {
+   "events": 2414,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.157,
+    "nw_t": -0.3
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.832,
+    "nw_t": -1.98
+   },
+   "median_pct": -1.618,
+   "up_share": 0.424
+  },
+  "h4|高开2%至3%|前5日已涨10%以上|2026": {
+   "events": 2659,
+   "abs": {
+    "dates": 190,
+    "mean_pct": -0.252,
+    "nw_t": -0.38
+   },
+   "excess": {
+    "dates": 190,
+    "mean_pct": 0.038,
+    "nw_t": 0.1
+   },
+   "median_pct": -1.35,
+   "up_share": 0.452
+  },
+  "h4|高开2%至3%|前5日涨幅不到10%|全部": {
+   "events": 46872,
+   "abs": {
+    "dates": 671,
+    "mean_pct": 0.021,
+    "nw_t": 0.06
+   },
+   "excess": {
+    "dates": 671,
+    "mean_pct": -0.269,
+    "nw_t": -1.34
+   },
+   "median_pct": 0.133,
+   "up_share": 0.506
+  },
+  "h4|高开2%至3%|前5日涨幅不到10%|2024": {
+   "events": 15218,
+   "abs": {
+    "dates": 235,
+    "mean_pct": -0.364,
+    "nw_t": -0.43
+   },
+   "excess": {
+    "dates": 235,
+    "mean_pct": -0.751,
+    "nw_t": -1.65
+   },
+   "median_pct": -0.443,
+   "up_share": 0.475
+  },
+  "h4|高开2%至3%|前5日涨幅不到10%|2025": {
+   "events": 13225,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.971,
+    "nw_t": 2.64
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.313,
+    "nw_t": 1.57
+   },
+   "median_pct": 0.267,
+   "up_share": 0.515
+  },
+  "h4|高开2%至3%|前5日涨幅不到10%|2026": {
+   "events": 18429,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.706,
+    "nw_t": -1.11
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.414,
+    "nw_t": -1.37
+   },
+   "median_pct": 0.502,
+   "up_share": 0.527
+  },
+  "h4|高开3%至5%|全部|全部": {
+   "events": 34574,
+   "abs": {
+    "dates": 678,
+    "mean_pct": -0.364,
+    "nw_t": -0.94
+   },
+   "excess": {
+    "dates": 678,
+    "mean_pct": -0.599,
+    "nw_t": -2.74
+   },
+   "median_pct": -0.697,
+   "up_share": 0.465
+  },
+  "h4|高开3%至5%|全部|2024": {
+   "events": 13399,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -1.162,
+    "nw_t": -1.43
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -1.393,
+    "nw_t": -3.14
+   },
+   "median_pct": -1.111,
+   "up_share": 0.44
+  },
+  "h4|高开3%至5%|全部|2025": {
+   "events": 10280,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.721,
+    "nw_t": 1.73
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.063,
+    "nw_t": 0.23
+   },
+   "median_pct": -0.512,
+   "up_share": 0.472
+  },
+  "h4|高开3%至5%|全部|2026": {
+   "events": 10895,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.729,
+    "nw_t": -1.11
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.437,
+    "nw_t": -1.3
+   },
+   "median_pct": -0.239,
+   "up_share": 0.488
+  },
+  "h4|高开3%至5%|前5日已涨10%以上|全部": {
+   "events": 9434,
+   "abs": {
+    "dates": 659,
+    "mean_pct": -0.903,
+    "nw_t": -1.53
+   },
+   "excess": {
+    "dates": 659,
+    "mean_pct": -1.151,
+    "nw_t": -2.43
+   },
+   "median_pct": -1.626,
+   "up_share": 0.419
+  },
+  "h4|高开3%至5%|前5日已涨10%以上|2024": {
+   "events": 4663,
+   "abs": {
+    "dates": 232,
+    "mean_pct": -2.653,
+    "nw_t": -1.99
+   },
+   "excess": {
+    "dates": 232,
+    "mean_pct": -2.897,
+    "nw_t": -2.86
+   },
+   "median_pct": -1.299,
+   "up_share": 0.426
+  },
+  "h4|高开3%至5%|前5日已涨10%以上|2025": {
+   "events": 2518,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 0.008,
+    "nw_t": 0.01
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -0.657,
+    "nw_t": -1.16
+   },
+   "median_pct": -2.616,
+   "up_share": 0.393
+  },
+  "h4|高开3%至5%|前5日已涨10%以上|2026": {
+   "events": 2253,
+   "abs": {
+    "dates": 186,
+    "mean_pct": 0.101,
+    "nw_t": 0.12
+   },
+   "excess": {
+    "dates": 186,
+    "mean_pct": 0.385,
+    "nw_t": 0.56
+   },
+   "median_pct": -1.602,
+   "up_share": 0.434
+  },
+  "h4|高开3%至5%|前5日涨幅不到10%|全部": {
+   "events": 24977,
+   "abs": {
+    "dates": 672,
+    "mean_pct": 0.007,
+    "nw_t": 0.02
+   },
+   "excess": {
+    "dates": 672,
+    "mean_pct": -0.265,
+    "nw_t": -1.23
+   },
+   "median_pct": -0.3,
+   "up_share": 0.483
+  },
+  "h4|高开3%至5%|前5日涨幅不到10%|2024": {
+   "events": 8620,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -0.486,
+    "nw_t": -0.58
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -0.821,
+    "nw_t": -1.84
+   },
+   "median_pct": -0.979,
+   "up_share": 0.451
+  },
+  "h4|高开3%至5%|前5日涨幅不到10%|2025": {
+   "events": 7739,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 1.061,
+    "nw_t": 2.67
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 0.403,
+    "nw_t": 1.71
+   },
+   "median_pct": 0.0,
+   "up_share": 0.498
+  },
+  "h4|高开3%至5%|前5日涨幅不到10%|2026": {
+   "events": 8618,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.718,
+    "nw_t": -1.05
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.426,
+    "nw_t": -1.13
+   },
+   "median_pct": 0.061,
+   "up_share": 0.503
+  },
+  "h4|高开5%以上未到涨停|全部|全部": {
+   "events": 20075,
+   "abs": {
+    "dates": 678,
+    "mean_pct": -1.164,
+    "nw_t": -2.92
+   },
+   "excess": {
+    "dates": 678,
+    "mean_pct": -1.4,
+    "nw_t": -5.23
+   },
+   "median_pct": -3.44,
+   "up_share": 0.379
+  },
+  "h4|高开5%以上未到涨停|全部|2024": {
+   "events": 9447,
+   "abs": {
+    "dates": 242,
+    "mean_pct": -2.295,
+    "nw_t": -2.68
+   },
+   "excess": {
+    "dates": 242,
+    "mean_pct": -2.526,
+    "nw_t": -4.59
+   },
+   "median_pct": -6.257,
+   "up_share": 0.302
+  },
+  "h4|高开5%以上未到涨停|全部|2025": {
+   "events": 5356,
+   "abs": {
+    "dates": 243,
+    "mean_pct": -0.234,
+    "nw_t": -0.55
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.892,
+    "nw_t": -2.86
+   },
+   "median_pct": -2.082,
+   "up_share": 0.413
+  },
+  "h4|高开5%以上未到涨停|全部|2026": {
+   "events": 5272,
+   "abs": {
+    "dates": 193,
+    "mean_pct": -0.918,
+    "nw_t": -1.42
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": -0.626,
+    "nw_t": -1.51
+   },
+   "median_pct": -0.494,
+   "up_share": 0.484
+  },
+  "h4|高开5%以上未到涨停|前5日已涨10%以上|全部": {
+   "events": 9441,
+   "abs": {
+    "dates": 661,
+    "mean_pct": -1.905,
+    "nw_t": -3.56
+   },
+   "excess": {
+    "dates": 661,
+    "mean_pct": -2.117,
+    "nw_t": -4.72
+   },
+   "median_pct": -7.478,
+   "up_share": 0.298
+  },
+  "h4|高开5%以上未到涨停|前5日已涨10%以上|2024": {
+   "events": 5783,
+   "abs": {
+    "dates": 231,
+    "mean_pct": -3.455,
+    "nw_t": -3.12
+   },
+   "excess": {
+    "dates": 231,
+    "mean_pct": -3.675,
+    "nw_t": -4.29
+   },
+   "median_pct": -10.29,
+   "up_share": 0.23
+  },
+  "h4|高开5%以上未到涨停|前5日已涨10%以上|2025": {
+   "events": 1968,
+   "abs": {
+    "dates": 241,
+    "mean_pct": -0.977,
+    "nw_t": -1.52
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": -1.626,
+    "nw_t": -2.69
+   },
+   "median_pct": -3.817,
+   "up_share": 0.397
+  },
+  "h4|高开5%以上未到涨停|前5日已涨10%以上|2026": {
+   "events": 1690,
+   "abs": {
+    "dates": 189,
+    "mean_pct": -1.193,
+    "nw_t": -1.33
+   },
+   "excess": {
+    "dates": 189,
+    "mean_pct": -0.838,
+    "nw_t": -1.07
+   },
+   "median_pct": -2.75,
+   "up_share": 0.418
+  },
+  "h4|高开5%以上未到涨停|前5日涨幅不到10%|全部": {
+   "events": 10439,
+   "abs": {
+    "dates": 671,
+    "mean_pct": -0.509,
+    "nw_t": -1.31
+   },
+   "excess": {
+    "dates": 671,
+    "mean_pct": -0.785,
+    "nw_t": -2.91
+   },
+   "median_pct": -1.087,
+   "up_share": 0.455
+  },
+  "h4|高开5%以上未到涨停|前5日涨幅不到10%|2024": {
+   "events": 3583,
+   "abs": {
+    "dates": 236,
+    "mean_pct": -1.262,
+    "nw_t": -1.49
+   },
+   "excess": {
+    "dates": 236,
+    "mean_pct": -1.597,
+    "nw_t": -2.77
+   },
+   "median_pct": -1.826,
+   "up_share": 0.422
+  },
+  "h4|高开5%以上未到涨停|前5日涨幅不到10%|2025": {
+   "events": 3314,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 0.4,
+    "nw_t": 0.9
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": -0.259,
+    "nw_t": -0.69
+   },
+   "median_pct": -1.43,
+   "up_share": 0.424
+  },
+  "h4|高开5%以上未到涨停|前5日涨幅不到10%|2026": {
+   "events": 3542,
+   "abs": {
+    "dates": 192,
+    "mean_pct": -0.734,
+    "nw_t": -1.22
+   },
+   "excess": {
+    "dates": 192,
+    "mean_pct": -0.453,
+    "nw_t": -1.31
+   },
+   "median_pct": 0.574,
+   "up_share": 0.517
+  },
+  "h4|开盘涨停|全部|全部": {
+   "events": 8483,
+   "abs": {
+    "dates": 677,
+    "mean_pct": 2.199,
+    "nw_t": 3.14
+   },
+   "excess": {
+    "dates": 677,
+    "mean_pct": 1.959,
+    "nw_t": 3.25
+   },
+   "median_pct": -7.255,
+   "up_share": 0.327
+  },
+  "h4|开盘涨停|全部|2024": {
+   "events": 4872,
+   "abs": {
+    "dates": 241,
+    "mean_pct": 1.08,
+    "nw_t": 0.7
+   },
+   "excess": {
+    "dates": 241,
+    "mean_pct": 0.834,
+    "nw_t": 0.66
+   },
+   "median_pct": -10.493,
+   "up_share": 0.244
+  },
+  "h4|开盘涨停|全部|2025": {
+   "events": 2189,
+   "abs": {
+    "dates": 243,
+    "mean_pct": 3.057,
+    "nw_t": 3.3
+   },
+   "excess": {
+    "dates": 243,
+    "mean_pct": 2.399,
+    "nw_t": 2.74
+   },
+   "median_pct": -2.373,
+   "up_share": 0.43
+  },
+  "h4|开盘涨停|全部|2026": {
+   "events": 1422,
+   "abs": {
+    "dates": 193,
+    "mean_pct": 2.518,
+    "nw_t": 2.62
+   },
+   "excess": {
+    "dates": 193,
+    "mean_pct": 2.809,
+    "nw_t": 3.47
+   },
+   "median_pct": -1.468,
+   "up_share": 0.454
+  },
+  "h4|开盘涨停|前5日已涨10%以上|全部": {
+   "events": 5875,
+   "abs": {
+    "dates": 646,
+    "mean_pct": 0.769,
+    "nw_t": 0.89
+   },
+   "excess": {
+    "dates": 646,
+    "mean_pct": 0.512,
+    "nw_t": 0.64
+   },
+   "median_pct": -10.388,
+   "up_share": 0.261
+  },
+  "h4|开盘涨停|前5日已涨10%以上|2024": {
+   "events": 3920,
+   "abs": {
+    "dates": 227,
+    "mean_pct": -0.929,
+    "nw_t": -0.5
+   },
+   "excess": {
+    "dates": 227,
+    "mean_pct": -1.212,
+    "nw_t": -0.73
+   },
+   "median_pct": -11.77,
+   "up_share": 0.187
+  },
+  "h4|开盘涨停|前5日已涨10%以上|2025": {
+   "events": 1240,
+   "abs": {
+    "dates": 240,
+    "mean_pct": 1.534,
+    "nw_t": 1.32
+   },
+   "excess": {
+    "dates": 240,
+    "mean_pct": 0.84,
+    "nw_t": 0.75
+   },
+   "median_pct": -3.709,
+   "up_share": 0.41
+  },
+  "h4|开盘涨停|前5日已涨10%以上|2026": {
+   "events": 715,
+   "abs": {
+    "dates": 179,
+    "mean_pct": 1.894,
+    "nw_t": 1.55
+   },
+   "excess": {
+    "dates": 179,
+    "mean_pct": 2.259,
+    "nw_t": 1.97
+   },
+   "median_pct": -2.703,
+   "up_share": 0.413
+  },
+  "h4|开盘涨停|前5日涨幅不到10%|全部": {
+   "events": 2045,
+   "abs": {
+    "dates": 604,
+    "mean_pct": 2.042,
+    "nw_t": 3.25
+   },
+   "excess": {
+    "dates": 604,
+    "mean_pct": 1.786,
+    "nw_t": 3.34
+   },
+   "median_pct": -1.272,
+   "up_share": 0.462
+  },
+  "h4|开盘涨停|前5日涨幅不到10%|2024": {
+   "events": 750,
+   "abs": {
+    "dates": 212,
+    "mean_pct": 1.511,
+    "nw_t": 1.29
+   },
+   "excess": {
+    "dates": 212,
+    "mean_pct": 1.266,
+    "nw_t": 1.42
+   },
+   "median_pct": -1.175,
+   "up_share": 0.465
+  },
+  "h4|开盘涨停|前5日涨幅不到10%|2025": {
+   "events": 715,
+   "abs": {
+    "dates": 214,
+    "mean_pct": 2.26,
+    "nw_t": 2.23
+   },
+   "excess": {
+    "dates": 214,
+    "mean_pct": 1.566,
+    "nw_t": 1.65
+   },
+   "median_pct": -2.096,
+   "up_share": 0.436
+  },
+  "h4|开盘涨停|前5日涨幅不到10%|2026": {
+   "events": 580,
+   "abs": {
+    "dates": 178,
+    "mean_pct": 2.413,
+    "nw_t": 2.31
+   },
+   "excess": {
+    "dates": 178,
+    "mean_pct": 2.67,
+    "nw_t": 2.91
+   },
+   "median_pct": -0.386,
+   "up_share": 0.488
+  }
+ },
+ "edge": {
+  "alpha|近期有优势": {
+   "abs": {
+    "dates": 281,
+    "mean_pct": 0.384,
+    "nw_t": 0.82
+   },
+   "excess": {
+    "dates": 281,
+    "mean_pct": 0.245,
+    "nw_t": 0.58
+   },
+   "index": {
+    "dates": 281,
+    "mean_pct": 0.139,
+    "nw_t": 0.51
+   }
+  },
+  "alpha|近期无优势": {
+   "abs": {
+    "dates": 322,
+    "mean_pct": 0.466,
+    "nw_t": 1.02
+   },
+   "excess": {
+    "dates": 322,
+    "mean_pct": 0.145,
+    "nw_t": 0.41
+   },
+   "index": {
+    "dates": 322,
+    "mean_pct": 0.321,
+    "nw_t": 0.84
+   }
+  },
+  "alpha|进攻": {
+   "abs": {
+    "dates": 64,
+    "mean_pct": 1.597,
+    "nw_t": 1.93
+   },
+   "excess": {
+    "dates": 64,
+    "mean_pct": 0.956,
+    "nw_t": 1.43
+   },
+   "index": {
+    "dates": 64,
+    "mean_pct": 0.641,
+    "nw_t": 1.06
+   }
+  },
+  "alpha|均衡": {
+   "abs": {
+    "dates": 408,
+    "mean_pct": 0.485,
+    "nw_t": 1.17
+   },
+   "excess": {
+    "dates": 408,
+    "mean_pct": 0.435,
+    "nw_t": 1.24
+   },
+   "index": {
+    "dates": 408,
+    "mean_pct": 0.049,
+    "nw_t": 0.16
+   }
+  },
+  "alpha|防守": {
+   "abs": {
+    "dates": 131,
+    "mean_pct": -0.32,
+    "nw_t": -0.72
+   },
+   "excess": {
+    "dates": 131,
+    "mean_pct": -0.942,
+    "nw_t": -2.06
+   },
+   "index": {
+    "dates": 131,
+    "mean_pct": 0.621,
+    "nw_t": 1.78
+   }
+  },
+  "alpha|全部": {
+   "abs": {
+    "dates": 603,
+    "mean_pct": 0.428,
+    "nw_t": 1.3
+   },
+   "excess": {
+    "dates": 603,
+    "mean_pct": 0.191,
+    "nw_t": 0.7
+   },
+   "index": {
+    "dates": 603,
+    "mean_pct": 0.237,
+    "nw_t": 0.97
+   }
+  },
+  "beta|近期有优势": {
+   "abs": {
+    "dates": 287,
+    "mean_pct": -0.192,
+    "nw_t": -0.24
+   },
+   "excess": {
+    "dates": 287,
+    "mean_pct": -0.338,
+    "nw_t": -0.57
+   },
+   "index": {
+    "dates": 287,
+    "mean_pct": 0.146,
+    "nw_t": 0.55
+   }
+  },
+  "beta|近期无优势": {
+   "abs": {
+    "dates": 348,
+    "mean_pct": 0.739,
+    "nw_t": 0.99
+   },
+   "excess": {
+    "dates": 348,
+    "mean_pct": 0.37,
+    "nw_t": 0.79
+   },
+   "index": {
+    "dates": 348,
+    "mean_pct": 0.368,
+    "nw_t": 1.04
+   }
+  },
+  "beta|进攻": {
+   "abs": {
+    "dates": 79,
+    "mean_pct": 0.976,
+    "nw_t": 0.81
+   },
+   "excess": {
+    "dates": 79,
+    "mean_pct": 0.322,
+    "nw_t": 0.37
+   },
+   "index": {
+    "dates": 79,
+    "mean_pct": 0.654,
+    "nw_t": 1.41
+   }
+  },
+  "beta|均衡": {
+   "abs": {
+    "dates": 423,
+    "mean_pct": -0.163,
+    "nw_t": -0.24
+   },
+   "excess": {
+    "dates": 423,
+    "mean_pct": -0.247,
+    "nw_t": -0.55
+   },
+   "index": {
+    "dates": 423,
+    "mean_pct": 0.083,
+    "nw_t": 0.27
+   }
+  },
+  "beta|防守": {
+   "abs": {
+    "dates": 133,
+    "mean_pct": 1.459,
+    "nw_t": 1.42
+   },
+   "excess": {
+    "dates": 133,
+    "mean_pct": 0.834,
+    "nw_t": 1.08
+   },
+   "index": {
+    "dates": 133,
+    "mean_pct": 0.625,
+    "nw_t": 1.82
+   }
+  },
+  "beta|全部": {
+   "abs": {
+    "dates": 635,
+    "mean_pct": 0.318,
+    "nw_t": 0.58
+   },
+   "excess": {
+    "dates": 635,
+    "mean_pct": 0.05,
+    "nw_t": 0.14
+   },
+   "index": {
+    "dates": 635,
+    "mean_pct": 0.268,
+    "nw_t": 1.15
+   }
+  },
+  "alpha_trades": {
+   "近期有优势": {
+    "trades": 510,
+    "mean_pct": 0.192,
+    "median_pct": -0.649,
+    "win_share": 0.461
+   },
+   "近期无优势": {
+    "trades": 598,
+    "mean_pct": 0.022,
+    "median_pct": -0.474,
+    "win_share": 0.46
+   }
+  }
+ }
+}

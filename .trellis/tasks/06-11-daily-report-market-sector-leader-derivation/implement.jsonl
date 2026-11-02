@@ -1,6 +1,0 @@
-{"file": ".trellis/tasks/06-11-daily-report-market-sector-leader-derivation/research/current-selection-workflow-evidence.md", "reason": "Evidence summary for current selection workflow and required derivation changes"}
-{"file": "wiki/交易思想/布鲁克斯价格行为趋势.md", "reason": "Price-action and A-share volume localization knowledge"}
-{"file": "wiki/板块补充/板块中枢与主线延续.md", "reason": "Sector-first, mainline continuation, leader formation, and noise rules"}
-{"file": "wiki/运行契约/日报数据源契约.md", "reason": "Critical data completeness contract for stopping report generation"}
-{"file": "docs/superpowers/specs/2026-06-08-selection-workflow-chain-design.md", "reason": "Existing selection workflow design background"}
-{"file": "docs/trellis/specs/2026-06-11-brooks-price-action-a-share-volume-design.md", "reason": "Existing Brooks volume localization design background"}

@@ -1,0 +1,22 @@
+{
+ "equal_weight": {
+  "total_pct": 50.1,
+  "cagr_pct": 17.2,
+  "max_drawdown_pct": -21.4,
+  "years": {
+   "2024": 19.3,
+   "2025": 39.2,
+   "2026": -9.6
+  }
+ },
+ "index": {
+  "total_pct": 18.0,
+  "cagr_pct": 6.7,
+  "max_drawdown_pct": -24.2,
+  "years": {
+   "2024": 10.6,
+   "2025": 24.6,
+   "2026": -14.3
+  }
+ }
+}

@@ -1,5 +1,0 @@
-{"file":".trellis/spec/backend/llm-wiki-provenance.md","reason":"LLM Wiki source, manifest, and explanation-only contract"}
-{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Daily report decision boundary and action-field preservation"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Bear HTML and narrow-screen rendering constraints"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer data flow and regression checks"}
-{"file":".trellis/tasks/07-20-new-high-breadth-contraction-warning/research/2026-07-new-high-breadth-calibration.md","reason":"Verified target-date sample and source conflict boundaries"}

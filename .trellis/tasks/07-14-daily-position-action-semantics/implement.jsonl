@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Existing old_position_plan.v1 and account decision contracts"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Front-page account advice and generated-report quality rules"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Bear HTML consistency and responsive report requirements"}
-{"file": ".trellis/tasks/07-14-daily-position-action-semantics/research/longdian-20260713-calibration.md", "reason": "Real one-minute calibration and preserved counterexample"}

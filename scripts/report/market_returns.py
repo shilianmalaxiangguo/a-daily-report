@@ -12,8 +12,7 @@ import re
 import tempfile
 from zoneinfo import ZoneInfo
 
-from report.sector_fact_loader import _date, _number, _target_date
-from report.sector_reading_history import evidence_hash
+from report.fact_utils import _date, _number, _target_date, evidence_hash
 
 SCHEMA = 'market_returns.v2'
 BENCHMARK = {'code': '000985.CSI', 'name': '中证全指'}

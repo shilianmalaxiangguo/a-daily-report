@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary contract for front-page decision surface, action ordering, and review evidence."}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Existing action-plan and report quality contracts must not regress."}
-{"file": "references/report-contract.md", "reason": "Daily report action contract and user-facing structure."}
-{"file": "references/reasoning-mode-contract.md", "reason": "Bounded reasoning and final-action output rules."}

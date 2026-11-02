@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary implementation contract for the report decision loop, ledger fields, review labels, and backtest metrics."}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Existing report action-plan and T0 contracts that must not regress."}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Replay and decision-ledger facts must respect historical source boundaries and PostgreSQL/runtime contracts."}
-{"file": "references/report-contract.md", "reason": "Daily report user-facing and action-contract behavior that all report changes inherit."}
-{"file": "references/reasoning-mode-contract.md", "reason": "Bounded reasoning/output contract for action, evidence, trigger, and failure conditions."}

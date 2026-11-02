@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"研究模块的代码质量与测试约束"}
-{"file":".trellis/spec/backend/error-handling.md","reason":"缺失与异常分钟事实的诚实降级约束"}
-{"file":".trellis/tasks/07-11-quant-pressure-replay-calibration/research/findings.md","reason":"实现边界、字段语义和样本矩阵"}

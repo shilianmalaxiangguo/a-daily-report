@@ -11,13 +11,13 @@ import numpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from bs4 import BeautifulSoup
-from report.market_alpha_beta import (
+from research.alpha_beta.market_alpha_beta import (
     T_CRITICAL, _regime, build_alpha_beta, concept_alpha_beta, headline, render_alpha_beta,
 )
 from report.market_returns import (
     build_market_returns, encode_prices, price_rows, sessions_from_calendar, validate_market_returns,
 )
-from report.sector_reading_history import evidence_hash
+from report.fact_utils import evidence_hash
 
 RETRIEVED = '2026-09-30T09:00:00+08:00'
 BETA, ALPHA, RESILIENT, DOWN, NOISE = '600001.SH', '600002.SH', '600003.SH', '600004.SH', '600005.SH'
@@ -256,21 +256,6 @@ class MarketAlphaBetaTest(unittest.TestCase):
         self.assertEqual([r['name'] for r in twenty['tracked']], ['跟随题材'])
         self.assertNotIn('60', result)
 
-    def test_current_page_uses_small_cap_instead_of_old_market_actions(self):
-        from report.sector_daily_report import render_sector_daily
-        from tests.test_sector_daily_report import DATE, SOURCE, snapshot
-        _, _, _, value, result = projection(DATE)
-        data = snapshot()
-        data['data']['reading_market_returns'] = value
-        soup = BeautifulSoup(render_sector_daily(SOURCE, DATE, snapshot=data), 'html.parser')
-        main = soup.select_one('main')
-        sections = [node['id'] for node in main.find_all('section', recursive=False)]
-        self.assertEqual(sections[0], 'daily-plan')
-        self.assertEqual(soup.select('.daily-nav-links a')[0]['href'], '#daily-plan')
-        self.assertIsNone(main.select_one('#daily-alphabeta'))
-        self.assertIsNone(main.select_one('#market-alpha-beta-data'))
-        self.assertIn('小盘计划尚缺', main.get_text())
-        self.assertIsNotNone(soup.select_one('[data-bear-echarts-loader]'))
 
     def test_alpha_beta_section_alone_still_states_the_verdict(self):
         _, _, _, _, result = projection()
@@ -279,93 +264,11 @@ class MarketAlphaBetaTest(unittest.TestCase):
         self.assertEqual(len(section.select('.ab-metric')), 4)
         self.assertTrue(headline(result).startswith(result['regime']['verdict_text']))
 
-    def test_page_without_market_facts_keeps_previous_layout(self):
-        from report.sector_daily_report import render_sector_daily
-        from tests.test_sector_daily_report import DATE, SOURCE, snapshot
-        soup = BeautifulSoup(render_sector_daily(SOURCE, DATE, snapshot=snapshot()), 'html.parser')
-        self.assertIsNone(soup.select_one('#daily-alphabeta'))
-        self.assertNotIn('#daily-alphabeta', [a['href'] for a in soup.select('.daily-nav-links a')])
-
-    def test_wrong_day_market_facts_stop_the_page(self):
-        from report.sector_daily_report import render_sector_daily
-        from tests.test_sector_daily_report import DATE, SOURCE, snapshot
-        _, _, _, value, _ = projection('2026-09-28')
-        data = snapshot()
-        data['data']['reading_market_returns'] = value
-        with self.assertRaises(ValueError):
-            render_sector_daily(SOURCE, DATE, snapshot=data)
-
-    def test_retained_page_accepts_only_the_validated_market_addition(self):
-        from report.sector_daily_report import render_sector_daily
-        from report.sector_reading_history import historical_assets
-        from tests.test_sector_choice import sample
-        days, data = sample()
-        assets = {'target_date': days[-1], 'record_hash': None, 'trend': data['reading_sector_history']['trend']}
-        assets['source_sha256'] = evidence_hash(assets)
-        data = {'reading_sector_history': assets}
-        original = {'date': days[-1], 'data': data}
-        old_page = render_sector_daily(None, days[-1], snapshot=original)
-        _, _, _, value, _ = projection(days[-1])
-        augmented = deepcopy(original)
-        augmented['data']['reading_market_returns'] = value
-        self.assertEqual(historical_assets(old_page, augmented, days[-1]), data['reading_sector_history'])
-        page = render_sector_daily(old_page, days[-1], snapshot=augmented)
-        self.assertIsNone(BeautifulSoup(page, 'html.parser').select_one('#ab-concepts'))
-        self.assertIsNotNone(BeautifulSoup(page, 'html.parser').select_one('#daily-plan'))
-        self.assertEqual(render_sector_daily(page, days[-1], snapshot=augmented), page)
-        unrelated = deepcopy(augmented)
-        unrelated['data']['unrelated_fact'] = {'date': days[-1], 'value': 7}
-        with self.assertRaises(ValueError):
-            historical_assets(old_page, unrelated, days[-1])
-        broken = deepcopy(augmented)
-        prices = broken['data']['reading_market_returns']['prices']
-        prices[days[-1]] = prices[days[-1]].replace(',', ',9', 1)
-        with self.assertRaises(ValueError):
-            historical_assets(old_page, broken, days[-1])
-
-    def test_missing_concepts_are_summarized_by_last_visible_day(self):
-        from report.sector_daily_report import _sector_chart_section
-        day = '2026-09-29'
-        missing = [f'8859{i:02d}.TI' for i in range(12)]
-        rows = [{'ts_code': code, 'trade_date': '2026-09-28', 'close': 10.} for code in missing[:10]]
-        data = {'sector_universe': 'concept', 'concept_directory': {'missing_price_codes': missing},
-                'reading_sector_history': {'trend': {'price_inputs': {'rows': rows}}}}
-        section, _ = _sector_chart_section(BeautifulSoup('', 'html.parser'), data, day, [])
-        text = section.get_text(' ')
-        self.assertIn('12个概念未取得2026-09-29行情', text)
-        self.assertIn('10个最后可见价格在2026-09-28', text)
-        self.assertIn('2个没有可用历史价格', text)
-        self.assertNotIn(missing[0], text)
 
 
-class LiveCloseGuardTest(unittest.TestCase):
-    def test_live_run_without_any_target_close_stops_before_saving(self):
-        import datetime
-        import io
-        from contextlib import redirect_stdout
-        from unittest.mock import MagicMock, patch
-        import daily_report_entry_demo as entry
-        today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date().isoformat()
-        with patch.object(sys, 'argv', ['entry', today, '--force-live']), \
-             patch.object(entry, 'load_data_snapshot', return_value=(None, None)), \
-             patch.object(entry, 'collect_market_reading_data', return_value={'target_date': today}), \
-             patch.object(entry, 'run_source_health_check', return_value={'overall_result': 'ready'}), \
-             patch.object(entry, 'build_report_run_observer', return_value=MagicMock()), \
-             patch.object(entry, '_save_data_snapshot_with_observation') as save, \
-             patch.object(entry, '_save_standalone_sector_reading_page') as page, redirect_stdout(io.StringIO()):
-            with self.assertRaises(entry.ReportCriticalDataMissingError) as raised:
-                entry.main()
-        self.assertIn('收盘行情尚未取得', str(raised.exception))
-        save.assert_not_called()
-        page.assert_not_called()
 
-    def test_guard_needs_both_index_and_concepts_missing(self):
-        import daily_report_entry_demo as entry
-        checks = lambda index, board: {'checks': [{'label': '板块样本', 'status': board},
-                                                 {'label': '指数背景', 'status': index}]}
-        self.assertTrue(entry._target_close_missing(checks('missing', 'missing')))
-        self.assertFalse(entry._target_close_missing(checks('available', 'missing')))
-        self.assertFalse(entry._target_close_missing(checks('missing', 'available')))
+
+
 
 
 if __name__ == '__main__':

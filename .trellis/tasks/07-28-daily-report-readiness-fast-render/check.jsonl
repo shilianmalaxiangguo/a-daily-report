@@ -1,9 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "核对范围、回归和完成证据"}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对最近运行和历史错误保留行为"}
-{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对路径选择记录与脱敏"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核对目标日期事实边界"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对日期契约是否覆盖每个跨层信任边界"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/current-runtime-evidence.md", "reason": "核对修改是否覆盖真实根因"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/1730-asof-date-contract.md", "reason": "核对融资与 ETF 日期规则、来源顺序和失败行为"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/recurring-asof-date-break-loop.md", "reason": "核对本次修复是否覆盖重复根因而非单日症状"}
-{"file": ".trellis/tasks/07-28-daily-report-readiness-fast-render/research/20260728-runtime-performance.md", "reason": "核对性能根因、基准目标和会话耗时结论"}

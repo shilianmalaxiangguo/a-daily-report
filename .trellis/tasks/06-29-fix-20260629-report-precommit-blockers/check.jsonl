@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Quality check against daily report contracts"}
-{"file": ".trellis/tasks/06-29-fix-20260629-report-precommit-blockers/prd.md", "reason": "Acceptance criteria"}
-{"file": ".trellis/tasks/06-29-fix-20260629-report-precommit-blockers/design.md", "reason": "Data flow and boundary design"}
-{"file": ".trellis/tasks/06-29-fix-20260629-report-precommit-blockers/implement.md", "reason": "Validation commands and checkpoints"}

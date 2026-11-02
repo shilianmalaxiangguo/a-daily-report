@@ -1,0 +1,20 @@
+{
+ "sessions": 644,
+ "offense_days": 81,
+ "beta_offense": {
+  "sessions_holding_share": 0.174,
+  "mean_invested_share": 0.136
+ },
+ "live_rule": {
+  "sessions_holding_share": 0.592,
+  "mean_invested_share": 0.418
+ },
+ "beta": {
+  "sessions_holding_share": 0.994,
+  "mean_invested_share": 0.806
+ },
+ "alpha": {
+  "sessions_holding_share": 0.978,
+  "mean_invested_share": 0.668
+ }
+}

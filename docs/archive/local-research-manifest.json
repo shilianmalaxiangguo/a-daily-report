@@ -1,0 +1,470 @@
+{
+  "archive_sha256": "c77ec1555901f43dbeb6e391d938ab38ee0ec9e897f27be37c56fa4018433331",
+  "files": [
+    {
+      "path": "docs/reviews/2026-10-21-daily-report-module-audit.md",
+      "bytes": 7677,
+      "sha256": "d1a8d308fe4d3b35517e9553ec84a55534f73279072e4522e58652acdcb1986b"
+    },
+    {
+      "path": "docs/reviews/2026-10-21-sector-reading-cleanup-evidence.json",
+      "bytes": 1269,
+      "sha256": "13b8db9ec470d856c748eec9d1d62a9433ed7d97b83bbb414c99365f553356a8"
+    },
+    {
+      "path": "docs/reviews/2026-10-21-sector-reading-cleanup.md",
+      "bytes": 6333,
+      "sha256": "f696c58b4ca9ae68bbc20a5e1b1c5db6e7f32ed24afa8a79324571829ed92b40"
+    },
+    {
+      "path": "docs/reviews/2026-10-21-trading-wiki-rebuild-comparison.json",
+      "bytes": 40013,
+      "sha256": "7c41b011f53647827cbe7298e169bcbce77019e8439c31114de95b955429252b"
+    },
+    {
+      "path": "docs/reviews/2026-10-21-trading-wiki-rebuild-validation.json",
+      "bytes": 2272,
+      "sha256": "2245588ee89b66bd754a1496c9cf9e992a21746c70db06fc123a782fc64b3875"
+    },
+    {
+      "path": "docs/reviews/2026-10-22-daily-report-framework-audit.md",
+      "bytes": 12915,
+      "sha256": "8f3f9d54f3058a3510bd840bf14baf1a174e3f64b01468df3645c8cf0a0e12b9"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/README.md",
+      "bytes": 9566,
+      "sha256": "3fb31ba79fcc726b7ca097a17e311e6885de14694ec185a7e234ac040585750d"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/account_mix.json",
+      "bytes": 3752,
+      "sha256": "9b6d1ad5b8a759c76953b61a06a3e88f0f74e259c3fa6d18f83670b9ca05b562"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/account_mix.py",
+      "bytes": 3489,
+      "sha256": "1ae26e2b188b526b92c96968283cbba618de5f3f3c98ce8ed8dd00e0a493cb8c"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/account_names.json",
+      "bytes": 92000,
+      "sha256": "fda2ad1603014e679671dbcd770e7326c3eb07a7c829b1f0550d037c4e48fcd9"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/account_names.py",
+      "bytes": 6685,
+      "sha256": "e80ebc914e666a8a9d9a5ac39e46a7dfa628216b8dcaa388563344e74380431a"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/b1_order.json",
+      "bytes": 5126,
+      "sha256": "dca8aa5d92da98bec3ed5ecb811f3479d179eebacfb777b6bed53e58f19a537d"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/b1_order.py",
+      "bytes": 6832,
+      "sha256": "615ccf4d7c77ff230a62d3cb8b372cbd5a0f9198fd058ab6ee3beb5bafd01af1"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/b1_point.json",
+      "bytes": 41750,
+      "sha256": "5d22400d18b97a0ffe5685a5054ed3bff986df30c27de7ac70f4a992135cae57"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/b1_point.py",
+      "bytes": 25622,
+      "sha256": "9364898148de4279e37a9738034461312cb2f9c8283b3b89b44782dad8fc9fdf"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/equal_weight.json",
+      "bytes": 315,
+      "sha256": "0dfd72ca9b34ff0baf62efc4f688e509a584b8f25de2820fa74a0885432dd395"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/equal_weight.py",
+      "bytes": 1541,
+      "sha256": "4d6069ca7e727cfebc9d3a75cb094b859684313e5bffee8eef1151aedda7c8b4"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/execution_timing.json",
+      "bytes": 2123,
+      "sha256": "ee430984cc3fc66d3961845fc762317ec14d22f66f39d395d84cff74c8665995"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/execution_timing.py",
+      "bytes": 2956,
+      "sha256": "8b065580bc0d1f9b8caed25520250d2885ed8b1a46948e0855f0dae7048b70a0"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/exposure_days.json",
+      "bytes": 379,
+      "sha256": "034eb2b98893c82eedf86c13a06b4bb04ca50eeb53aab42dd50e7a5978fd4e97"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/exposure_days.py",
+      "bytes": 1199,
+      "sha256": "f5f1e9a24df58bb38064f728831b687c4dad87e77080fc60f2095fdfda9042f3"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_etf_flows.py",
+      "bytes": 2340,
+      "sha256": "da4a388a099a2e06aa76fa07379ee1f58bb7e7fe66d5d44896e5ce5e94b602e2"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_fina.py",
+      "bytes": 1491,
+      "sha256": "aee61e2adfdf856acf8223f59494999c166f53121c0c21a18b50ad005da02f4d"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_high_low.py",
+      "bytes": 3168,
+      "sha256": "3fe10eaec25fcc58d47a6e5ca940837001cc66ea21d90910a9d86eb39c14e5d0"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_indices.py",
+      "bytes": 1841,
+      "sha256": "f3461cca671096e79b8dd099ed0b0e854bee17b2e011c4096f2be1134baad001"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_star.py",
+      "bytes": 2188,
+      "sha256": "6c757badaf6dc85268eef74ce5bce4c955f3c649390ce934120826dc83799a4e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/fetch_star_etfs.py",
+      "bytes": 2722,
+      "sha256": "8b225ec8132e5d958aa41953385130cba3f5d9deede43b08279606e0977118e0"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/ic_by_year.json",
+      "bytes": 1369,
+      "sha256": "7a839f249ed64377aca8aebec48dec02a40d8111cb88d3b9f9cf0a80424ce543"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/ic_by_year.py",
+      "bytes": 1872,
+      "sha256": "b4bc5a2a0765f5f514ec0bb527607dfa256678b1cfc5034b005c3cfdc2049245"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/industry_rotation.json",
+      "bytes": 114196,
+      "sha256": "d5f93db5820292cd0f3328e1a9e5d786f383bd1442fca956370775b698627077"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/industry_rotation.py",
+      "bytes": 14319,
+      "sha256": "5b00a76075a8fcadd7e3e2a67a74daae2bb78fa794f1f4414d6b6398d90d3c52"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/late_entry.json",
+      "bytes": 1249,
+      "sha256": "8d986d1c86e48ee3fe11990020f57de072e81da0d495190e885fe88ec37401cd"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/late_entry.py",
+      "bytes": 4039,
+      "sha256": "124cf63cb3bd76f02676da87ab08a1d66de90cae477bd5c5a7f8ae3f9fa38d57"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/leader_lives.json",
+      "bytes": 13386,
+      "sha256": "c5f5e6dfdac762875802c3b5c0a6053a3866f1ddc29ae696097960fdacc4af55"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/leader_lives.py",
+      "bytes": 5634,
+      "sha256": "12a523b4922b944231e044bb7c13051f0f22b77fc2ea6aab3145fa93973bd166"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/market_checks.json",
+      "bytes": 17033,
+      "sha256": "b56dada954641c789d0c28536a97bcc8e88ca77fa7475d4d6cf78832e6bcfafa"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/market_checks.py",
+      "bytes": 13756,
+      "sha256": "867c33725b49c18fcbe6da20350c3b29865ffcf2028db6efa81daf7c8a6698d1"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/mix_small_growth.json",
+      "bytes": 2168,
+      "sha256": "1a66f1a1d74fc8a65ba0ec69e00c49e3b57c4a9120fa0c01f8bfb41997990e43"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/mix_small_growth.py",
+      "bytes": 2039,
+      "sha256": "961e9968773d1a36d3d8bea9404e1793c45072fd1e2a1dfce3777f6a4b5f1aa2"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/monthly_view.json",
+      "bytes": 11452,
+      "sha256": "ebe91be836fed8d7b9aba51469cb97dd8ab929239bd1e8bef77eef5cabaf29ef"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/monthly_view.py",
+      "bytes": 4323,
+      "sha256": "62dd0ba72509e92e6283a1ea245b2d0b35e18a777de90cad2f0c04d7882c95e9"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/names_count.json",
+      "bytes": 36981,
+      "sha256": "cc03fc329a3c3ab8a3e00b5023e09fb10efe26a8b99de4d9cfd926e8e27131ca"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/names_count.py",
+      "bytes": 5456,
+      "sha256": "bb3d120089d772f33433d77091425efdc454a2a353aa8c1ab75b747025e5709e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/outlier_check.json",
+      "bytes": 8249,
+      "sha256": "33fdd2c2b9264d65d91d3ce2aef27430414b72103661593422342861ee4b93ee"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/outlier_check.py",
+      "bytes": 2790,
+      "sha256": "05380bb40151e53b8032a93a9f90a35e6de8287d748efc99bd7e50e167a1d747"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/pool_order.json",
+      "bytes": 7122,
+      "sha256": "024db2aa00352b48b19563dbc1742f9fe491e76f5a34da3bfe8dd0e3a2ae428d"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/pool_order.py",
+      "bytes": 5174,
+      "sha256": "7e89bb0290d083f0e390a209e7c4973cb6c06d0f6e88b3e004e350c33b45b93a"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/random_decompose.json",
+      "bytes": 260,
+      "sha256": "c4577d8ec5466b065a16018ae2de4404620da22fff0703e40e7767d0892f3b65"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/random_decompose.py",
+      "bytes": 2315,
+      "sha256": "ab3c8cdaba1dcc6661dea6d28074591f34597b17c0e3db855e6fab4e0e919c0b"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/random_null.json",
+      "bytes": 6044,
+      "sha256": "39e064cd6fecf9e25b2f11a55f35fba48dcf288341f0b2a19a81284b96983015"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/random_null.py",
+      "bytes": 3227,
+      "sha256": "2f32b3c4e5b92aaa53892e2cae21bf01429885bc9e7927eab268eda01b64d673"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/real_account.json",
+      "bytes": 89994,
+      "sha256": "f6521cf2d9c0c3afd96c43f465b62235394dc81d33269ba1ec0640c12f187f6e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/real_account.py",
+      "bytes": 14170,
+      "sha256": "10a3f60f056bcbb2db6760ac9c538e280a709c30e132eff1dfd6aa922402bb1f"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/selection_value.json",
+      "bytes": 8848,
+      "sha256": "eee100e5184dee9a0412d3d6ad3c65bbb38c7c0441367e908999e5eb24105348"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/selection_value.py",
+      "bytes": 4670,
+      "sha256": "702e53dd5e09bf54e05c67c19a1d066792b1b2a2a6bf400bf828170bc9e32093"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_checks.json",
+      "bytes": 14129,
+      "sha256": "7d5623976c41fa9551e586a63cd65f8f901a5d8881d77ec3e0ec7d506af12198"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_checks.py",
+      "bytes": 4848,
+      "sha256": "8c034b8f3078f72df8dfd9a8d4b299a54fa10be0426555efdcd74f8d14b4456a"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_refill.json",
+      "bytes": 4544,
+      "sha256": "98e27064a38bfb640a2907bd3280e445ba1a5be27a0269ff5d1516cb9d3d604a"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_refill.py",
+      "bytes": 5751,
+      "sha256": "0fbb6bd01f6920f75908a6fd340d10387870eae295770d94f4a641ec0c0fc0cb"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_rules.json",
+      "bytes": 56160,
+      "sha256": "fc9378ba335cc303103a1126f323b17f7ba6aa54ed1e8ad027841917db17406c"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_rules.py",
+      "bytes": 13827,
+      "sha256": "eabb1efc568ae5e3e1866bb593a15da48cd9cfc6b59a6ad784597926edb092a3"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/sell_rules_20m.py",
+      "bytes": 5826,
+      "sha256": "a06adf9c945b509e9106859035ddf2b79de9fd1a2aa180fba6b6a339f8d3d196"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_account.json",
+      "bytes": 11708,
+      "sha256": "8e4749c5cd08337edc7c8daf9457a701538b499461a08e0f981b40e7e69e126c"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_account.py",
+      "bytes": 6039,
+      "sha256": "2174f2d713931a76c9dbb31deb96a45b4bd739a43f8be6dfe17a02b331772d7d"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_design.json",
+      "bytes": 295310,
+      "sha256": "09241c03161fac5f06d82cf008a270fdcb0b2401f630578610de834bab342f6a"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_design.py",
+      "bytes": 12436,
+      "sha256": "7410acabf15191de4437a9ba1a0d4d0c664a291481f9f82682d841482c7a3d1e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_rule.json",
+      "bytes": 15149,
+      "sha256": "7a71715a8ecb2f54fdc4e868345ae2f6f0cec6ef6bb14ac3eca1e6a299fb0f6f"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/small_cap_rule.py",
+      "bytes": 7296,
+      "sha256": "edbeed130706049f160e0a4f0a88a2801c52a5b914e3a51bb5fe68af9441e3ab"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/star_etf_compare.json",
+      "bytes": 35031,
+      "sha256": "ba763c2067f63aa964419862027d5c576fb665cba879ed2a1c427edfb6e45442"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/star_etf_compare.py",
+      "bytes": 5398,
+      "sha256": "4cd6351d2bb5377fdbc34b707808c7f8e3e08ad3aa810aec1d6f12c91a82c0d3"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/star_substitute.json",
+      "bytes": 11147,
+      "sha256": "e67a56074aefed07844c906f8e8842a0077444690a3d59603f93df6d37204275"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/star_substitute.py",
+      "bytes": 10351,
+      "sha256": "fa01ae92d401d393ad5809f2ef489280433acef884386d817912bb01b38d0eb5"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/style_rotation.json",
+      "bytes": 28719,
+      "sha256": "cd0c9ed997a84317a14adbcc256affd0009753e40ed02cd015d47582fc2b4911"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/style_rotation.py",
+      "bytes": 9926,
+      "sha256": "474933756e6c64e818e92e50e525c0774fbd32ba01283f92af8a2516f7726f58"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables.py",
+      "bytes": 8357,
+      "sha256": "69ce76dd202be5afe630b74fc28bf096e9d99fefc83a8fe0c08bdcea4adb45ae"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_account.py",
+      "bytes": 1723,
+      "sha256": "e469fbc6680734d9446ccf116e79921fc9e3bc392f381a2323acaf198d18c4d6"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_b1.py",
+      "bytes": 8967,
+      "sha256": "daf1e7971218f11b004afbe159c6edd893b18b0252c7a4162755bf881cc69dd1"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_design.py",
+      "bytes": 8444,
+      "sha256": "23a83fa1be33bf7e01f48dd83ac5c710b891ca83c13962f4328b217d087d21f2"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_etf.py",
+      "bytes": 2688,
+      "sha256": "01be04c0743db29fd2235344dae0c9a5fbd319b099e3737bfe43547946f23463"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_industry.py",
+      "bytes": 1852,
+      "sha256": "e730dcc89621d25a81090845e0598fb6049d3148e9ca1a95ba74ceec413626b1"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_leader.py",
+      "bytes": 1688,
+      "sha256": "4a697b5aabe5deec4bbed5d9816c2dac2d5948af49189d8120011d33cc04e466"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_market.py",
+      "bytes": 6435,
+      "sha256": "8d6378ab03379cfb40485ff2a15371d111640ff82a4b87beab9702737320fac4"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_monthly.py",
+      "bytes": 2721,
+      "sha256": "d5b8243bceaca0a87e757f7dfeeaa4203f42b78fe2b884356bdd99d0091f5deb"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_names.py",
+      "bytes": 1543,
+      "sha256": "c613006d2bd044c7ae5b36dff0bf38e61c616bb2a40f67db2872a8d8f8ed072e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_order.py",
+      "bytes": 1789,
+      "sha256": "b739b3b3bab6b6f1ee736f4d99e3fe06cb263fc1740c2d9ff836fe51204d7ef1"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_real.py",
+      "bytes": 5707,
+      "sha256": "30b000a85e936189a5f7ef34c6adc20583c326f4b91ae3eb1bdc069e1ab66fa6"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_refill.py",
+      "bytes": 3144,
+      "sha256": "54970150ac148a3d1704261112710f26ea341a5ff936292e65237e599c34534e"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_selection.py",
+      "bytes": 1663,
+      "sha256": "f0671676a7e81dec2a73845d7afb4293a79d10457223f7b986860cf703bc4997"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_sell.py",
+      "bytes": 8107,
+      "sha256": "654bc0a3757fd5f91df0b8f2647120422f20a40c76b98e6f7514a4451c4f4d27"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_star.py",
+      "bytes": 2404,
+      "sha256": "eddd7ab4110ba8737856a9643a77b5835befa87d98bcf5c6b2e4bc9e5f1e6033"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/tables_style.py",
+      "bytes": 3981,
+      "sha256": "b84b81036b164f47f90b9b3e0e7a9656956f55389df9ae7003f3fe2d6fb9706c"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/wiki_evidence.json",
+      "bytes": 73025,
+      "sha256": "def70fe8832764762b5fe8861e06bbc89439d34c21a5b381fa989eff8cfcca27"
+    },
+    {
+      "path": "docs/reviews/2026-10-30-wiki-evidence/wiki_evidence.py",
+      "bytes": 8999,
+      "sha256": "ad11f08c8253cf7969e2547b1cd0a8daf879cb445b73fbe9a43319324ebdcc11"
+    }
+  ]
+}

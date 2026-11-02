@@ -1,0 +1,338 @@
+{
+ "random": {
+  "runs": [
+   {
+    "cagr_pct": -4.74,
+    "max_drawdown_pct": -33.09,
+    "sharpe": -0.02,
+    "exposure_pct": 83.29
+   },
+   {
+    "cagr_pct": 7.65,
+    "max_drawdown_pct": -26.48,
+    "sharpe": 0.4,
+    "exposure_pct": 83.15
+   },
+   {
+    "cagr_pct": 5.22,
+    "max_drawdown_pct": -39.02,
+    "sharpe": 0.32,
+    "exposure_pct": 83.38
+   },
+   {
+    "cagr_pct": 15.01,
+    "max_drawdown_pct": -29.44,
+    "sharpe": 0.62,
+    "exposure_pct": 83.3
+   },
+   {
+    "cagr_pct": -4.11,
+    "max_drawdown_pct": -40.08,
+    "sharpe": 0.0,
+    "exposure_pct": 83.21
+   },
+   {
+    "cagr_pct": 5.46,
+    "max_drawdown_pct": -32.93,
+    "sharpe": 0.33,
+    "exposure_pct": 83.56
+   },
+   {
+    "cagr_pct": 5.37,
+    "max_drawdown_pct": -30.36,
+    "sharpe": 0.33,
+    "exposure_pct": 83.36
+   },
+   {
+    "cagr_pct": 1.7,
+    "max_drawdown_pct": -48.08,
+    "sharpe": 0.2,
+    "exposure_pct": 83.85
+   },
+   {
+    "cagr_pct": -1.31,
+    "max_drawdown_pct": -36.49,
+    "sharpe": 0.11,
+    "exposure_pct": 83.86
+   },
+   {
+    "cagr_pct": 10.18,
+    "max_drawdown_pct": -23.77,
+    "sharpe": 0.48,
+    "exposure_pct": 83.14
+   },
+   {
+    "cagr_pct": 4.47,
+    "max_drawdown_pct": -33.91,
+    "sharpe": 0.3,
+    "exposure_pct": 83.39
+   },
+   {
+    "cagr_pct": -8.06,
+    "max_drawdown_pct": -40.2,
+    "sharpe": -0.13,
+    "exposure_pct": 83.61
+   },
+   {
+    "cagr_pct": -3.62,
+    "max_drawdown_pct": -34.04,
+    "sharpe": 0.02,
+    "exposure_pct": 83.24
+   },
+   {
+    "cagr_pct": -9.32,
+    "max_drawdown_pct": -41.79,
+    "sharpe": -0.19,
+    "exposure_pct": 83.49
+   },
+   {
+    "cagr_pct": -6.48,
+    "max_drawdown_pct": -33.55,
+    "sharpe": -0.09,
+    "exposure_pct": 83.48
+   },
+   {
+    "cagr_pct": -11.61,
+    "max_drawdown_pct": -37.63,
+    "sharpe": -0.29,
+    "exposure_pct": 83.44
+   },
+   {
+    "cagr_pct": -20.86,
+    "max_drawdown_pct": -47.54,
+    "sharpe": -0.65,
+    "exposure_pct": 83.7
+   },
+   {
+    "cagr_pct": 7.0,
+    "max_drawdown_pct": -30.55,
+    "sharpe": 0.38,
+    "exposure_pct": 83.16
+   },
+   {
+    "cagr_pct": -3.17,
+    "max_drawdown_pct": -26.25,
+    "sharpe": 0.04,
+    "exposure_pct": 83.5
+   },
+   {
+    "cagr_pct": -0.96,
+    "max_drawdown_pct": -29.92,
+    "sharpe": 0.11,
+    "exposure_pct": 83.18
+   }
+  ],
+  "cagr_pct": {
+   "median": -1.14,
+   "min": -20.86,
+   "max": 15.01
+  },
+  "max_drawdown_pct": {
+   "median": -33.73,
+   "min": -48.08,
+   "max": -23.77
+  },
+  "sharpe": {
+   "median": 0.11,
+   "min": -0.65,
+   "max": 0.62
+  },
+  "exposure_pct": {
+   "median": 83.38,
+   "min": 83.14,
+   "max": 83.86
+  }
+ },
+ "random_offense": {
+  "runs": [
+   {
+    "cagr_pct": 5.57,
+    "max_drawdown_pct": -12.97,
+    "sharpe": 0.43,
+    "exposure_pct": 13.68
+   },
+   {
+    "cagr_pct": 18.21,
+    "max_drawdown_pct": -11.75,
+    "sharpe": 1.24,
+    "exposure_pct": 13.92
+   },
+   {
+    "cagr_pct": 17.79,
+    "max_drawdown_pct": -13.74,
+    "sharpe": 0.99,
+    "exposure_pct": 13.78
+   },
+   {
+    "cagr_pct": 15.82,
+    "max_drawdown_pct": -13.66,
+    "sharpe": 1.04,
+    "exposure_pct": 13.81
+   },
+   {
+    "cagr_pct": 12.96,
+    "max_drawdown_pct": -10.19,
+    "sharpe": 0.86,
+    "exposure_pct": 13.9
+   },
+   {
+    "cagr_pct": 15.63,
+    "max_drawdown_pct": -14.54,
+    "sharpe": 0.98,
+    "exposure_pct": 14.02
+   },
+   {
+    "cagr_pct": 8.35,
+    "max_drawdown_pct": -11.93,
+    "sharpe": 0.66,
+    "exposure_pct": 13.71
+   },
+   {
+    "cagr_pct": 8.77,
+    "max_drawdown_pct": -12.99,
+    "sharpe": 0.61,
+    "exposure_pct": 13.82
+   },
+   {
+    "cagr_pct": -0.66,
+    "max_drawdown_pct": -26.03,
+    "sharpe": 0.03,
+    "exposure_pct": 14.11
+   },
+   {
+    "cagr_pct": 7.39,
+    "max_drawdown_pct": -14.85,
+    "sharpe": 0.54,
+    "exposure_pct": 13.62
+   },
+   {
+    "cagr_pct": 1.62,
+    "max_drawdown_pct": -17.78,
+    "sharpe": 0.18,
+    "exposure_pct": 14.03
+   },
+   {
+    "cagr_pct": 2.82,
+    "max_drawdown_pct": -15.57,
+    "sharpe": 0.26,
+    "exposure_pct": 13.6
+   },
+   {
+    "cagr_pct": 9.81,
+    "max_drawdown_pct": -17.88,
+    "sharpe": 0.62,
+    "exposure_pct": 13.73
+   },
+   {
+    "cagr_pct": 5.77,
+    "max_drawdown_pct": -14.94,
+    "sharpe": 0.43,
+    "exposure_pct": 13.86
+   },
+   {
+    "cagr_pct": 3.26,
+    "max_drawdown_pct": -18.29,
+    "sharpe": 0.28,
+    "exposure_pct": 13.78
+   },
+   {
+    "cagr_pct": 5.52,
+    "max_drawdown_pct": -15.03,
+    "sharpe": 0.41,
+    "exposure_pct": 13.58
+   },
+   {
+    "cagr_pct": 0.85,
+    "max_drawdown_pct": -17.45,
+    "sharpe": 0.13,
+    "exposure_pct": 13.83
+   },
+   {
+    "cagr_pct": 7.95,
+    "max_drawdown_pct": -13.92,
+    "sharpe": 0.54,
+    "exposure_pct": 13.97
+   },
+   {
+    "cagr_pct": 5.39,
+    "max_drawdown_pct": -18.34,
+    "sharpe": 0.41,
+    "exposure_pct": 13.66
+   },
+   {
+    "cagr_pct": 8.84,
+    "max_drawdown_pct": -13.83,
+    "sharpe": 0.61,
+    "exposure_pct": 13.97
+   }
+  ],
+  "cagr_pct": {
+   "median": 7.67,
+   "min": -0.66,
+   "max": 18.21
+  },
+  "max_drawdown_pct": {
+   "median": -14.7,
+   "min": -26.03,
+   "max": -10.19
+  },
+  "sharpe": {
+   "median": 0.54,
+   "min": 0.03,
+   "max": 1.24
+  },
+  "exposure_pct": {
+   "median": 13.82,
+   "min": 13.58,
+   "max": 14.11
+  }
+ },
+ "equal_weight_daily": {
+  "cagr_pct": 17.24,
+  "max_drawdown_pct": -21.43,
+  "sharpe": 0.73
+ },
+ "frozen": {
+  "alpha": {
+   "cagr_pct": 0.61,
+   "max_drawdown_pct": -39.21,
+   "sharpe": 0.15,
+   "exposure_pct": 66.85
+  },
+  "alpha_regime": {
+   "cagr_pct": 1.7,
+   "max_drawdown_pct": -36.26,
+   "sharpe": 0.19,
+   "exposure_pct": 53.59
+  },
+  "beta": {
+   "cagr_pct": 13.42,
+   "max_drawdown_pct": -45.24,
+   "sharpe": 0.5,
+   "exposure_pct": 80.56
+  },
+  "beta_offense": {
+   "cagr_pct": 11.44,
+   "max_drawdown_pct": -17.94,
+   "sharpe": 0.57,
+   "exposure_pct": 13.63
+  },
+  "stance": {
+   "cagr_pct": -6.28,
+   "max_drawdown_pct": -30.79,
+   "sharpe": -0.1,
+   "exposure_pct": 57.57
+  },
+  "live_rule": {
+   "cagr_pct": -3.27,
+   "max_drawdown_pct": -39.2,
+   "sharpe": 0.01,
+   "exposure_pct": 41.82
+  },
+  "index": {
+   "cagr_pct": 6.7,
+   "max_drawdown_pct": -24.17,
+   "sharpe": 0.41
+  }
+ }
+}

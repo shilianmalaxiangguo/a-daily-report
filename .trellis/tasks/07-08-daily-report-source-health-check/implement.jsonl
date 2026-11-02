@@ -1,6 +1,0 @@
-{"file": "wiki/运行契约/日报数据源契约.md", "reason": "日报数据源优先级、关键数据缺失处理和凭证边界"}
-{"file": "openspec/specs/architecture/error-handling.md", "reason": "运行失败、停止生成和可降级错误处理契约"}
-{"file": "openspec/specs/architecture/observability.md", "reason": "诊断字段、耗时、状态和机器可读日志契约"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "PostgreSQL 和运行缓存边界"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "日报关键事实、测试要求和质量约束"}
-{"file": ".trellis/tasks/07-08-daily-report-source-health-check/research/source-health-evidence.md", "reason": "现有检查能力、凭证名和数据源证据"}

@@ -1,6 +1,0 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `.generated/venv-py314/bin/python3.14 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend task entry and pre-development checklist"}
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality and daily-report action contracts"}
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Daily report evidence and replay boundaries"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search before introducing new logic"}
-{"file": ".trellis/tasks/06-04-event-title-evidence-classification/research/calendar-source-evidence.md", "reason": "Calendar rows lack source evidence; live search is follow-up"}

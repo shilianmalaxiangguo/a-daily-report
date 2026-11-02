@@ -1,5 +1,0 @@
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "约束 PostgreSQL 主事实源、缺失处理和禁止历史 Markdown/JSON 回填"}
-{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "约束历史决策展示与明日决策隔离"}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "约束 Bear HTML 表格、响应式与视觉核验"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核对数据库到入口、HTML 与验收的数据流"}
-{"file": ".trellis/tasks/07-21-bear-tomorrow-action-calendar/research/postgres-calendar-source-audit.md", "reason": "实现所需数据库表、日期、收益和缺失口径"}

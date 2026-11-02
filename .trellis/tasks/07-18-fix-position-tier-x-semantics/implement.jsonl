@@ -1,6 +1,0 @@
-{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Daily report decision, position, old-position, and exposure contracts"}
-{"file":".trellis/tasks/07-18-fix-position-tier-x-semantics/research/root-cause.md","reason":"Verified root cause and required prevention mechanisms"}
-{"file":"scripts/report/position_tier_contract.py","reason":"Canonical 0/1x/2x and 0/50/100 conversion implementation"}
-{"file":"scripts/report/runtime.py","reason":"position_tier_exposure.v2 production and account exposure cap"}
-{"file":"scripts/report/front_page_v2_renderer.py","reason":"Current increment rendering without replaying B1 or replacing original window and cancellation conditions"}
-{"file":"scripts/knowledge/llm_wiki_router.py","reason":"planned total tier and current increment fact mapping"}

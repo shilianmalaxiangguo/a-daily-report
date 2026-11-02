@@ -1,5 +1,0 @@
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Python 研究模块与测试的提交前检查"}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"HTML 内容、响应式与可访问性检查"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"冻结事实、计算结果与报告展示的一致性检查"}
-{"file":".trellis/tasks/archive/2026-07/07-11-quant-pressure-replay-calibration/research/findings.md","reason":"与上一轮研究边界和禁止推断保持一致"}
-{"file":".trellis/tasks/07-11-07-11-quant-pressure-one-minute-window-review/research/findings.md","reason":"核对本轮事实、公式、窗口和报告结论"}

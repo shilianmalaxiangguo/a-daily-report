@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Quality standards for report wording and safe helper reuse"}
-{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Check that volume wording and quant environment remain evidence-backed"}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"This fix touches runtime data, market-analysis nodes, and rendered appendix output"}

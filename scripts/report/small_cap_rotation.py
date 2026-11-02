@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from report.sector_reading_history import evidence_hash
+from report.fact_utils import evidence_hash
 
 SCHEMA = 'small_cap_plan.v7'
 SCHEMAS = ('small_cap_plan.v1', 'small_cap_plan.v2', 'small_cap_plan.v3', 'small_cap_plan.v4', 'small_cap_plan.v5',
@@ -417,14 +417,18 @@ def validate_plan(value, target_date):
 
 
 def refresh_plan_inputs(pro, target_date, *, history=HISTORY):
-    """Extend the trading calendar (45 days past the target, from the exchange's published calendar) and the two
-    latest reporting periods in the local caches."""
+    """Extend the calendar and refresh four reporting periods.
+
+    The latest two ended quarters may not yet be announced at the decision day;
+    the previous two preserve the latest information then available on a cold cache.
+    """
     from datetime import datetime
     from zoneinfo import ZoneInfo
     from report.market_returns import _pages
+    history.mkdir(parents=True, exist_ok=True)
     path = history / 'calendar.json'
-    calendar = json.loads(path.read_text(encoding='utf-8'))
-    last = max(r['cal_date'] for r in calendar['rows'])
+    calendar = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {'rows': []}
+    last = max((r['cal_date'] for r in calendar['rows']), default=ANCHOR.replace('-', ''))
     ahead = (date.fromisoformat(target_date) + timedelta(days=45)).strftime('%Y%m%d')
     if last < (date.fromisoformat(target_date) + timedelta(days=30)).strftime('%Y%m%d'):
         known = {r['cal_date'] for r in calendar['rows']}
@@ -437,7 +441,7 @@ def refresh_plan_inputs(pro, target_date, *, history=HISTORY):
     fina = json.loads(fina_path.read_text(encoding='utf-8')) if fina_path.is_file() else {'periods': {}}
     day = date.fromisoformat(target_date)
     quarter_ends = sorted({f'{y}{md}' for y in (day.year - 1, day.year) for md in ('0331', '0630', '0930', '1231')
-                           if f'{y}{md}' < target_date.replace('-', '')})[-2:]
+                           if f'{y}{md}' < target_date.replace('-', '')})[-4:]
     for period in quarter_ends:
         fina['periods'][period] = _pages(pro, 'fina_indicator_vip', period=period,
                                          fields='ts_code,ann_date,end_date,q_profit_yoy,q_sales_yoy,netprofit_yoy')
@@ -502,7 +506,7 @@ def render_plan(soup, plan, backtest=None):
     skipped = [p for p in plan.get('all_boards') or [] if p['code'].startswith(BARRED)]
     if skipped:
         section.append(text('p', f"按全部板块排，前{len(plan['all_boards'])}名里有科创板的{'、'.join(p['name'] for p in skipped)}；你的账户买不了科创板，"
-                                 '已跳过、按顺序往下取。用科创板指数基金顶替的做法检验过，见 Wiki 回测与检验证据第七轮，没有采用。', 'dash-note'))
+                                 '已跳过、按顺序往下取。用科创板指数基金顶替的做法检验过，相关历史比较已归档，当前不采用。', 'dash-note'))
     elif plan.get('all_boards') is not None:
         section.append(text('p', f"按全部板块排的前{len(plan['all_boards'])}名里没有科创板股票，名单与不限板块时相同。", 'dash-note'))
     source = {'published': f"名单取自{plan.get('list_from') or plan['decision_date']}发布的日报，整期不变。",
