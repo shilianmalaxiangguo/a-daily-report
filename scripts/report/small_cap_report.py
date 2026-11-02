@@ -130,7 +130,7 @@ def collect(day, *, root=ROOT, pro=None, historical=False):
     return validate_data({'reading_market_returns': market, 'reading_small_cap_plan': plan}, day)
 
 
-def render(data, day, *, source):
+def render(data, day, *, source, tracking=None):
     data = validate_data(data, day)
     soup = BeautifulSoup('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><main></main></body></html>', 'html.parser')
     title = soup.new_tag('title'); title.string = f'{day} 小盘轮换 v0.3'; soup.head.append(title)
@@ -140,15 +140,24 @@ def render(data, day, *, source):
     header.append(BeautifulSoup(f'<h1>{day} 小盘轮换 v0.3</h1><p>当前执行阅读页 · 5只名单与3只备选 · 每20交易日换手</p>', 'html.parser'))
     main.append(header)
     limits = soup.new_tag('p', attrs={'class': 'limit'})
-    limits.string = '账户边界：下表为每期重新起算的1万元单期模拟，不是连续账户或实际成交。尚未承接真实旧仓、现金和原买价，也未实现跨期0.7底线卖出。'
+    limits.string = ('连续模拟：从2026-11-02开盘起按指定五只等额跟踪，原买价、现金和待卖记录逐日延续；不需要接入真实账户。'
+                     if tracking else '账户边界：下表为每期重新起算的1万元单期模拟，不是连续账户或实际成交。尚未承接真实旧仓、现金和原买价，也未实现跨期0.7底线卖出。')
     main.append(limits)
-    main.append(render_plan(soup, data['reading_small_cap_plan']))
+    if tracking:
+        from report.small_cap_tracking import render_tracking
+        main.append(BeautifulSoup(render_tracking(tracking), 'html.parser'))
+    main.append(render_plan(soup, data['reading_small_cap_plan'], tracked=bool(tracking)))
     note = soup.new_tag('p', attrs={'class': 'source'})
     note.string = f'事实来源：{source}；行情取得时间：{data["reading_market_returns"]["retrieved_at"]}；小盘计划指纹：{data["reading_small_cap_plan"]["artifact_hash"]}。回测不代表未来收益。'
     main.append(note)
-    payload = soup.new_tag('script', attrs={'id': 'small-cap-plan', 'type': 'application/json'})
-    payload.string = json.dumps(data['reading_small_cap_plan'], ensure_ascii=False, allow_nan=False).replace('<', '\\u003c')
-    main.append(payload)
+    if not tracking:
+        payload = soup.new_tag('script', attrs={'id': 'small-cap-plan', 'type': 'application/json'})
+        payload.string = json.dumps(data['reading_small_cap_plan'], ensure_ascii=False, allow_nan=False).replace('<', '\\u003c')
+        main.append(payload)
+    if tracking:
+        payload = soup.new_tag('script', attrs={'id': 'small-cap-tracking', 'type': 'application/json'})
+        payload.string = json.dumps(tracking['record'], ensure_ascii=False, allow_nan=False).replace('<', chr(92) + 'u003c')
+        main.append(payload)
     return str(soup)
 
 

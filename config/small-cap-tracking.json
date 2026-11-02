@@ -1,0 +1,12 @@
+{
+  "schema": "small_cap_tracking_seed.v1",
+  "start_date": "2026-11-02",
+  "initial_nav": 1.0,
+  "positions": [
+    {"code": "605050.SH", "name": "福然德", "weight": 0.2},
+    {"code": "600834.SH", "name": "申通地铁", "weight": 0.2},
+    {"code": "603569.SH", "name": "长久物流", "weight": 0.2},
+    {"code": "600283.SH", "name": "钱江水利", "weight": 0.2},
+    {"code": "601368.SH", "name": "绿城水务", "weight": 0.2}
+  ]
+}

@@ -6,7 +6,7 @@ on the main board or ChiNext whose latest quarter announced on or before that da
 shows revenue and profit growth above zero; the five with the lowest turnover are bought at the next open (a name
 opening at the limit is skipped for the next one) and held to the close of the next decision day. Since v0.3
 (2026-10-31) a name that closes 10% or more above the price paid is sold at the next open and the money waits for
-the next rotation (docs/reviews/2026-10-30-wiki-evidence/sell_rules.py, round sixteen); the same plan without that
+the next rotation (wiki/交易思想/小盘轮换策略.md); the same plan without that
 rule is kept beside it. Net value is reported against ChiNext, the user's anchor, and the CSI All Share.
 """
 from datetime import date, timedelta
@@ -456,14 +456,14 @@ def _pct(value):
     return '—' if value is None else f'{value:+.2f}%'
 
 
-def render_plan(soup, plan, backtest=None):
+def render_plan(soup, plan, backtest=None, *, tracked=False):
     def text(tag, content, cls=None):
         node = soup.new_tag(tag, attrs={'class': cls} if cls else {})
         node.string = content
         return node
 
     section = soup.new_tag('section', attrs={'id': 'daily-plan', 'class': 'sector-daily-section dash-section'})
-    section.append(text('h2', '执行计划：小盘轮换'))
+    section.append(text('h2', '选股依据与换手日历（非模拟持仓）' if tracked else '执行计划：小盘轮换'))
     label = day_label(plan.get('next_session'))
     upcoming = f'下一个交易日{label}' if label else '下一个交易日'
     if plan['sessions_since'] == 0:
@@ -476,9 +476,17 @@ def render_plan(soup, plan, backtest=None):
                   f"{upcoming}是第{plan['sessions_since'] + 1}个；{switch}。" + (
                       f"期间不补买，名单每天显示的都是这一期定下的那{len(plan['picks'])}只；持有的股票收盘比买价高10%，下一个交易日开盘卖，卖出的钱留到下一个换手日。"
                       if plan.get('take_profit') else f"期间不加不减，名单每天显示的都是这一期定下的那{len(plan['picks'])}只。"))
+    if tracked:
+        timing = (f"今天收盘已经确定新名单，{plan.get('next_session') or '下一交易日'}开盘换股；"
+                  if plan['sessions_since'] == 0 else
+                  f"下次{plan.get('next_decision') or '待核实'}收盘定名单，{plan.get('next_switch') or '待核实'}开盘换股；")
+        status = (f"以下为{plan['decision_date']}收盘的选股排序，不是上面的连续模拟持仓。"
+                  '初始持仓按用户指定五只，不以一万元整手预算或今天的新排名替换。'
+                  + timing +
+                  '只有换手日才按新名单与原持仓比较，仍在前五的保留原买价。')
     section.append(text('p', status, 'dash-takeaway'))
     due = [o for o in (plan.get('account') or {}).get('orders') or [] if o.get('status') == 'due']
-    if due and plan['sessions_since']:
+    if not tracked and due and plan['sessions_since']:
         names = '、'.join(f"{o['name']}（{_pct(o['gain_pct'])}）" for o in due)
         section.append(text('p', f"单期模拟今天收盘到了止盈线：{names}；若真实持仓和原始买价一致，规则是在{upcoming}开盘卖，钱留到下一个换手日。", 'dash-takeaway dash-plan-due'))
     if not plan['picks']:
@@ -514,17 +522,17 @@ def render_plan(soup, plan, backtest=None):
     if plan.get('list_source') in source:
         section.append(text('p', source[plan['list_source']], 'dash-note'))
     holding = plan.get('holding')
-    if holding:
+    if holding and not tracked:
         pool = (f"股票池（{holding['pool_size']}只等权）{_pct(holding['pool_pct'])}、中证2000{_pct(holding.get('csi2000_pct'))}、"
                 if 'pool_pct' in holding else '')
         shadow = f"，不止盈为{_pct(holding['basket_hold_pct'])}" if holding.get('basket_hold_pct') is not None else ''
         section.append(text('p', f"本期等权模拟买入（{holding['entry_date']}开盘）：{'、'.join(holding['names'])}；到今天收盘合计{_pct(holding['basket_pct'])}"
                              f"（{'按止盈10%，' if plan.get('take_profit') else ''}已扣买入成本{shadow}），同期{pool}创业板指{_pct(holding['chinext_pct'])}、中证全指{_pct(holding['csi_all_pct'])}。"))
-    if account := plan.get('account'):
+    if not tracked and (account := plan.get('account')):
         section.append(_account_block(soup, text, plan, account))
-    if fresh := plan.get('fresh'):
+    if not tracked and (fresh := plan.get('fresh')):
         section.append(_fresh_block(soup, text, plan, fresh))
-    for item in plan['previous']:
+    for item in ([] if tracked else plan['previous']):
         shadow = f"，不止盈为{_pct(item['basket_hold_pct'])}" if item.get('basket_hold_pct') is not None else ''
         section.append(text('p', f"按规则回算的上一期（{item['decision_date']}定名单，持有到{item['end_date']}）：{'、'.join(item['names'])}，"
                              f"合计{_pct(item['basket_pct'])}{f'（按止盈10%{shadow}）' if plan.get('take_profit') else ''}，同期创业板指{_pct(item['chinext_pct'])}、中证全指{_pct(item['csi_all_pct'])}。"
@@ -535,12 +543,14 @@ def render_plan(soup, plan, backtest=None):
     section.append(text('small', f"规则：每{plan['cycle']}个交易日一次（从{plan['anchor']}起数），在非ST、上市满120天的股票里，取近20日日均成交额最小的五分之一"
                          f"（本期{plan['cold_basket']}只），只留最近一季收入和利润同比都为正的{('、在' + plan['boards'] + '里') if plan.get('boards') else ''}（{plan['qualified']}只），按成交额从小到大取前{len(plan['picks']) or NAMES}只；"
                          '定名单那天收盘后出新名单，下一个交易日开盘卖出不在新名单里的、买入新进的，名单里没变的不动；'
-                         f"怎么买：用来做这个计划的钱分成{len(plan['picks']) or NAMES}份，按名单顺序买，每只用“现金÷还空着的名额”；"
-                         '一手（100股）的钱超过这一份就跳过，用下一只补；已经拿着、还在名单里的不动，也不补到等额。'
+                         + ('当前连续跟踪按等额碎股模拟；换手时空名额用“现金÷剩余名额”，最多五只名单与三只备选，买不到则保留现金；'
+                            if tracked else f"怎么买：用来做这个计划的钱分成{len(plan['picks']) or NAMES}份，按名单顺序买，每只用“现金÷还空着的名额”；"
+                            '一手（100股）的钱超过这一份就跳过，用下一只补；已经拿着、还在名单里的不动，也不补到等额。')
                          + ('持有期间：收盘比买价高10%（含分红送转），下一个交易日开盘卖，卖出的钱留到下一个换手日，这一期不再买回；'
                             '不设止损，被戴帽也不单独卖，到换手日自然换掉；' if plan.get('take_profit') else '持有期间不设止损；')
                          + f"整个账户净值跌破{FLOOR}就全部停下重新检验。"
-                         '完整比较见独立回测报告；日报单期演示不代表连续账户或真实成交。'))
+                         + ('连续跟踪、冻结回测与真实成交各有独立口径，不把回测收益当作未来预期。' if tracked else
+                            '完整比较见独立回测报告；日报单期演示不代表连续账户或真实成交。')))
     return section
 
 

@@ -7,6 +7,7 @@ import time
 from zoneinfo import ZoneInfo
 from report.fact_utils import _target_date
 from report.small_cap_report import ROOT, collect, render, save_snapshot, selected_snapshot, write_new
+from report.small_cap_tracking import prepare, save as save_tracking
 
 
 def main(argv=None, *, root=ROOT):
@@ -38,6 +39,11 @@ def main(argv=None, *, root=ROOT):
         else:
             data = collect(day, root=root, historical=True)
             source = '按目标日重新采集；股票资料以查询时版本为准'
+        if root == ROOT and not (root / 'config/small-cap-tracking.json').is_file():
+            raise ValueError('连续模拟起始配置缺失，停止生成；不退回单期演示')
+        tracking = prepare(data, day, root=root,
+                           allow_collect=not args.replay and (day == today.isoformat() or args.historical_rebuild),
+                           snapshot_source='rebuilt' if args.historical_rebuild else args.snapshot_source)
         if args.no_report:
             print(f'{day} 小盘事实与计划校验通过；未保存产物')
             return 0
@@ -45,11 +51,13 @@ def main(argv=None, *, root=ROOT):
             source = str(source.relative_to(root))
         else:
             save_snapshot(data, day, root=root, historical=args.historical_rebuild)
+        if tracking:
+            save_tracking(tracking, root)
         replay = args.replay or args.historical_rebuild or day != today.isoformat()
         directory = root / ('reports/replay/small-cap' if replay else 'reports/small-cap')
         suffix = f'_{args.snapshot_source}_replay' if args.replay else '_rebuilt' if args.historical_rebuild else ''
         path = directory / f'{day}_小盘轮换{suffix}.html'
-        write_new(path, render(data, day, source=source))
+        write_new(path, render(data, day, source=source, tracking=tracking))
         print(f'小盘日报：{path}')
         return 0
     finally:

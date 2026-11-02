@@ -6,6 +6,8 @@
 
 新当日事实写 snapshots/small-cap/；显式历史重新采集写其 rebuilt/ 子目录。原正式、原replay快照不改写。文件先完整写好再发布；同名内容不一致停止覆盖。
 
-当前日报为 reports/small-cap/<date>_小盘轮换.html；回放在 reports/replay/small-cap/，名称带来源。页面只显示冻结小盘计划、单期模拟及模型边界，不读取历史HTML，也不重建其他策略。
+当前日报为 reports/small-cap/<date>_小盘轮换.html；回放在 reports/replay/small-cap/，名称带来源。2026-11-02起页面显示连续模拟与选股依据，不显示旧单期整手或中途入场表；起点前仍按原单期模型阅读。不读取历史HTML，也不重建其他策略。
+
+连续模拟起点与五只配置在 config/small-cap-tracking.json；同日成交条件与连续记录单独保存在 snapshots/small-cap/tracking/。与所选行情、计划及前日记录逐项关联，不跨来源混用。缺少前一交易日记录停止，不重置净值；同名不同内容不覆盖。离线不能补采涨跌停或停牌事实。详见 docs/small-cap-tracking.md。
 
 未有v0.3计划的旧快照不能靠旧买卖建议补齐。历史重新采集只接受显式 --historical-rebuild，股票资料按查询时版本留痕，不能声称历史资料完全还原。

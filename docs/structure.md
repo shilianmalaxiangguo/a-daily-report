@@ -4,12 +4,14 @@
 a-daily-report/
 ├── README.md / AGENTS.md / SKILL.md / CONTEXT.md  当前入口和约定
 ├── requirements.txt                             Python 3.14依赖
+├── config/small-cap-tracking.json                指定五只与2026-11-02起点
 ├── scripts/
 │   ├── daily_report_current.py                  唯一日常入口
 │   ├── daily_report_entry_demo.py               旧命令的短跳转
 │   ├── alpha_beta_research.py                   显式备用研究入口
 │   ├── report/
 │   │   ├── small_cap_rotation.py                选股、卖出、单期模拟
+│   │   ├── small_cap_tracking.py                连续模拟、现金与原买价
 │   │   ├── small_cap_report.py                  必需采集、快照、桌面页面
 │   │   ├── market_returns.py                    按日期采集与验证全市场行情
 │   │   ├── small_cap_history.py                 行情转计算矩阵
@@ -31,9 +33,9 @@ a-daily-report/
 
 ## 每次生成实际经过什么
 
-`daily_report_current → small_cap_report → market_returns / small_cap_rotation → 小盘HTML`。
+`daily_report_current → small_cap_report / small_cap_tracking → market_returns / small_cap_rotation → 小盘HTML`。
 
-联网只需交易日历、个股日线、股票基础资料、目标日ST、季度财报、中证全指及两条对照指数。离线只读所选JSON，不读旧HTML，不运行旧策略。阿尔法／贝塔在独立命令中显式调用，共用行情校验，不反向进入小盘。
+联网只需交易日历、个股日线、股票基础资料、目标日ST、季度财报、中证全指及两条对照指数；连续模拟增加同日涨跌停价格与停牌。离线只读所选JSON与连续记录，不读旧HTML，不运行旧策略。阿尔法／贝塔在独立命令中显式调用，共用行情校验，不反向进入小盘。
 
 ## 产物放在哪里
 
@@ -42,6 +44,7 @@ a-daily-report/
 | `reports/small-cap/` | 新的小盘桌面日报 |
 | `reports/replay/small-cap/` | 按来源分别命名的离线阅读页 |
 | `snapshots/small-cap/` | 新小盘快照；只含当前行情和计划 |
+| `snapshots/small-cap/tracking/` | 每交易日连续模拟记录；facts子目录保存同日成交条件 |
 | `snapshots/small-cap/rebuilt/` | 显式历史采集产生的独立快照 |
 | `reports/research/` | 冻结回测比较和备用研究结果 |
 | 旧 `reports/`、`snapshots/` | 原件继续保留，不覆盖 |
