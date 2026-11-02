@@ -1,111 +1,91 @@
 # Report Contract
 
-This reference is for report quality judgment. It is not a command manual.
+Updated: 2026-11-01. This is the current report contract, not a trading rulebook. The latest user instruction takes precedence.
 
-## User-Facing Contract
+## Purpose and output
 
-- Say the conclusion first, then explain why.
-- Keep the front page usable within two minutes.
-- Make the action contract explicit: what to do, what confirms it, and what to do when conditions fail.
-- Treat data and news are raw material as the first principle: the report edge is the processing layer that converts common facts into trend-chain position, relative-price feedback, angle/amplitude/speed change, participation windows, missed-entry plans, and cancellation rules.
-- The daily report is tomorrow's rehearsal. Every high-conviction path should be a designed scenario, not an after-the-fact explanation.
-- Treat `没有永远是好的股，好的只有好的周期` as the trade-case soul: a stock can only be called good while its current cycle is good; when cycle evidence fades, the report must stop holding the "good stock" label and move to reduce, exit, or avoid.
-- Treat replay markdown as the acceptance surface for report-output defects.
-- Do not hide missing data behind fake precision such as `0.00%`.
-- Do not repeat empty-position or no-trade conclusions.
+- The current Wiki is authoritative. The page opens with the frozen small-cap rotation v0.3 plan, followed by chart-first factual sector and market background. No old trading suggestion may appear when a current plan is unavailable.
+- The original sector report is the content and interaction baseline. The verbose full report is retired from daily generation, not a reason to strip the sector report down to an empty factual shell.
+- Same-window stock, sector and market charts remain factual comparisons. They do not filter the small-cap list or produce additional buy/sell instructions.
+- Do not enforce a fixed hypothesis count, a fixed watchlist, or a report-based review schedule; the new comparison is a dated reading aid, not an automatic order layer.
+- A sector ranking describes the covered sample, not all opportunities. A single-stock opportunity need not wait for sector approval. A leading sector is not automatically the next buy.
+- No investment school is permanently preferred or excluded by name. Only small-cap rotation is active in this task; other old methods are historical research.
+- A reported gain or loss from one investor or one security is a case to verify, not proof of a whole investment school. Preserve source, holding period, loss definition and what was knowable at the time before using it as evidence.
+- Useful facts, counter-evidence, source dates, sample scope, and historical series can be rescued from the old full report. Long repetitive theory, empty modules, and repeated account conclusions do not deserve space by default.
+- The old full report is read-only historical material. The current entry does not recalculate or save it; do not promote its operating text to current advice. The old short consensus generator is stopped.
 
-## Anti-Noise And Price-Action Boundary
+## Content retained from the sector baseline
 
-- Do not add external simulation, multi-agent, or free-form prediction language to the report front page.
-- Do not use theory words such as `能量学`, `能量释放`, or `群体行为共振` as the reason for buy, add, or upgrade actions.
-- Experience is allowed only after fieldization: prefer `上涨斜率`, `回撤比例`, `突破后承接`, `加速后衰竭`, `波动收敛`, and `板块内扩散强度`.
-- Price-action fields may support candidate qualification, failure conditions, and unique action wording, but they must not bypass mainline confirmation, entry permission, 60分钟 confirmation, or 30分钟 stop rules.
-- The energy model may guide research only after fieldization: 震荡=能量聚集, 行情=能量释放, but report decisions must use 上涨角度, 下跌角度, 上涨幅度, 调整幅度, 速度变化, and 加速后衰竭 instead of free theory prose.
-- T+1避亏 is mandatory for trade-case review: if a stock already shows angle weakening, amplitude expansion, or speed imbalance at the report-date close, the report must say 不介入, reduce, or exit before the next trading day. 津药药业 is the regression sample: 2026-04-08 should flag no-entry/exit risk before the 2026-04-09 loss.
-- Newton iteration decision discipline is allowed only as an operating method: begin with a coarse 1.0 judgment, use option sample feedback to revise it, and do not wait for a perfect answer. User-facing decisions must still use fieldized decision fields such as 强量转弱, 缩量冲高, 放量下杀, 上涨斜率放缓, 回撤比例, 收盘位置, and T+1 next-day action; do not turn Newton iteration into explanatory theory prose.
+- Current collection is concept-first: explicitly request A-share `ths_index(type=N)` for dated rankings, history and heat. Keep industry `type=I` as separate background and legacy facts. Exclude explicitly named sample/constituent baskets with an exclusion record, not a code-prefix whitelist. A label such as physical AI is not an independently verified price index mapping.
+- Replace the current concept page's old relay with seven trading sessions of `moneyflow_cnt_ths.net_amount` in 亿元. Keep signed raw amounts, zero versus missing, request dates, real retrieval times, service host and coverage. Concepts overlap; do not sum them as independent market money or infer bilateral sector transfers. Retain old raw relay records and legacy historical pages.
+- Keep monthly relative comparisons, selected heat rows, searchable selected-sector/date controls, and price/drawdown views. Preserve every recorded row in frozen sources, not as a full browser payload. Show breadth only when there are actual breadth facts; all-empty metrics and charts do not occupy the reading surface. Link concept net cells to exact-code price facts and dates; missing exact-name focus paths stay missing. Current directory/membership lookups do not establish historical membership.
+- Disambiguate same-name indices by code in selectors and legends. Disclose exact same-window paths and query-time member sets as repeated evidence, not permanent identity equivalence. Keep original Top50 values, connect only verified same-scope points, and leave unverified scope points unconnected.
+- New Top50 collection reconstructs the last 25 actual open sessions from raw daily amounts: top 50 actively traded SH/SZ A shares divided by the same SH/SZ sample, excluding Beijing, B shares and funds. Align `399006.SZ` by exact date on a separate axis. Retain raw inputs, units, samples and actual retrieval times for recomputation; repairs live in a selected replay snapshot, not in overwritten official history. Missing days stay null, not silently replaced by older snapshots.
+- Search supports names and codes with keyboard selection; dates support previous/next sessions and a time slider. First-screen priorities and chart selections link to exact-code details. Heat tooltips remain outside the hovered cell, and a persistent outline identifies the selected cell. Do not render full tables, hashes, source inventories or numeric disclosures on the reading page. Preserve their frozen facts and machine-readable identities for validation. Sector and date choices are accessible tag-style button groups; names are prominent and recent performance secondary.
+- Monthly comparisons default to the union of the five positive five-session leaders and five recent upward turns (positive last three sessions after a nonpositive preceding three), with independent views for both sets. This is a disclosed reading filter, not a new trade signal. The browser also keeps heat-selected paths, real current/prior attention, alternatives, current leader, covered member-comparison paths and paths with actual breadth facts. Search is explicitly limited to those selected paths; every original path remains in frozen sources. Strength, participation breadth, crowding evidence and expectation/price response are separate questions; visibility of a trend alone proves neither a buy nor a coming liquidation.
+- Covered-member reading starts with stock/sector/market paths over the same dated window. Keep sector/index versus member medians (including removal of the highest five-session return), stock-versus-sector differences, daily outperformance and within-window drawdown as distinct comparisons. Stock selection is directly clickable and keyboard-accessible; show absolute loss even when relative return is positive. Latest-only membership lookups retain their query date and are explicitly retrospective, not historical constituents or historical-node rankings. No composite buy score is inferred.
+- Default to twenty daily returns when dated member history is available; otherwise disclose the five-session limit. A sixty-session comparison requires sixty returns plus an aligned starting date, not sixty price observations mislabeled as sixty returns. Keep unavailable windows disabled; the existing long market/sector background remains. Preserve the frozen `sector_member_comparison.v1` projection and `reading_choice`; store additional raw prices separately in `reading_member_history`, bound to the original member and index-input fingerprints. Fresh collection may request it; replay only validates it offline. HTML contains daily-return arrays, not duplicate raw prices or full member histories.
+- Add stock/sector compounded returns over the same five daily-return dates and their difference in percentage points; missing inputs stay missing. State price-basis limits. A historical difference is not identified alpha, and an index return is not a tradable ETF/basket net return without verified mapping, weights, costs and execution.
+- Historical member-board output keeps target-day return colors. Target-day and five-session percentages each use their own sign: red gains, green losses, gray zero/missing; positive amounts and activity ratios do not imply a price gain. This compatibility requirement does not restore the removed boards on the current reading page.
+- The selected-sector price comparison has no wheel, drag, pinch, or slider zoom. Monthly comparisons, drawdown, and breadth retain their existing zoom controls.
+- The visible heat matrix uses four groups, up to five each: five-session gains, five-session declines, twenty-session gains, and sixty-session gains. Merge duplicate identities and show memberships; calculate compounded daily returns only from complete trading-session windows. Preserve all original heat rows in frozen data; embed only the selected rows and remap their indexes in the reading payload. Insufficient sixty-session history is a gap, never a renamed thirty-session result.
+- Keep market breadth, turnover, Top50 with Chinext, complete Top30, CFFEX sixty/twenty-day controls, new highs, and LHB disclosures. Preserve disclosure reasons and known limit status. Seal amounts and sector flows require their own factual sources; disclose absent inputs.
+- Turnover retains reference lines at 15000 and 20000 亿元 (1.5 and 2 trillion yuan): below 15000 is purple, 15000 to below 20000 green, and 20000 or above red. Always show both reference lines. Top30 labels use stock names; later name lookups retain their own retrieval dates and must not refill historical industry membership.
+- Market breadth does not plot new-high share; the independent new-high view retains 5%, 2%, 1%, and 0.2% numeric reference lines. Missing target-date new-high facts remain missing, rather than borrowing a different date to create the view.
+- Market breadth uses one aligned capsule per date: gains above zero, declines below zero, rounded outer ends and a flat join at zero. Preserve the 20px maximum width, the 4000/5000 decline references, and purple only above 5000 declines. Do not separate the two halves into side-by-side bars.
+- Fresh new-high collection no longer waits for the retired report's database writes. Build the latest 25 open sessions using dated `stk_factor_pro.topdays >= 250`, excluding each day's ST stocks and listings younger than 365 calendar days from the numerator. The denominator is that day's actively traded A-share daily sample, including Beijing, ST and recent listings, not a fixed 5000 or all listed securities. This is the provider's `TOPRANGE(HIGH)` field, not a verified adjusted-close high; its adjustment basis is not documented. Display method, denominator, exclusions, coverage and genuine missing dates. Do not splice old mixed-source statistics into this series.
+- A validated new-high repair may replace only its own historical chart from the selected snapshot. All other retained snapshot fields and chart fingerprints must still match. Cache complete raw days for recomputation; preserve invalid cache bytes and retry the dated source rather than reusing the failure forever. Require a complete daily calendar and the requested open-session count; source failure must not restore an old target-day value. Failed days remain null with reasons and are retried on fresh collection. Replay never calls the collector or writes its cache.
+- Convert dated sector-change and industry-net-amount tables into factual charts, preserving every valid row and separate source groups. Keep source sample counts when supplied; mark unrecorded counts rather than inventing them. Remove cycle narratives and old competition tables from the daily surface, not from historical originals. Do not restore fixed position, time, split-entry, inherited-account, or unique-target prescriptions within a chart or tooltip.
+- Restore historical numbers from verified target-date material; validate charts against the selected snapshot and trend/heat projections against original fingerprints. Preserve original retrieval times and supplemental-evidence identities. Repeated replay must not discard this history.
+- Validate the full source before pruning display data, including facts outside the selected paths. Keep raw prices, ranking history, directories, member lists and daily member inputs in frozen sources rather than repeating them in the HTML. Native snapshot history uses an archive reference with snapshot/assets fingerprints and source-derived display checks; recomputing a page fingerprint must not permit altered prices. Legacy pages without native snapshot history retain their sole full archive for repeatable replay. Never silently replace a missing selected source with another version.
+- Fresh collection uses independent factual inputs, not a prerequisite full report or old HTML. A snapshot alone can produce a page. Chart counts depend on available facts; test substitutes are not live-source coverage evidence.
+- Fresh CFFEX collection may fill an exact missing date from official files without database writes, retaining available history and failure reasons in the snapshot. Replay never collects. Do not replace a missing target day with the latest older net-short point; the three series describe member/top-twenty disclosures, not total market short-selling or confirmed intent.
 
-## Mainline Capacity And Regime
+## Facts and interpretation
 
-- The front page must render `主线容量与格局判断` before the turnover-share trend evidence table.
-- `主线容量` answers how many lines current liquidity can support. It uses today's turnover, yesterday's turnover, daily change, and the recent 25-trading-day turnover median; do not publish fixed turnover experience anchors as public rules.
-- `主线确认` must come from fund attack evidence: net inflow, high-position strength, batch limit-ups, broad sector gains, strong gain clusters, or turnover-share expansion. A news topic, hot phrase, or isolated stock move is not enough.
-- `主线格局` must allow `无主线`, `单主线聚焦`, `双主线竞争`, `主线+背景线`, `混沌接力`, and `多主线牛市`. Outside bull or super-bull markets, three or more active directions usually means chaotic relay, rolling rotation, or no stable mainline.
-- `主线进程` is post-confirmation stage language such as 启动, 推进, 加速, 分歧承接, 斜率放缓, or 衰竭. It must not replace the initial fund-attack confirmation.
-- Keep `主线成交额占比趋势` as evidence, but do not treat today's line label as proof of tomorrow's continuation.
+- The current page uses only the small-cap plan for strategy text. The old alpha/beta board, candidate checks, stance actions, five-day advice reconciliation and model-vote interpretation are retired from daily collection and display. Alpha/Beta algorithms, inputs and frozen results remain available for explicit research, without rebuilding those suggestions in the page.
+- Manual text highlighting, underlining, annotation tools and the floating annotation entry are disabled. Keep ordinary text selection and chart interactions. Do not load or clear existing browser annotation records; historical HTML is not overwritten to remove its old tools.
+- Keep fact, source opinion, assistant judgment, user preference, historical decision, and actual fill distinct.
+- Keep Wiki principles distinct from report facts: the report may expose evidence relevant to a decision, but it must not silently rewrite the current route or promote a chart into a principle.
+- Turnover is not net inflow; a ranking is not a persistence forecast; labels do not establish trader identity.
+- Missing data is not zero, and it is not an account decision. Show the gap and its consequence for the comparison.
+- A change in method does not require waiting for a fixed sample count, a new report, or a predetermined market category. Original judgments stay dated; revisions do not rewrite them.
+- Theory and indicators are optional tools. Neither technical analysis nor fundamental analysis is a compulsory universal route.
+- The present comparison uses dated five/twenty-session returns and within-sector stock differences. Its disclosed heuristic is not expectation-divergence research, identified alpha, AI sampling or a learning loop. Later outcome verification remains necessary; latest-member retrospective samples are not contemporaneous stock recommendations.
 
-## Monthly Trading Rhythm
+## Current strategy and account boundary
 
-- Before daily stock selection, classify the month as 财报/季报高筛选月, ordinary attack month, or weak-market defense month.
-- 财报/季报密集月 raises evidence requirements but no longer automatically caps position. Calendar earnings months such as 4/8/10 require earnings-landmine checks, stricter cancellation conditions, and clear invalidation prices; if a qualified target exists and the market is not at ice point, the position still follows the 50%或100% attack states.
-- Non-earnings months default to attack: use market fit, mainline strength, and individual stock structure to decide whether a 10%-20% opportunity month is realistic.
-- Weak market structure overrides the calendar: even outside earnings months, use 0% when market fit and mainline strength are absent.
-- Treat 10%-20% as an attack-window target, not a promised report outcome. The report should state the current month mode and maximum allowed position before naming trades.
-- 月10cm is not a low bar. It is the attack-month acceptance line, not a monthly KPI; forcing every month to hit +10% will push the report toward bad trades.
-- In attack months, +10% is qualified, 15% is excellent, and 20% is market-gift territory. The report may identify market-gift conditions, but must not imply the user can command them.
-- A profit cushion is not a reason to downgrade. If price, mainline, and invalidation rules still act right, the report may hold or add; if the trend invalidates, the report downgrades.
-- Surface the monthly attack/defense position as `进攻仓位三态` with fixed slabs: `0%`, `50%`, or `100%`.
+- Use `wiki/交易思想/小盘轮换策略.md` v0.3 as the sole active strategy. Five names plus three backups, twenty sessions from 2024-07-01, main board and ChiNext, announced latest-quarter sales and profit growth, take profit 10%, cash waits for rotation, initial-capital net-value floor 0.7. Listed age means 120 calendar days.
+- The user's commission is 0.01% per order with no minimum. Transfer fee and sell-side stamp duty are separate. No five-yuan minimum may be substituted.
+- Current evaluation is 2025-02-28 through 2026-10-29. Earlier results are historical. Do not use an old multi-start median as the current return or a future forecast.
+- A missing v0.3 plan remains a visible data gap. Do not substitute an earlier plan schema or another strategy.
+- The daily whole-lot table restarts from 10,000 yuan each period and does not carry prior cash, holdings or original buy prices. Label it a single-period simulation; its take-profit indication is not an actual-account instruction.
+- The separate continuous account still differs in the backup range and lacks the floor-sale process. Disclose this instead of claiming exact replication.
+- The sector diffusion tournament is historical observation, without a complete twenty-month executable record. Do not invent performance or add it to small-cap selection, timing or sizing.
+- Missing actual account input does not establish cash-only holdings. Plans, simulations and fills are different records.
+- Maintain desktop reports only. Do not restore phone layouts or phone viewport acceptance from old documents.
 
-## Attack Position States
+## Date and output protection
 
-- 0% = no participation. Use only when there is no qualified target, the market is at ice point, the trend chain is broken, or the invalidation condition has already appeared.
-- 50% = standard attack. Use when market fit, trend chain, participation window, and stock structure support a valid target, even if the target has not earned full-core status.
-- 100% = full attack. Use when the candidate is the clear core target, the trend chain is active, the participation window is explicit, acceptance has acted right, and the invalidation price is clear.
-- 100% must pass six checks before it appears in the decision payload: unique core target, active trend chain, explicit participation window, acceptance acting right, clear invalidation price, and non-ice-point market.
-- Final summary execution style must use the explicit state labels: `0%不参与`, `50%条件执行`, or `100%核心进攻`.
-- Final summary conclusion must use explicit trading-action labels, not raw legacy `空仓等待 / 短线确认` language from upstream conservative wording.
-- Legacy conservative sizing is removed: 0/50/100 only. Do not answer uncertainty by shrinking every opportunity.
-- Risk control happens through scenario cancellation, invalidation price, market ice-point detection, and the 0% state; it should not quietly downgrade every valid opportunity into a small trial.
-- Profit is not a downgrade trigger. Do not cap a correct trend just because the month reached 10%; downgrade only when the trend, mainline, or invalidation price breaks.
-- The hard part is not raising the target. It is 100% courage when a true core setup appears, 50% commitment when a valid opportunity appears, and 0% patience when the market gives nothing.
+- The market fact date and source fact date must match the report target. The actual query/retrieval date is separate, and may be later for historical research; label later retrieval honestly.
+- Reject query dates before the fact day or after the real collection day. Do not broaden existing chart provenance checks just to accommodate a new input.
+- Archived values with a recorded fact date but incomplete query/source metadata may remain visible as historical records with explicit gaps. Preserve actual recorded timestamps; never infer a query date from a file timestamp. Missing metadata is different from a supplied invalid or conflicting date. Newly collected facts retain real query/source metadata.
+- Validate inherited group provenance together with the individual fact before using it. Invalid Top50 provenance does not invalidate independently valid turnover evidence.
+- Replay uses exactly the selected target-date snapshot (`official` or explicitly `replay`) without live refresh, old-account inheritance, or the full-report rebuild chain. Missing the selected source is a generation failure, not a reason to switch versions.
+- Existing official reports and snapshots are protected. Experiments, repairs, and non-current reading pages go to replay unless explicitly authorized otherwise.
+- Historical sampling and retrospective plots must not be presented as predictions made at the time.
 
-## Extreme-Conviction Participation Script
+## Generation and verification
 
-- `明日极度看好` is a pre-rehearsal list, not an observation list.
-- Each item must include a participation script covering auction, first minutes, board, reseal, missed-entry, and cancellation.
-- The script must express risk control through cancellation, invalidation, and 0%, not by quietly shrinking every valid opportunity.
-- For fast limit-up cases, the script must distinguish auction participation, first-minutes attack, board participation, reseal participation, and missed-entry handling. If the core target is unavailable, either shift down the same trend-chain relative-price candidate or skip the phase.
-- The participation script must be persisted to the local **本地判断账本** as machine-readable `planned_participation`, not only displayed in Markdown.
-- `planned_participation` must include participation window, position state, auction, first-minutes, board, reseal, missed-entry, and cancellation.
-- `planned_participation` must also include `source_tier`, `entry_timing`, and `buy_window`. Controlled `entry_timing` values are `open_core`, `ten_confirm`, `tail_exception`, and `no_trade`.
-- `planned_participation` must include the extreme-conviction-only reversion probe fields: `ma_reversion_probe_allowed`, `ma_reversion_window`, `ma_reversion_probe`, `intraday_yellow_line_probe`, `ma20_invalidation`, and `tracking_window_trade_days`.
-- `planned_participation` must include the limit-up inertia fields: `limit_up_inertia_level`, `limit_up_inertia_score`, `next_day_limit_probability_band`, and `limit_up_inertia_reason`. Yesterday's limit-up, multi-board, T-board, sector anchor, and mainline core samples cannot be collapsed into the same "observe" bucket as +1%, +3%, or +5% ordinary rises.
-- `planned_participation` must include the risk-reward fields: `risk_reward_min_ratio`, `risk_reward_ratio`, `risk_reward_state`, and `risk_reward_plan`. MA5/MA10 or intraday yellow-line reversion is actionable only when the plan can explain the expected upside versus MA20 or other invalidation risk; default minimum is `2:1`.
-- The visible participation script must show `跟踪周期` as `25个交易日` by default, so the report reader can see that each extreme-conviction sample enters a finite review cycle instead of disappearing into a hidden data field.
-- Strong core cases such as T-board, limit-up relay, mainline core, sector anchor, trend-chain anchor, or divergence-to-consensus must not hide behind ordinary 60-minute confirmation; they use `open_core` unless the plan explicitly says no trade.
-- MA5/MA10 or intraday yellow-line reversion is not a general low-buy rule. It is only a small-probe path for the prior day's `明日极度看好` list, and it requires 09:50-10:10 support confirmation; MA20 failure cancels the thesis as A-kill risk.
-- Ordinary extreme-conviction cases use `ten_confirm`; tail participation is only `tail_exception`; crossline or ordinary watch samples use `no_trade` and cannot be counted as extreme-conviction execution wins.
-- Store `planned_participation` at case-level and mention-level: case-level records the current designed plan; mention-level preserves what the original report said, so replay can compare tomorrow's behavior against the designed scenario.
-- After next-day facts exist, store the replay result as `participation_review`. This is the **参与预演复盘** field, not a free-form commentary field.
-- `participation_review` must be derived from explicit facts: `auction_matched`, `first_minutes_accepted`, `board_sealed`, `reseal_success`, `sector_supported`, `cancellation_triggered`, `primary_unavailable`, and `missed_action_worked`.
-- `participation_review` labels are controlled: `预演命中`, `预演作废`, `错过后方案命中`, `预演过早`, or waiting for more facts.
-- The decision-ledger index must expose `participation_review_status` plus a compact `participation_review` summary for report and replay list consumption.
-- The report tail must render both `极度看好25日跟踪表` and `极度看好历史回测表`. The backtest table must separate selection quality, buy-point quality, risk-reward, execution review, and standard action; it must not collapse "stock picked right" into "trade executed right".
-- Report and replay surfaces must consume `planned_participation` from the decision-ledger artifact. They must not implement a separate buy/sell timing algorithm for the same case.
+- Use the repository Python 3.14 interpreter for every Python command.
+- A generated-report response ends with `### 生成耗时回顾`. Include the entire request wall clock from the first diagnostic through delivery; separate it from any successful generation time recorded in an existing run log. If phase timestamps are missing, say `未细分耗时` rather than inventing splits.
+- Record attempts and verification, not just the final successful process. Parallel work contributes its shared wall-clock interval once, not the sum of worker time.
+- Select verification by the changed behavior. Wiki or contract-only changes need focused document tests, source checks and link checks, not report generation. For generated-output changes or actual report requests, check target-date inputs and output paths, run focused tests, then use a snapshot/replay or lightweight render. Do not require legacy full generation; browser checks apply only when layout or interaction changes.
+- Before code delivery, complete independent review and address findings. For generated-output changes or actual report requests, verify the saved HTML, not only test results; capture official-file hashes when checking historical replay.
+- Additional generation attempts must have an explicit reason. Do not repeatedly collect the same market data to diagnose a render defect.
+- In a generation handoff, state total elapsed time, generated paths, source gaps, and checks performed. Add a successful-generation timing table only when its run log exists; it does not replace request time.
+- No test or report structure proves a trading method profitable. Report that separately from code/display correctness.
 
-## Future Change Inheritance
+## Future changes
 
-- Future daily-report requests use a delta spec by default: describe only the new or changed behavior.
-- New requests default inherit this report contract unless the latest user instruction explicitly overrides it.
-- Future report changes inherit both report contract and reasoning contract unless the latest user instruction explicitly overrides them.
-- Future report changes also inherit `docs/trellis/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`: simulation tools stay out of the main chain, and trading experience enters only after becoming price-action fields.
-- In practice, new report requests do not need to restate existing guardrails.
-
-## Optimization Order
-
-Use this order for broad report optimization:
-
-1. report acceptance audit
-2. structured history
-3. only-focus audit
-4. entry-cycle calibration
-5. workflow memory
-6. skill refactor
-
-Workflow memory belongs after report acceptance, structured continuity, only-focus reasoning, and entry-cycle calibration are working well enough to preserve.
-
-## Intent Notes
-
-- `generate_report`: produce or replay the report artifact, then inspect whether the result reads like a trading decision surface.
-- `review_report_output`: audit the generated markdown before trusting unit tests alone.
-- `fix_report_defect`: isolate the visible defect, add a narrow test, patch the smallest responsible surface, and rerun replay/audit checks.
-- `review_trade_case`: honor current position details, cost basis, account size, and the user's chosen trading frame. Do not convert workflow memory into stock observation continuity.
+New requests inherit factual integrity, historical protection, and current Wiki boundaries, not archived execution prescriptions. Consult `references/verification.md` for practical checks. Keep the smallest verifiable change that solves the current request; do not rebuild a trading system unless explicitly asked.

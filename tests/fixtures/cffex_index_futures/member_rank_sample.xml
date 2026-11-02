@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<positionRank>
+  <data><instrumentid>IF2608</instrumentid><tradingday>20260819</tradingday><datatypeid>0</datatypeid><rank>1</rank><shortname>中信期货(代客)</shortname><volume>10978</volume><varvolume>1030</varvolume><partyid>0018</partyid><productid>IF</productid></data>
+  <data><instrumentid>IF2608</instrumentid><tradingday>20260819</tradingday><datatypeid>1</datatypeid><rank>1</rank><shortname>中信期货(代客)</shortname><volume>4670</volume><varvolume>-232</varvolume><partyid>0018</partyid><productid>IF</productid></data>
+  <data><instrumentid>IF2608</instrumentid><tradingday>20260819</tradingday><datatypeid>2</datatypeid><rank>1</rank><shortname>中信期货(代客)</shortname><volume>4747</volume><varvolume>-66</varvolume><partyid>0018</partyid><productid>IF</productid></data>
+</positionRank>

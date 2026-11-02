@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import sys
 from dataclasses import dataclass
@@ -18,7 +17,14 @@ if __package__ in (None, ""):
 
 from domains.market_activity.new_high_structure import build_new_high_breadth_thresholds
 from market_data.daily_price_runtime import get_limit_up_pct
+from report.candidate_decision_evidence import validate_sector_tournament_three_axis
+from report.candidate_lifecycle_display import candidate_source_display_label
+from report.dual_cluster_projection import build_account_day_order_dual_cluster
 from report.surface_wording import sanitize_user_visible_text
+
+
+_ECHARTS_CDN_URL = "https://cdn.bootcdn.net/ajax/libs/echarts/5.6.0/echarts.min.js"
+_MERMAID_CDN_URL = "https://cdn.bootcdn.net/ajax/libs/mermaid/11.12.0/mermaid.min.js"
 
 
 # Bear/readable HTML renderer: consumes the final Markdown report and preserves
@@ -28,6 +34,7 @@ class Heading:
     level: int
     title: str
     anchor: str
+    is_detailed_appendix: bool = False
 
 
 @dataclass(frozen=True)
@@ -48,44 +55,55 @@ def _echarts_source_path() -> Path:
     return _repo_root() / ".generated" / "vendor" / "echarts" / "echarts.min.js"
 
 
+def _async_echarts_loader_html() -> str:
+    return (
+        '<script data-bear-echarts-loader="bootcdn">'
+        "(function(){"
+        "if(window.echarts){window.dispatchEvent(new Event('bear:echarts-ready'));return;}"
+        "const script=document.createElement('script');"
+        f"script.src={json.dumps(_ECHARTS_CDN_URL)};"
+        "script.async=true;"
+        "script.onload=()=>window.dispatchEvent(new Event('bear:echarts-ready'));"
+        "document.head.appendChild(script);"
+        "})();"
+        "</script>"
+    )
+
+
 def _echarts_loader_html(output_path: str | Path | None = None) -> str:
     source_path = _echarts_source_path()
-    if source_path.exists():
-        if output_path is not None:
-            output_dir = Path(output_path).resolve().parent
-            relative_path = os.path.relpath(source_path, output_dir).replace(os.sep, "/")
-            return f'<script src="{_html(relative_path)}"></script>'
-        return f'<script src="{_html(source_path.as_uri())}"></script>'
-    return '<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
-
-
-def _mermaid_source_path() -> Path:
-    return _repo_root() / ".generated" / "vendor" / "mermaid" / "mermaid.min.js"
+    if not source_path.is_file():
+        return _async_echarts_loader_html()
+    source = source_path.read_text(encoding="utf-8").replace("</script", "<\\/script")
+    return (
+        '<script data-bear-echarts-loader="inline" '
+        f'data-source="{_html(_ECHARTS_CDN_URL)}">'
+        f"{source}\n"
+        "window.dispatchEvent(new Event('bear:echarts-ready'));"
+        "</script>"
+    )
 
 
 def _mermaid_loader_html(output_path: str | Path | None = None, *, enabled: bool = False) -> str:
     if not enabled:
         return ""
-    source_path = _mermaid_source_path()
-    if source_path.exists():
-        if output_path is not None:
-            output_dir = Path(output_path).resolve().parent
-            relative_path = os.path.relpath(source_path, output_dir).replace(os.sep, "/")
-            script_src = relative_path
-        else:
-            script_src = source_path.as_uri()
-    else:
-        script_src = "https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.min.js"
     return (
-        f'<script src="{_html(script_src)}"></script>'
-        "<script>"
+        '<script data-bear-mermaid-loader="bootcdn">'
         "(function(){"
         "const renderMermaid=()=>{"
         "if(!window.mermaid){return;}"
         "window.mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'base'});"
         "window.mermaid.run({querySelector:'.markdown-body .mermaid'});"
         "};"
+        "const scheduleRender=()=>{"
         "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',renderMermaid,{once:true});}else{renderMermaid();}"
+        "};"
+        "if(window.mermaid){scheduleRender();return;}"
+        "const script=document.createElement('script');"
+        f"script.src={json.dumps(_MERMAID_CDN_URL)};"
+        "script.async=true;"
+        "script.onload=scheduleRender;"
+        "document.head.appendChild(script);"
         "})();"
         "</script>"
     )
@@ -111,10 +129,10 @@ def _tomorrow_action_calendar_metric(value: object, status: str) -> tuple[str, s
     if status == "future":
         return "待发生", "is-pending"
     if status != "complete":
-        return "事实不足", "is-incomplete"
+        return "—", "is-incomplete"
     text = _tomorrow_action_calendar_pct(value)
     if not text:
-        return "事实不足", "is-incomplete"
+        return "数值未记录", "is-incomplete"
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -206,7 +224,16 @@ def _render_tomorrow_action_calendar_cell(record: Mapping[str, object] | None) -
     weekday_label = str(record.get("weekday_label") or "星期待确认").strip()
     calendar_cell_kind = str(record.get("calendar_cell_kind") or "").strip()
     action_kind = str(record.get("action_kind") or "incomplete").strip()
-    action_label = str(record.get("action_label") or "事实不足").strip()
+    status = str(record.get("performance_status") or "incomplete").strip()
+    action_label = str(record.get("action_label") or "").strip()
+    if not action_label or action_label == "事实不足":
+        action_label = (
+            "计划待执行"
+            if status == "future"
+            else "账户记录未结算"
+            if status != "complete"
+            else "账户动作未记录"
+        )
     if calendar_cell_kind:
         note_detail = {
             "holiday": "非交易日",
@@ -227,7 +254,6 @@ def _render_tomorrow_action_calendar_cell(record: Mapping[str, object] | None) -
     action_items = [item for item in raw_action_items or [] if isinstance(item, Mapping)]
     plan_action_kind = str(record.get("plan_action_kind") or "").strip()
     plan_action_label = str(record.get("plan_action_label") or "").strip()
-    status = str(record.get("performance_status") or "incomplete").strip()
     daily_return, daily_tone = _tomorrow_action_calendar_metric(record.get("daily_return_pct"), status)
     excess_return, excess_tone = _tomorrow_action_calendar_metric(record.get("excess_shanghai_pct"), status)
     date_label = execution_date or "执行日待确认"
@@ -244,7 +270,7 @@ def _render_tomorrow_action_calendar_cell(record: Mapping[str, object] | None) -
     if action_items:
         action_html = '<div class="tomorrow-action-calendar-actions">' + "".join(
             '<div class="tomorrow-action-calendar-action-item">'
-            f'<strong>{_html(item.get("label") or "事实不足")}</strong>'
+            f'<strong>{_html(item.get("label") or "账户对象未记录")}</strong>'
             f'<span>{_html(item.get("position_label") or "")} · {_html(item.get("holding_label") or "")}'
             + (
                 f' · 计划日报 {_html(item.get("plan_date_label"))}'
@@ -303,7 +329,7 @@ def _render_tomorrow_action_calendar(payload: Mapping[str, object] | None) -> st
     if not records:
         return (
             heading
-            + '<p class="tomorrow-action-calendar-empty">PostgreSQL 明日操作事实不足</p>'
+            + '<p class="tomorrow-action-calendar-empty">未读取到近25条明日操作记录</p>'
             + '</section>'
         )
     body_rows = "".join(
@@ -313,9 +339,9 @@ def _render_tomorrow_action_calendar(payload: Mapping[str, object] | None) -> st
     summary = payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
     valid_count = int(summary.get("valid_count") or 0)
     outperform_count = int(summary.get("outperform_count") or 0)
-    average_daily = _tomorrow_action_calendar_pct(summary.get("average_daily_return_pct")) or "事实不足"
-    average_excess = _tomorrow_action_calendar_pct(summary.get("average_excess_shanghai_pct")) or "事实不足"
-    cumulative_daily = _tomorrow_action_calendar_pct(summary.get("cumulative_daily_return_pct")) or "事实不足"
+    average_daily = _tomorrow_action_calendar_pct(summary.get("average_daily_return_pct")) or "数值未记录"
+    average_excess = _tomorrow_action_calendar_pct(summary.get("average_excess_shanghai_pct")) or "数值未记录"
+    cumulative_daily = _tomorrow_action_calendar_pct(summary.get("cumulative_daily_return_pct")) or "数值未记录"
     cumulative_returns = (
         payload.get("cumulative_returns")
         if isinstance(payload.get("cumulative_returns"), Mapping)
@@ -336,20 +362,23 @@ def _render_tomorrow_action_calendar(payload: Mapping[str, object] | None) -> st
         if isinstance(cumulative_returns.get("since_start"), Mapping)
         else {}
     )
-    rolling_cumulative = _tomorrow_action_calendar_pct(
-        rolling_scope.get("cumulative_daily_return_pct")
-    ) or cumulative_daily
-    current_month_cumulative = "事实不足"
+    rolling_cumulative = "累计值未结算"
+    if rolling_scope.get("coverage_status") in (None, "", "complete"):
+        rolling_cumulative = (
+            _tomorrow_action_calendar_pct(rolling_scope.get("cumulative_daily_return_pct"))
+            or cumulative_daily
+        )
+    current_month_cumulative = "累计值未结算"
     if current_month_scope.get("coverage_status") in (None, "", "complete"):
         current_month_cumulative = (
             _tomorrow_action_calendar_pct(current_month_scope.get("cumulative_daily_return_pct"))
-            or "事实不足"
+            or "数值未记录"
         )
-    since_start_cumulative = "事实不足"
+    since_start_cumulative = "累计值未结算"
     if since_start_scope.get("coverage_status") in (None, "", "complete"):
         since_start_cumulative = (
             _tomorrow_action_calendar_pct(since_start_scope.get("cumulative_daily_return_pct"))
-            or "事实不足"
+            or "数值未记录"
         )
     summary_items = (
         f'<span>有效 {valid_count} 日</span>'
@@ -363,7 +392,7 @@ def _render_tomorrow_action_calendar(payload: Mapping[str, object] | None) -> st
         f'<span>当前月累计收益 {_html(current_month_cumulative)}</span>'
         f'<span>2026-06-17起累计收益 {_html(since_start_cumulative)}</span>'
         f'<span>跑赢 {outperform_count}/{valid_count} 日</span>'
-        f'<span>事实不足 {int(summary.get("incomplete_count") or 0)} 日</span>'
+        f'<span>未结算 {int(summary.get("incomplete_count") or 0)} 日</span>'
         f'<span>待发生 {int(summary.get("future_count") or 0)} 日</span>'
     )
     return (
@@ -840,6 +869,9 @@ _ACTION_H2_TITLES = {
 }
 
 _EVIDENCE_H2_TITLES = {
+    "研究与执行分层（研究证据）",
+    "股指期货持仓结构（研究证据）",
+    "8月热门股双群聚与动态迁移（研究证据）",
     "市场语言翻译（研究证据）",
     "板块资金扩散淘汰赛",
     "板块资金载体预案",
@@ -957,6 +989,221 @@ def _is_position_day_order_table(headers: list[str], rows: list[list[str]]) -> b
         return False
     day_codes = {_plain_cell_text(row[0]) for row in rows if row}
     return {"Ta", "Tb", "Tc", "Td", "Te"}.issubset(day_codes)
+
+
+_CANDIDATE_LIFECYCLE_HEADERS = (
+    "股票",
+    "板块角色",
+    "反推结论",
+    "对照结果",
+    "最终动作",
+)
+_CANDIDATE_LIFECYCLE_FOCUS_SOURCES = {
+    "板块推导候选",
+    "板块资金载体",
+    "市场情绪线候选",
+    "板块核心候选",
+    "高确信观察池",
+    "跨线观察池",
+}
+_CANDIDATE_LIFECYCLE_SOURCE_ORDER = (
+    "板块推导候选",
+    "板块资金载体",
+    "市场情绪线候选",
+    "板块核心候选",
+    "高确信观察池",
+    "跨线观察池",
+    "通用过程池",
+    "观察池",
+    "主线核心池",
+    "次级候选池",
+    "热榜",
+    "综合热度",
+    "成交额排行",
+    "运行时观察对象",
+    "其他过程来源",
+)
+_CANDIDATE_LIFECYCLE_FOCUS_IDENTITIES = {
+    "板块锚",
+    "最终执行对象",
+    "风险复核样本",
+}
+
+
+def _is_candidate_lifecycle_table(section_title: str, headers: list[str]) -> bool:
+    if "候选生命周期证据" not in _plain_cell_text(section_title):
+        return False
+    header_texts = {_table_header_text(header) for header in headers}
+    has_source_header = bool({"首次来源", "发现路径"} & header_texts)
+    has_entry_header = bool({"入口处理", "进入理由"} & header_texts)
+    return has_source_header and has_entry_header and set(_CANDIDATE_LIFECYCLE_HEADERS).issubset(header_texts)
+
+
+def _candidate_lifecycle_source_labels(value: str) -> list[str]:
+    labels: list[str] = []
+    for source in re.split(r"[、,，;；]+", _plain_cell_text(value)):
+        label = candidate_source_display_label(source)
+        if label and label not in labels:
+            labels.append(label)
+    return labels or ["其他过程来源"]
+
+
+def _candidate_lifecycle_unique_values(*values: str) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = _plain_cell_text(value)
+        if text and text != "-" and text not in result:
+            result.append(text)
+    return result
+
+
+def _candidate_lifecycle_has_focus_identity(*values: str) -> bool:
+    for value in values:
+        tokens = re.split(r"[、,，;；/|·\s（）()：:]+", _plain_cell_text(value))
+        if _CANDIDATE_LIFECYCLE_FOCUS_IDENTITIES.intersection(tokens):
+            return True
+    return False
+
+
+def _candidate_lifecycle_reason(
+    entry_basis: str,
+    sector_role: str,
+    reversal_decision: str,
+    comparison_result: str,
+    final_action: str,
+) -> str:
+    comparison = _plain_cell_text(comparison_result)
+    generic_results = {
+        "",
+        "-",
+        _plain_cell_text(sector_role),
+        _plain_cell_text(reversal_decision),
+        _plain_cell_text(final_action),
+        "降级观察",
+        "只作过程回放，不新增参与",
+    }
+    if comparison not in generic_results:
+        return comparison
+    entry = _plain_cell_text(entry_basis)
+    return entry if entry and entry != "-" else comparison or "暂无关键理由"
+
+
+def _candidate_lifecycle_table_html(items: list[dict[str, object]], stock_refs: tuple[str, ...]) -> str:
+    body_rows = []
+    for item in items:
+        source_text = "、".join(str(label) for label in item["source_labels"])
+        body_rows.append(
+            "<tr>"
+            f'<td>{_table_cell_inline(item["headers"], item["row"], item["stock_index"], stock_refs)}</td>'
+            f"<td>{_inline(source_text, stock_refs)}</td>"
+            f"<td>{_inline(str(item['conclusion']), stock_refs)}</td>"
+            f"<td>{_inline(str(item['reason']), stock_refs)}</td>"
+            "</tr>"
+        )
+    body = "\n".join(body_rows) or '<tr><td colspan="4">暂无候选生命周期证据</td></tr>'
+    return (
+        '<div class="reader-table candidate-lifecycle-table"><table>'
+        '<thead><tr><th>股票</th><th>发现路径</th><th>当前结论</th><th>关键理由</th></tr></thead>'
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def _render_candidate_lifecycle_table(
+    headers: list[str],
+    rows: list[list[str]],
+    stock_refs: tuple[str, ...],
+) -> str:
+    indexes = {
+        "stock": _header_index(headers, "股票"),
+        "source": _header_index(headers, "发现路径", "首次来源"),
+        "entry": _header_index(headers, "入口处理", "进入理由"),
+        "role": _header_index(headers, "板块角色"),
+        "reversal": _header_index(headers, "反推结论"),
+        "comparison": _header_index(headers, "对照结果"),
+        "action": _header_index(headers, "最终动作"),
+    }
+    items: list[dict[str, object]] = []
+    source_counts: dict[str, int] = {}
+    for row in rows:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        source_labels = _candidate_lifecycle_source_labels(_cell_at(padded, indexes["source"]))
+        for label in source_labels:
+            source_counts[label] = source_counts.get(label, 0) + 1
+        conclusion_values = _candidate_lifecycle_unique_values(
+            _cell_at(padded, indexes["role"]),
+            _cell_at(padded, indexes["reversal"]),
+            _cell_at(padded, indexes["action"]),
+        )
+        conclusion = " · ".join(conclusion_values) or "待确认"
+        reason = _candidate_lifecycle_reason(
+            _cell_at(padded, indexes["entry"]),
+            _cell_at(padded, indexes["role"]),
+            _cell_at(padded, indexes["reversal"]),
+            _cell_at(padded, indexes["comparison"]),
+            _cell_at(padded, indexes["action"]),
+        )
+        is_focus = bool(
+            _CANDIDATE_LIFECYCLE_FOCUS_SOURCES.intersection(source_labels)
+            or _candidate_lifecycle_has_focus_identity(
+                _cell_at(padded, indexes["role"]),
+                _cell_at(padded, indexes["reversal"]),
+                _cell_at(padded, indexes["comparison"]),
+                _cell_at(padded, indexes["action"]),
+            )
+        )
+        items.append(
+            {
+                "headers": headers,
+                "row": padded,
+                "stock_index": indexes["stock"],
+                "source_labels": source_labels,
+                "conclusion": conclusion,
+                "reason": reason,
+                "is_focus": is_focus,
+            }
+        )
+
+    focus_items = [item for item in items if item["is_focus"]]
+    remaining_items = [item for item in items if not item["is_focus"]]
+    count_order = {label: index for index, label in enumerate(_CANDIDATE_LIFECYCLE_SOURCE_ORDER)}
+    source_summary = "".join(
+        f"<li><span>{_html(label)}</span><strong>{count}只</strong></li>"
+        for label, count in sorted(source_counts.items(), key=lambda item: (count_order.get(item[0], 999), item[0]))
+    )
+    overview = (
+        '<div class="candidate-lifecycle-overview" role="list" aria-label="候选数量概览">'
+        f'<div role="listitem"><span>候选总数</span><strong>{len(items)}只</strong></div>'
+        f'<div role="listitem"><span>重点展开</span><strong>{len(focus_items)}只</strong></div>'
+        f'<div role="listitem"><span>其余收起</span><strong>{len(remaining_items)}只</strong></div>'
+        "</div>"
+    )
+    if not items:
+        return (
+            '<section class="candidate-lifecycle" data-candidate-count="0">'
+            f"{overview}<p class=\"candidate-lifecycle-empty\">暂无候选生命周期证据</p></section>"
+        )
+    sources = (
+        '<div class="candidate-lifecycle-sources"><strong>发现路径</strong>'
+        f'<ul aria-label="发现路径分布">{source_summary}</ul></div>'
+    )
+    focus = ""
+    if focus_items:
+        focus = (
+            '<div class="candidate-lifecycle-focus"><h4>重点候选</h4>'
+            f"{_candidate_lifecycle_table_html(focus_items, stock_refs)}</div>"
+        )
+    remaining = ""
+    if remaining_items:
+        remaining = (
+            '<details class="candidate-lifecycle-rest">'
+            f'<summary><span>其余过程样本</span><strong>{len(remaining_items)}只</strong></summary>'
+            f"{_candidate_lifecycle_table_html(remaining_items, stock_refs)}</details>"
+        )
+    return (
+        f'<section class="candidate-lifecycle" data-candidate-count="{len(items)}" '
+        f'data-focus-count="{len(focus_items)}" data-collapsed-count="{len(remaining_items)}">'
+        f"{overview}{sources}{focus}{remaining}</section>"
+    )
 
 
 def _is_board_tag_rank_table_headers(headers: list[str]) -> bool:
@@ -1113,7 +1360,16 @@ def _position_timeline_action_badges(value: str) -> list[tuple[str, str]]:
     badges: list[tuple[str, str]] = []
     if "B1" in text or "参与权" in text:
         badges.append(("参与权", "is-participate"))
-    if "临时加B2" in text or "B2确认权" in text or "确认权" in text:
+    if any(
+        marker in text
+        for marker in (
+            "临时加B2",
+            "B2确认权",
+            "确认权",
+            "B2确认后",
+            "B2只在确认后",
+        )
+    ):
         badges.append(("确认权", "is-confirm"))
     if b2_cancelled:
         badges.append(("取消B2", "is-cancel"))
@@ -1571,6 +1827,118 @@ def _position_day_order_cell_text(code: str, account: str, b12: str, action: str
     return f"{code_text} {detail_text}".strip()
 
 
+def _position_day_order_projection_rows(headers: list[str], rows: list[list[str]]) -> list[dict]:
+    normalized = []
+    for row in rows:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        code, row_date, account, target, b12, action = padded[:6]
+        normalized.append(
+            {
+                "day_code": _plain_cell_text(code),
+                "date": _plain_cell_text(row_date),
+                "account": _plain_cell_text(account),
+                "target": _plain_cell_text(target),
+                "b12": _plain_cell_text(b12),
+                "action": _plain_cell_text(action),
+            }
+        )
+    return normalized
+
+
+def _position_dual_cluster_status_class(value: str) -> str:
+    return {
+        "confirmed": "is-confirmed",
+        "candidate": "is-candidate",
+        "empty": "is-empty",
+        "weakened": "is-weakened",
+        "invalidated": "is-weakened",
+        "coexisting": "is-coexisting",
+        "impact_to_core": "is-transition",
+        "core_to_impact": "is-transition",
+        "dynamic_decay": "is-weakened",
+        "core_weakened": "is-weakened",
+    }.get(_plain_cell_text(value), "is-unresolved")
+
+
+def _position_dual_cluster_role_cell(value: object, stock_refs: tuple[str, ...]) -> str:
+    role = value if isinstance(value, dict) else {}
+    status = _plain_cell_text(role.get("status"))
+    text = _plain_cell_text(role.get("text")) or "角色待确认"
+    return (
+        f'<span class="position-dual-cluster-role {_position_dual_cluster_status_class(status)}" '
+        f'data-role-status="{_html(status or "unresolved")}">'
+        f"{_inline(text, stock_refs)}</span>"
+    )
+
+
+def _position_day_order_raw_table_html(
+    headers: list[str],
+    rows: list[list[str]],
+    stock_refs: tuple[str, ...],
+) -> str:
+    header_html = "".join(f"<th>{_inline(header, stock_refs)}</th>" for header in headers)
+    body_rows = []
+    for row in rows:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        body_rows.append(
+            "<tr>"
+            + "".join(
+                f"<td>{_inline(cell, stock_refs)}</td>"
+                for cell in padded[: len(headers)]
+            )
+            + "</tr>"
+        )
+    body = "".join(body_rows) or f'<tr><td colspan="{len(headers)}">暂无账户日序事实</td></tr>'
+    return (
+        '<div class="reader-table position-day-order-raw-table" role="region" '
+        'aria-label="账户日序原始六列事实" tabindex="0">'
+        f"<table><thead><tr>{header_html}</tr></thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _render_position_dual_cluster_table(
+    projection: dict,
+    stock_refs: tuple[str, ...],
+) -> str:
+    rows = [row for row in list(projection.get("rows") or []) if isinstance(row, dict)]
+    body_rows = []
+    for row in rows:
+        code = _plain_cell_text(row.get("day_code"))
+        row_date = _plain_cell_text(row.get("date")) or "日期未记录"
+        temporal_role = _plain_cell_text(row.get("temporal_role")) or "时间角色待确认"
+        transition = row.get("transition") if isinstance(row.get("transition"), dict) else {}
+        transition_status = _plain_cell_text(transition.get("status"))
+        transition_text = _plain_cell_text(transition.get("text")) or "迁移待确认"
+        body_rows.append(
+            f'<tr class="position-dual-cluster-row position-dual-cluster-row-{_html(code.lower())}" '
+            f'data-day-code="{_html(code)}">'
+            '<th scope="row"><span class="position-dual-cluster-code">'
+            f"{_html(code)}</span><strong>{_html(temporal_role)}</strong><small>{_html(row_date)}</small></th>"
+            f'<td data-label="持续核心端">{_position_dual_cluster_role_cell(row.get("persistent_core"), stock_refs)}</td>'
+            f'<td data-label="动态冲击端">{_position_dual_cluster_role_cell(row.get("dynamic_impact"), stock_refs)}</td>'
+            f'<td data-label="迁移与反证"><span class="position-dual-cluster-transition {_position_dual_cluster_status_class(transition_status)}">'
+            f"{_inline(transition_text, stock_refs)}</span></td>"
+            f'<td data-label="账户容量"><span class="position-dual-cluster-capacity">{_inline(row.get("capacity") or "容量待确认", stock_refs)}</span></td>'
+            f'<td data-label="动作"><span class="position-dual-cluster-action">{_inline(row.get("action") or "事实不足", stock_refs)}</span></td>'
+            "</tr>"
+        )
+    body = "".join(body_rows) or '<tr><td colspan="6">账户双轨事实不足</td></tr>'
+    artifact_hash = _plain_cell_text(projection.get("artifact_hash"))
+    return (
+        '<section class="position-dual-cluster" aria-label="Ta Te 账户双轨日序" '
+        f'data-artifact-hash="{_html(artifact_hash)}">'
+        '<div class="position-dual-cluster-head"><div><span>账户日序双轨</span>'
+        '<h4>持续核心端与动态冲击端分开看</h4></div>'
+        '<p>B1先取得参与权，B2只在确认后补；计划容量不等于已经持有。</p></div>'
+        '<div class="position-dual-cluster-scroll" role="region" aria-label="账户双轨主视图" tabindex="0">'
+        '<table class="position-dual-cluster-table"><thead><tr>'
+        '<th>日序</th><th>持续核心端</th><th>动态冲击端</th><th>迁移与反证</th><th>账户容量</th><th>动作</th>'
+        f"</tr></thead><tbody>{body}</tbody></table></div>"
+        '<p class="position-dual-cluster-scope">旧仓不自动等于市场核心，新目标不确认参与者身份；'
+        f'只读投影哈希：<code>{_html(artifact_hash)}</code></p></section>'
+    )
+
+
 def _render_position_day_order_table(
     headers: list[str],
     rows: list[list[str]],
@@ -1602,13 +1970,35 @@ def _render_position_day_order_table(
             ]
         )
     timeline_headers = ["轨道", "标的", *date_headers]
-    return _render_position_timeline_table(
+    timeline_html = _render_position_timeline_table(
         timeline_headers,
         timeline_rows,
         stock_refs,
         report_index=report_index,
         selected_indexes=selected_indexes,
         aria_label="Ta Te 账户日序",
+    )
+    projection_rows = _position_day_order_projection_rows(headers, rows)
+    target_date = next(
+        (
+            item.get("date")
+            for item in projection_rows
+            if item.get("day_code") == "Td"
+        ),
+        "",
+    )
+    projection = build_account_day_order_dual_cluster(
+        projection_rows,
+        target_date=target_date,
+    )
+    dual_cluster_html = _render_position_dual_cluster_table(projection, stock_refs)
+    raw_table_html = _position_day_order_raw_table_html(headers, rows, stock_refs)
+    return (
+        dual_cluster_html
+        + '<details class="position-day-order-facts" data-position-day-order-facts>'
+        '<summary><span>账户日序原始事实</span><small>六列表与原时间轴，默认收起</small></summary>'
+        '<div class="position-day-order-facts-body">'
+        f"{raw_table_html}{timeline_html}</div></details>"
     )
 
 
@@ -1696,6 +2086,15 @@ def _numeric_amount_yi(value: str) -> float | None:
         return None
 
 
+def _numeric_amount_yi_cell(value: str, header: str) -> float | None:
+    amount_yi = _numeric_amount_yi(value)
+    if amount_yi is not None:
+        return amount_yi
+    if "亿" not in _plain_cell_text(header):
+        return None
+    return _chart_number_or_none(_plain_cell_text(value))
+
+
 def _numeric_pct_point(value: str) -> float | None:
     match = re.search(r"([+-]?\d+(?:\.\d+)?)\s*pct", value, flags=re.IGNORECASE)
     if not match:
@@ -1760,9 +2159,921 @@ def _table_has_headers(lines: list[str], index: int, *required_headers: str) -> 
     return all(_header_index(headers, header) >= 0 for header in required_headers)
 
 
-def _collect_sector_turnover_chart_items(lines: list[str], trade_date: str) -> list[dict[str, object]]:
-    items: list[dict[str, object]] = []
-    seen: set[str] = set()
+_SECTOR_CYCLE_FALLBACK_COLORS = (
+    "#945C6E",
+    "#2F7FB8",
+    "#947A5C",
+    "#DD4C4F",
+    "#5C7F94",
+    "#4F8A87",
+    "#8F945C",
+    "#A75E9B",
+)
+
+
+def _valid_iso_date(value: str) -> str:
+    text = _plain_cell_text(value)
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return ""
+
+
+def _sector_relative_path_interpretation(
+    record: Mapping[str, object] | None,
+    *,
+    path_complete: bool,
+) -> str:
+    record = record if isinstance(record, Mapping) else {}
+    status = str(record.get("status") or "").strip()
+    metric = record.get("relative_strength_metric")
+    metric = metric if isinstance(metric, Mapping) else {}
+    metric_value = _chart_number_or_none(metric.get("value"))
+    rank = record.get("relative_strength_rank")
+    if status == "阶段主线失效":
+        return "阶段主线失效"
+    if status == "阶段主线弱化":
+        return "阶段主线弱化"
+    if (
+        status == "阶段主线已确认"
+        and path_complete
+        and str(record.get("divergence_test_status") or "") == "分歧已修复"
+    ):
+        return "高质量修复"
+    if (
+        status == "阶段主线已确认"
+        and path_complete
+        and metric_value is not None
+        and metric_value > 0
+        and rank == 1
+    ):
+        return "真正转强"
+    if path_complete and metric_value is not None and metric_value > 0:
+        return "普通反弹"
+    if not path_complete:
+        return "相对价格路径未生成"
+    return "相对强弱未确认"
+
+
+def _sector_relative_price_absorption(
+    *,
+    is_evaluated: bool,
+    space_stage: str,
+    edge_type: str,
+) -> str:
+    if not is_evaluated:
+        return "待比较"
+    if edge_type == "剩余惯性" or space_stage in {"市场响应", "全面共识"}:
+        return "价格吸收较充分"
+    if space_stage in {"局部秩序形成", "板块扩散"}:
+        return "仍有传导空间"
+    return "价格吸收未确认"
+
+
+def _sector_cycle_lane_on_dates(
+    lane: Mapping[str, object] | None,
+    dates: list[str],
+    recorded_dates: list[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    lane = lane if isinstance(lane, Mapping) else {}
+    date_indexes = {record_date: index for index, record_date in enumerate(dates)}
+    recorded_date_set = {
+        record_date
+        for value in recorded_dates
+        if (record_date := _valid_iso_date(str(value or ""))) in date_indexes
+    }
+    active_indexes: set[int] = set()
+    for run in lane.get("runs") if isinstance(lane.get("runs"), list) else []:
+        if not isinstance(run, Mapping):
+            continue
+        start_date = _valid_iso_date(str(run.get("start_date") or ""))
+        end_date = _valid_iso_date(str(run.get("end_date") or ""))
+        if not start_date or not end_date:
+            continue
+        active_indexes.update(
+            date_indexes[record_date]
+            for record_date in recorded_date_set
+            if start_date <= record_date <= end_date
+        )
+    runs: list[dict[str, object]] = []
+    run_start: int | None = None
+    for index in range(len(dates)):
+        is_active = index in active_indexes
+        if is_active and run_start is None:
+            run_start = index
+        if run_start is not None and (not is_active or index == len(dates) - 1):
+            run_end = index if is_active else index - 1
+            runs.append(
+                {
+                    "start_index": run_start,
+                    "end_index": run_end,
+                    "start_date": dates[run_start],
+                    "end_date": dates[run_end],
+                }
+            )
+            run_start = None
+
+    observations = []
+    for observation in (
+        lane.get("observations") if isinstance(lane.get("observations"), list) else []
+    ):
+        if not isinstance(observation, Mapping):
+            continue
+        observation_date = _valid_iso_date(str(observation.get("date") or ""))
+        if observation_date not in date_indexes:
+            continue
+        normalized = dict(observation)
+        normalized["date_index"] = date_indexes[observation_date]
+        observations.append(normalized)
+    observations.sort(key=lambda item: int(item.get("date_index") or 0))
+    return runs, observations
+
+
+_SECTOR_FEEDBACK_EVENT_LABELS = {
+    "price_response": "价格响应",
+    "cross_day_feedback": "跨日反馈",
+    "rotation": "轮动",
+    "reflow": "冷却后回流",
+    "turnover_participation": "成交参与",
+    "capital_return": "资金回流",
+    "main_fund_inflow": "主力净流入",
+    "institution_net_buy": "机构净买",
+}
+
+
+def _sector_feedback_timeline(
+    record: Mapping[str, object] | None,
+    *,
+    dates: list[str],
+    normalized_path: list[dict[str, object]],
+    runs: list[dict[str, object]],
+    observations: list[dict[str, object]],
+    capital_events: list[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str]]:
+    record = record if isinstance(record, Mapping) else {}
+    date_indexes = {record_date: index for index, record_date in enumerate(dates)}
+    events_by_date: dict[str, dict[str, object]] = {}
+
+    def add_event(
+        record_date: str,
+        kind: str,
+        *,
+        detail: str = "",
+        amount_yi: float | None = None,
+        stock_names: list[str] | None = None,
+    ) -> None:
+        normalized_date = _valid_iso_date(record_date)
+        label = _SECTOR_FEEDBACK_EVENT_LABELS.get(kind)
+        if normalized_date not in date_indexes or not label:
+            return
+        event = events_by_date.setdefault(
+            normalized_date,
+            {
+                "date": normalized_date,
+                "date_index": date_indexes[normalized_date],
+                "kinds": [],
+                "labels": [],
+                "details": [],
+                "details_by_kind": {},
+                "stock_names_by_kind": {},
+            },
+        )
+        if kind not in event["kinds"]:
+            event["kinds"].append(kind)
+            event["labels"].append(label)
+        if detail and detail not in event["details"]:
+            event["details"].append(detail)
+        if detail:
+            details_by_kind = event.get("details_by_kind")
+            if isinstance(details_by_kind, dict):
+                kind_details = details_by_kind.setdefault(kind, [])
+                if detail not in kind_details:
+                    kind_details.append(detail)
+        if amount_yi is not None:
+            amounts = event.setdefault("amounts_yi", {})
+            if isinstance(amounts, dict):
+                amounts[kind] = round(amount_yi, 6)
+        if stock_names:
+            names = event.setdefault("stock_names", [])
+            stock_names_by_kind = event.get("stock_names_by_kind")
+            kind_stock_names = (
+                stock_names_by_kind.setdefault(kind, [])
+                if isinstance(stock_names_by_kind, dict)
+                else []
+            )
+            if isinstance(names, list):
+                for stock_name in stock_names:
+                    if stock_name and stock_name not in names:
+                        names.append(stock_name)
+                    if stock_name and stock_name not in kind_stock_names:
+                        kind_stock_names.append(stock_name)
+
+    for point in normalized_path:
+        if _chart_number_or_none(point.get("normalized_value")) is None:
+            continue
+        add_event(
+            str(point.get("date") or ""),
+            "price_response",
+            detail=f"相对路径 {point['normalized_value']:.1f}",
+        )
+    for record_date in record.get("active_trade_dates") if isinstance(record.get("active_trade_dates"), list) else []:
+        add_event(str(record_date or ""), "cross_day_feedback")
+    for run in runs:
+        if not isinstance(run, Mapping):
+            continue
+        start_index = int(run.get("start_index") or 0)
+        end_index = int(run.get("end_index") or 0)
+        for date_index in range(max(start_index, 0), min(end_index, len(dates) - 1) + 1):
+            add_event(dates[date_index], "rotation")
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        share_pct = _chart_number_or_none(observation.get("share_pct"))
+        turnover = _chart_number_or_none(observation.get("turnover"))
+        if share_pct is None and (turnover is None or turnover <= 0):
+            continue
+        detail_parts = []
+        if share_pct is not None:
+            detail_parts.append(f"成交占比 {share_pct:.1f}%")
+        if turnover is not None and turnover > 0:
+            detail_parts.append(f"板块成交额 {turnover:.2f}亿")
+        add_event(
+            str(observation.get("date") or ""),
+            "turnover_participation",
+            detail="；".join(detail_parts),
+        )
+    for record_date in record.get("reflow_dates") if isinstance(record.get("reflow_dates"), list) else []:
+        add_event(str(record_date or ""), "reflow")
+    for evidence in record.get("repair_evidence") if isinstance(record.get("repair_evidence"), list) else []:
+        if not isinstance(evidence, Mapping):
+            continue
+        kind = str(evidence.get("kind") or "")
+        if kind == "capital_return":
+            add_event(
+                str(evidence.get("trade_date") or evidence.get("source_date") or ""),
+                "capital_return",
+            )
+    for evidence in capital_events:
+        if not isinstance(evidence, Mapping):
+            continue
+        amount_yi = _chart_number_or_none(evidence.get("amount_yi"))
+        add_event(
+            str(evidence.get("date") or ""),
+            str(evidence.get("kind") or ""),
+            detail=str(evidence.get("detail") or ""),
+            amount_yi=amount_yi,
+            stock_names=[
+                str(value or "").strip()
+                for value in evidence.get("stock_names")
+                if str(value or "").strip()
+            ]
+            if isinstance(evidence.get("stock_names"), list)
+            else None,
+        )
+
+    priority = (
+        "institution_net_buy",
+        "main_fund_inflow",
+        "capital_return",
+        "reflow",
+        "rotation",
+        "cross_day_feedback",
+        "price_response",
+        "turnover_participation",
+    )
+    events = sorted(events_by_date.values(), key=lambda item: int(item["date_index"]))
+    for event in events:
+        kinds = event.get("kinds") if isinstance(event.get("kinds"), list) else []
+        event["primary_kind"] = next((kind for kind in priority if kind in kinds), "")
+
+    event_indexes = [int(event["date_index"]) for event in events]
+    stage_start_date = _valid_iso_date(str(record.get("stage_start_date") or ""))
+    last_confirmed_date = _valid_iso_date(str(record.get("last_confirmed_date") or ""))
+    as_of_date = _valid_iso_date(str(record.get("as_of_date") or ""))
+    status = str(record.get("status") or "").strip()
+    start_index: int | None = None
+    end_index: int | None = None
+    range_kind = "observed_feedback"
+    start_basis = "首次可核实反馈"
+    end_basis = "最近可核实反馈"
+
+    source_start_date = ""
+    source_end_date = ""
+    allow_observed_feedback_fallback = True
+    if stage_start_date:
+        if status in {"阶段主线弱化", "阶段主线失效"} and last_confirmed_date:
+            candidate_end_date = last_confirmed_date
+            end_basis = "最近完整续证"
+        elif status == "阶段主线已确认" and last_confirmed_date:
+            candidate_end_date = last_confirmed_date
+            end_basis = "最近完整续证"
+        elif event_indexes:
+            candidate_end_date = dates[max(event_indexes)]
+        else:
+            candidate_end_date = as_of_date or stage_start_date
+        source_start_date = stage_start_date
+        source_end_date = candidate_end_date
+        has_fixed_confirmation_end = bool(
+            last_confirmed_date
+            and status in {"阶段主线已确认", "阶段主线弱化", "阶段主线失效"}
+        )
+        if has_fixed_confirmation_end:
+            allow_observed_feedback_fallback = False
+        candidate_end_index = next(
+            (
+                index
+                for index in range(len(dates) - 1, -1, -1)
+                if dates[index] <= candidate_end_date
+            ),
+            None,
+        )
+        if stage_start_date < dates[0]:
+            candidate_start_index = next(
+                (
+                    event_index
+                    for event_index in event_indexes
+                    if candidate_end_index is not None and event_index <= candidate_end_index
+                ),
+                None,
+            )
+            if candidate_start_index is not None:
+                start_basis = "轴内首次可核实反馈"
+        else:
+            candidate_start_index = next(
+                (
+                    index
+                    for index, record_date in enumerate(dates)
+                    if record_date >= stage_start_date
+                ),
+                None,
+            )
+        if (
+            candidate_start_index is not None
+            and candidate_end_index is not None
+            and candidate_start_index <= candidate_end_index
+        ):
+            start_index = candidate_start_index
+            end_index = candidate_end_index
+            range_kind = "stage_interval"
+            if start_basis != "轴内首次可核实反馈":
+                start_basis = "阶段启动"
+    if (
+        (start_index is None or end_index is None)
+        and event_indexes
+        and allow_observed_feedback_fallback
+    ):
+        start_index = min(event_indexes)
+        end_index = max(event_indexes)
+        source_start_date = dates[start_index]
+        source_end_date = dates[end_index]
+
+    if start_index is None or end_index is None:
+        return [], events, []
+    end_index = max(start_index, end_index)
+    status_label = {
+        "阶段主线已确认": "持续反馈",
+        "阶段主线弱化": "反馈减弱",
+        "阶段主线失效": "反馈结束",
+        "阶段主线候选": "观察中",
+    }.get(status, "有反馈记录")
+    evidence_day_count = sum(
+        start_index <= int(event["date_index"]) <= end_index for event in events
+    )
+    visible_span_trading_days = end_index - start_index + 1
+    calendar_dates = [
+        record_date
+        for value in (
+            record.get("trading_calendar")
+            if isinstance(record.get("trading_calendar"), list)
+            else []
+        )
+        if (record_date := _valid_iso_date(str(value or "")))
+    ]
+    source_span_trading_days = sum(
+        source_start_date <= record_date <= source_end_date
+        for record_date in calendar_dates
+    )
+    span_trading_days = source_span_trading_days or visible_span_trading_days
+    interval_events = [
+        event
+        for event in events
+        if start_index <= int(event["date_index"]) <= end_index
+    ]
+    basis_labels = [
+        _SECTOR_FEEDBACK_EVENT_LABELS[kind]
+        for kind in priority
+        if any(kind in (event.get("kinds") or []) for event in interval_events)
+    ]
+    interval = {
+        "start_index": start_index,
+        "end_index": end_index,
+        "start_date": dates[start_index],
+        "end_date": dates[end_index],
+        "source_start_date": source_start_date or dates[start_index],
+        "source_end_date": source_end_date or dates[end_index],
+        "start_basis": start_basis,
+        "end_basis": end_basis,
+        "range_kind": range_kind,
+        "status": status_label,
+        "is_ongoing": bool(
+            end_index == len(dates) - 1
+            and status not in {"阶段主线弱化", "阶段主线失效"}
+        ),
+        "span_trading_days": span_trading_days,
+        "visible_span_trading_days": visible_span_trading_days,
+        "evidence_day_count": evidence_day_count,
+        "evidence_coverage": round(
+            evidence_day_count / visible_span_trading_days,
+            8,
+        ),
+        "basis_labels": basis_labels,
+    }
+    return [interval], events, basis_labels
+
+
+def _sector_relative_path_swimlane(
+    base_payload: Mapping[str, object],
+    three_axis: Mapping[str, object] | None,
+    *,
+    trade_date: str,
+    capital_events_by_sector: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    target_date = _valid_iso_date(str(trade_date or ""))
+    if (
+        not target_date
+        or not isinstance(three_axis, Mapping)
+        or not validate_sector_tournament_three_axis(three_axis, target_date=target_date)
+    ):
+        return dict(base_payload)
+
+    stage = three_axis.get("stage_mainline")
+    stage = stage if isinstance(stage, Mapping) else {}
+    raw_records = stage.get("directions") if isinstance(stage.get("directions"), list) else []
+    records = [item for item in raw_records if isinstance(item, Mapping)]
+    records_by_sector = {
+        str(item.get("direction") or "").strip(): item
+        for item in records
+        if str(item.get("direction") or "").strip()
+    }
+    evaluated_direction = str(
+        stage.get("evaluated_direction") or three_axis.get("direction") or ""
+    ).strip()
+    evaluated_record = records_by_sector.get(evaluated_direction, {})
+    window = (
+        evaluated_record.get("relative_strength_window")
+        if isinstance(evaluated_record.get("relative_strength_window"), Mapping)
+        else {}
+    )
+    window_date_values = (
+        window.get("trade_dates") if isinstance(window.get("trade_dates"), list) else []
+    )
+    comparison_dates = [
+        record_date
+        for value in window_date_values
+        if (record_date := _valid_iso_date(str(value or ""))) and record_date <= target_date
+    ]
+    comparison_dates = list(dict.fromkeys(comparison_dates))
+    base_date_values = (
+        base_payload.get("dates") if isinstance(base_payload.get("dates"), list) else []
+    )
+    base_dates = [
+        record_date
+        for value in base_date_values
+        if (record_date := _valid_iso_date(str(value or ""))) and record_date <= target_date
+    ]
+    stage_calendar_dates = sorted(
+        {
+            record_date
+            for record in records
+            for value in (
+                record.get("trading_calendar")
+                if isinstance(record.get("trading_calendar"), list)
+                else []
+            )
+            if (record_date := _valid_iso_date(str(value or "")))
+            and record_date <= target_date
+        }
+    )
+    dates = (
+        comparison_dates
+        if len(comparison_dates) >= 2
+        else sorted(set(stage_calendar_dates + base_dates))[-25:]
+    )
+    if not dates:
+        return dict(base_payload)
+
+    confirmed_values = (
+        stage.get("confirmed_directions")
+        if isinstance(stage.get("confirmed_directions"), list)
+        else []
+    )
+    confirmed_directions = [
+        str(value or "").strip()
+        for value in confirmed_values
+        if str(value or "").strip()
+    ]
+    candidate_values = (
+        stage.get("candidate_directions")
+        if isinstance(stage.get("candidate_directions"), list)
+        else []
+    )
+    candidate_directions = [
+        str(value or "").strip()
+        for value in candidate_values
+        if str(value or "").strip()
+    ]
+    daily_attack_line = str(stage.get("daily_attack_line") or "").strip()
+    comparison_scope = (
+        evaluated_record.get("comparison_universe_scope")
+        if isinstance(evaluated_record.get("comparison_universe_scope"), Mapping)
+        else {}
+    )
+    comparison_direction_values = (
+        comparison_scope.get("directions")
+        if isinstance(comparison_scope.get("directions"), list)
+        else []
+    )
+    comparison_directions = [
+        str(value or "").strip()
+        for value in comparison_direction_values
+        if str(value or "").strip()
+    ]
+    comparison_rows = (
+        evaluated_record.get("comparison_universe")
+        if isinstance(evaluated_record.get("comparison_universe"), list)
+        else []
+    )
+    endpoint_metric_by_sector = {
+        str(item.get("direction") or "").strip(): _chart_number_or_none(item.get("metric_value"))
+        for item in comparison_rows
+        if isinstance(item, Mapping) and str(item.get("direction") or "").strip()
+    }
+
+    base_lanes = base_payload.get("lanes") if isinstance(base_payload.get("lanes"), list) else []
+    base_by_sector = {
+        str(item.get("sector") or "").strip(): item
+        for item in base_lanes
+        if isinstance(item, Mapping) and str(item.get("sector") or "").strip()
+    }
+    sector_order = list(
+        dict.fromkeys(
+            [
+                *confirmed_directions,
+                evaluated_direction,
+                daily_attack_line,
+                *candidate_directions,
+                *comparison_directions,
+                *records_by_sector.keys(),
+                *base_by_sector.keys(),
+            ]
+        )
+    )
+    sector_order = [sector for sector in sector_order if sector]
+    space_axis = three_axis.get("space_axis")
+    space_axis = space_axis if isinstance(space_axis, Mapping) else {}
+    time_axis = three_axis.get("time_axis")
+    time_axis = time_axis if isinstance(time_axis, Mapping) else {}
+    cognition_axis = three_axis.get("cognition_axis")
+    cognition_axis = cognition_axis if isinstance(cognition_axis, Mapping) else {}
+    edge_source = three_axis.get("edge_source")
+    edge_source = edge_source if isinstance(edge_source, Mapping) else {}
+    space_stage = str(space_axis.get("stage") or "事实不足")
+    edge_type = str(edge_source.get("type") or "暂无可确认优势")
+    capital_events_by_sector = (
+        capital_events_by_sector if isinstance(capital_events_by_sector, Mapping) else {}
+    )
+
+    lanes = []
+    complete_path_count = 0
+    any_path_point = False
+    interval_lane_count = 0
+    capital_event_count = 0
+    capital_event_dates: set[str] = set()
+    interval_start_dates: list[str] = []
+    interval_end_dates: list[str] = []
+    ascii_lines = [
+        f"共同起点 | {dates[0]} = 100" if comparison_dates else "共同起点 | 相对价格路径未生成",
+        "日期 | " + " ".join(record_date[5:] for record_date in dates),
+    ]
+    for lane_index, sector in enumerate(sector_order):
+        record = records_by_sector.get(sector)
+        base_lane = base_by_sector.get(sector)
+        runs, observations = _sector_cycle_lane_on_dates(base_lane, dates, base_dates)
+        record_window = (
+            record.get("relative_strength_window")
+            if isinstance(record, Mapping)
+            and isinstance(record.get("relative_strength_window"), Mapping)
+            else {}
+        )
+        record_date_values = (
+            record_window.get("trade_dates")
+            if isinstance(record_window.get("trade_dates"), list)
+            else []
+        )
+        record_dates = [
+            record_date
+            for value in record_date_values
+            if (record_date := _valid_iso_date(str(value or ""))) and record_date <= target_date
+        ]
+        same_window = bool(comparison_dates and record_dates == comparison_dates)
+        raw_path = (
+            record.get("sector_index_path")
+            if isinstance(record, Mapping) and isinstance(record.get("sector_index_path"), list)
+            else []
+        )
+        raw_by_date: dict[str, Mapping[str, object]] = {}
+        if same_window:
+            for point in raw_path:
+                if not isinstance(point, Mapping):
+                    continue
+                point_date = _valid_iso_date(str(point.get("trade_date") or ""))
+                source_date = _valid_iso_date(str(point.get("source_date") or ""))
+                raw_value = _chart_number_or_none(point.get("index_value"))
+                if (
+                    point_date in dates
+                    and source_date
+                    and source_date <= target_date
+                    and raw_value is not None
+                    and raw_value > 0
+                ):
+                    raw_by_date[point_date] = point
+        baseline_point = raw_by_date.get(dates[0]) if dates else None
+        baseline = (
+            _chart_number_or_none(baseline_point.get("index_value"))
+            if isinstance(baseline_point, Mapping)
+            else None
+        )
+        normalized_path = []
+        for date_index, record_date in enumerate(dates):
+            point = raw_by_date.get(record_date)
+            raw_value = (
+                _chart_number_or_none(point.get("index_value"))
+                if isinstance(point, Mapping)
+                else None
+            )
+            normalized_value = (
+                round(raw_value / baseline * 100.0, 6)
+                if raw_value is not None and baseline is not None and baseline > 0
+                else None
+            )
+            if normalized_value is not None:
+                any_path_point = True
+            normalized_path.append(
+                {
+                    "date": record_date,
+                    "date_index": date_index,
+                    "raw_value": raw_value,
+                    "normalized_value": normalized_value,
+                    "relative_strength_rank": (
+                        point.get("relative_strength_rank")
+                        if isinstance(point, Mapping)
+                        else None
+                    ),
+                    "source_date": (
+                        str(point.get("source_date") or "")
+                        if isinstance(point, Mapping)
+                        else ""
+                    ),
+                }
+            )
+        path_complete = bool(
+            same_window
+            and len(dates) >= 2
+            and all(item["normalized_value"] is not None for item in normalized_path)
+        )
+        if path_complete:
+            complete_path_count += 1
+        if not isinstance(record, Mapping):
+            path_missing_reason = "没有同一比较窗口的板块指数路径"
+        elif not same_window:
+            path_missing_reason = "比较窗口不一致，不能强行归一"
+        elif not path_complete:
+            path_missing_reason = "逐日板块指数路径不完整，缺失日保留断点"
+        else:
+            path_missing_reason = ""
+
+        roles = []
+        if sector in confirmed_directions:
+            roles.append("阶段主线")
+        if sector == daily_attack_line:
+            roles.append("当日主攻")
+        if sector == evaluated_direction:
+            roles.append("当前评估")
+        role_text = "/".join(roles) or "观察方向"
+        metric = (
+            record.get("relative_strength_metric")
+            if isinstance(record, Mapping)
+            and isinstance(record.get("relative_strength_metric"), Mapping)
+            else {}
+        )
+        metric_value = _chart_number_or_none(metric.get("value"))
+        if metric_value is None:
+            metric_value = endpoint_metric_by_sector.get(sector)
+        color = (
+            str(base_lane.get("color") or "")
+            if isinstance(base_lane, Mapping)
+            else ""
+        ) or _CYCLE_SECTOR_COLOR_BY_NAME.get(sector) or (
+            _SECTOR_CYCLE_FALLBACK_COLORS[lane_index % len(_SECTOR_CYCLE_FALLBACK_COLORS)]
+        )
+        interpretation = _sector_relative_path_interpretation(
+            record,
+            path_complete=path_complete,
+        )
+        price_absorption = _sector_relative_price_absorption(
+            is_evaluated=sector == evaluated_direction,
+            space_stage=space_stage,
+            edge_type=edge_type,
+        )
+        raw_capital_events = capital_events_by_sector.get(sector)
+        capital_events = (
+            [item for item in raw_capital_events if isinstance(item, Mapping)]
+            if isinstance(raw_capital_events, list)
+            else []
+        )
+        activity_intervals, activity_events, activity_basis_labels = (
+            _sector_feedback_timeline(
+                record,
+                dates=dates,
+                normalized_path=normalized_path,
+                runs=runs,
+                observations=observations,
+                capital_events=capital_events,
+            )
+        )
+        if activity_intervals:
+            interval_lane_count += 1
+            interval_start_dates.extend(
+                str(item.get("start_date") or "") for item in activity_intervals
+            )
+            interval_end_dates.extend(
+                str(item.get("end_date") or "") for item in activity_intervals
+            )
+        for event in activity_events:
+            if any(
+                kind in {"capital_return", "main_fund_inflow", "institution_net_buy"}
+                for kind in (event.get("kinds") or [])
+            ):
+                capital_event_count += 1
+                event_date = _valid_iso_date(str(event.get("date") or ""))
+                if event_date:
+                    capital_event_dates.add(event_date)
+        lanes.append(
+            {
+                "sector": sector,
+                "color": color,
+                "runs": runs,
+                "observations": observations,
+                "activity_intervals": activity_intervals,
+                "activity_events": activity_events,
+                "activity_basis_labels": activity_basis_labels,
+                "normalized_path": normalized_path,
+                "path_complete": path_complete,
+                "path_missing_reason": path_missing_reason,
+                "roles": roles,
+                "stage_status": (
+                    str(record.get("status") or "阶段结构未生成")
+                    if isinstance(record, Mapping)
+                    else "阶段结构未生成"
+                ),
+                "interpretation": interpretation,
+                "price_absorption": price_absorption,
+                "relative_strength_metric": metric_value,
+                "relative_strength_rank": (
+                    record.get("relative_strength_rank")
+                    if isinstance(record, Mapping)
+                    else None
+                ),
+                "comparison_coverage": (
+                    record.get("comparison_coverage")
+                    if isinstance(record, Mapping)
+                    else None
+                ),
+                "divergence_test_status": (
+                    str(record.get("divergence_test_status") or "分歧检验未生成")
+                    if isinstance(record, Mapping)
+                    else "分歧检验未生成"
+                ),
+                "trend_density": (
+                    record.get("trend_density") if isinstance(record, Mapping) else None
+                ),
+                "missing_fields": (
+                    list(record.get("missing_fields") or [])
+                    if isinstance(record, Mapping)
+                    else ["sector_index_path"]
+                ),
+            }
+        )
+        activity_cells = ["  " for _record_date in dates]
+        for interval in activity_intervals:
+            for cell_index in range(
+                int(interval.get("start_index") or 0),
+                int(interval.get("end_index") or 0) + 1,
+            ):
+                activity_cells[cell_index] = "=="
+        event_symbols = {
+            "institution_net_buy": "I ",
+            "main_fund_inflow": "$ ",
+            "capital_return": "$ ",
+            "reflow": "R ",
+            "rotation": "R ",
+            "cross_day_feedback": "F ",
+            "price_response": "P ",
+            "turnover_participation": "T ",
+        }
+        for event in activity_events:
+            event_index = int(event.get("date_index") or 0)
+            kinds = event.get("kinds") if isinstance(event.get("kinds"), list) else []
+            activity_cells[event_index] = (
+                "* "
+                if len(kinds) > 1
+                else event_symbols.get(str(event.get("primary_kind") or ""), "? ")
+            )
+        interval_text = (
+            f"{activity_intervals[0]['start_date']} -> {activity_intervals[0]['end_date']}"
+            if activity_intervals
+            else "暂无可核实区间"
+        )
+        ascii_lines.append(
+            f"{sector} [{role_text}·{interpretation}] | "
+            + " ".join(activity_cells)
+            + f" | {interval_text}"
+        )
+        value_cells = [
+            "--" if item["normalized_value"] is None else f'{item["normalized_value"]:.1f}'
+            for item in normalized_path
+        ]
+        ascii_lines.append(
+            f"{sector} 价格辅助 | " + " ".join(value_cells)
+        )
+    ascii_lines.append(
+        "图例 | == 反馈区间  P 价格响应  F 跨日反馈  R 轮动/回流  "
+        "$ 主力资金  I 机构净买  T 成交参与  * 同日多项证据"
+    )
+    ascii_lines.append("说明 | 价格辅助仍按同起点100展示；--为缺口，不补0")
+
+    evaluated_lane = next(
+        (lane for lane in lanes if lane.get("sector") == evaluated_direction),
+        {},
+    )
+    if evaluated_lane.get("path_complete"):
+        path_status = "完整"
+        insufficient_reason = ""
+    elif any_path_point:
+        path_status = "部分"
+        insufficient_reason = str(
+            evaluated_lane.get("path_missing_reason") or "当前评估方向路径不完整"
+        )
+    else:
+        path_status = "归一价格路径未生成"
+        insufficient_reason = str(
+            evaluated_lane.get("path_missing_reason") or "相对价格路径未生成"
+        )
+    return {
+        "schema": "sector_relative_path_swimlane.v2",
+        "dates": dates,
+        "lanes": lanes,
+        "ascii": "\n".join(ascii_lines),
+        "title": "板块反馈区间泳道",
+        "subtitle": "线段显示首次反馈至最近反馈或结束；段内区分价格响应、轮动、成交参与和可核实资金入场。",
+        "comparison_start_date": comparison_dates[0] if comparison_dates else "",
+        "comparison_end_date": comparison_dates[-1] if comparison_dates else "",
+        "baseline_value": 100,
+        "path_status": path_status,
+        "insufficient_reason": insufficient_reason,
+        "complete_path_count": complete_path_count,
+        "interval_lane_count": interval_lane_count,
+        "interval_start_date": min(interval_start_dates) if interval_start_dates else "",
+        "interval_end_date": max(interval_end_dates) if interval_end_dates else "",
+        "capital_event_count": capital_event_count,
+        "capital_event_date_count": len(capital_event_dates),
+        "activity_status": "有可核实区间" if interval_lane_count else "暂无可核实区间",
+        "evaluated_direction": evaluated_direction,
+        "stage_mainlines": confirmed_directions,
+        "daily_attack_line": daily_attack_line,
+        "space_stage": space_stage,
+        "time_stage": str(time_axis.get("stage") or "事实不足"),
+        "cognition_stage": str(cognition_axis.get("stage") or "事实不足"),
+        "edge_type": edge_type,
+        "story_price_relation": str(three_axis.get("story_price_relation") or "事实不足"),
+        "source_artifact_hash": str(three_axis.get("artifact_hash") or ""),
+    }
+
+
+def _collect_sector_cycle_swimlane(
+    lines: list[str],
+    *,
+    sector_tournament_three_axis: Mapping[str, object] | None = None,
+    trade_date: str = "",
+) -> dict[str, object]:
+    observations_by_sector: dict[str, list[dict[str, object]]] = {}
+    tracked_sector_order: list[str] = []
+    colors_by_sector: dict[str, str] = {}
+    direction_rows: list[dict[str, str]] = []
+    capital_events_by_sector: dict[str, list[dict[str, object]]] = {}
+    stock_sector_by_code: dict[str, str] = {}
+    institution_rows_by_code: dict[str, dict[str, object]] = {}
+    target_date = _valid_iso_date(trade_date)
     current_heading = ""
     current_sector = ""
     current_color = ""
@@ -1774,16 +3085,101 @@ def _collect_sector_turnover_chart_items(lines: list[str], trade_date: str) -> l
             current_heading = heading_match.group(2).strip()
             if "近期热点板块成交额连续跟踪" in _plain_cell_text(current_heading):
                 current_sector, current_color = _sector_name_and_color_from_heading(current_heading)
+                if "连续跟踪" in current_sector:
+                    current_sector = ""
+                    current_color = ""
+                if current_sector and current_sector not in tracked_sector_order:
+                    tracked_sector_order.append(current_sector)
+                if current_sector and current_color:
+                    colors_by_sector[current_sector] = current_color
             else:
                 current_sector = ""
                 current_color = ""
             index += 1
             continue
-        if not current_sector or not _is_table_start(lines, index):
+        if not _is_table_start(lines, index):
             index += 1
             continue
 
         headers, rows, index = _collect_table(lines, index)
+        heading_text = _plain_cell_text(current_heading)
+        code_index = _header_index(headers, "代码")
+        stock_index = _header_index(headers, "股票")
+        stock_sector_index = _header_index(headers, "所属板块")
+        if code_index >= 0 and stock_sector_index >= 0:
+            for row in rows:
+                stock_code = _plain_cell_text(_cell_at(row, code_index))
+                stock_sector, _color = _sector_name_and_color_from_heading(
+                    _cell_at(row, stock_sector_index)
+                )
+                if stock_code and stock_sector:
+                    stock_sector_by_code[stock_code] = stock_sector
+
+        institution_amount_index = _header_index(headers, "机构净买(亿)")
+        if (
+            "机构净买强榜" in heading_text
+            and min(code_index, stock_index, institution_amount_index) >= 0
+        ):
+            for row in rows:
+                stock_code = _plain_cell_text(_cell_at(row, code_index))
+                stock_name = _plain_cell_text(_cell_at(row, stock_index))
+                amount_yi = _numeric_amount_yi_cell(
+                    _cell_at(row, institution_amount_index),
+                    _cell_at(headers, institution_amount_index),
+                )
+                if not stock_code or not stock_name or amount_yi is None or amount_yi <= 0:
+                    continue
+                institution_rows_by_code[stock_code] = {
+                    "amount_yi": amount_yi,
+                    "stock_name": stock_name,
+                }
+
+        fund_sector_index = _header_index(headers, "板块")
+        fund_amount_index = _header_index(headers, "净流入", "主力净流入")
+        if (
+            "资金流入" in heading_text
+            and target_date
+            and min(fund_sector_index, fund_amount_index) >= 0
+        ):
+            for row in rows:
+                sector, _color = _sector_name_and_color_from_heading(
+                    _cell_at(row, fund_sector_index)
+                )
+                amount_yi = _numeric_amount_yi_cell(
+                    _cell_at(row, fund_amount_index),
+                    _cell_at(headers, fund_amount_index),
+                )
+                if not sector or amount_yi is None or amount_yi <= 0:
+                    continue
+                event = {
+                    "date": target_date,
+                    "kind": "main_fund_inflow",
+                    "amount_yi": amount_yi,
+                    "detail": f"主力净流入 {amount_yi:+.2f}亿",
+                }
+                sector_events = capital_events_by_sector.setdefault(sector, [])
+                if event not in sector_events:
+                    sector_events.append(event)
+            continue
+
+        if "小周期成交额与主线切换判断" in heading_text:
+            date_index = _header_index(headers, "日期")
+            sector_index = _header_index(headers, "小周期方向")
+            if min(date_index, sector_index) < 0:
+                continue
+            for row in rows:
+                record_date = _valid_iso_date(_cell_at(row, date_index))
+                raw_sector = _cell_at(row, sector_index)
+                sector, color = _sector_name_and_color_from_heading(raw_sector)
+                if not record_date:
+                    continue
+                direction_rows.append({"date": record_date, "sector": sector})
+                if sector and color:
+                    colors_by_sector[sector] = color
+            continue
+        if not current_sector:
+            continue
+
         date_index = _header_index(headers, "日期")
         sector_turnover_index = _header_index(headers, "板块成交额")
         total_turnover_index = _header_index(headers, "两市成交额")
@@ -1794,36 +3190,167 @@ def _collect_sector_turnover_chart_items(lines: list[str], trade_date: str) -> l
         if min(date_index, sector_turnover_index, total_turnover_index, share_index) < 0:
             continue
 
-        preferred_rows = [row for row in rows if _plain_cell_text(_cell_at(row, date_index)) == trade_date] if trade_date else []
-        if trade_date and not preferred_rows:
-            continue
-        candidates = preferred_rows or rows[:1]
-        for row in candidates:
-            share_pct = _numeric_percent(_cell_at(row, share_index))
-            sector_turnover = _numeric_amount_yi(_cell_at(row, sector_turnover_index))
-            total_turnover = _numeric_amount_yi(_cell_at(row, total_turnover_index))
-            if share_pct is None or sector_turnover is None:
+        sector_observations = observations_by_sector.setdefault(current_sector, [])
+        seen_dates = {str(item.get("date") or "") for item in sector_observations}
+        for row in rows:
+            record_date = _valid_iso_date(_cell_at(row, date_index))
+            if not record_date or record_date in seen_dates:
                 continue
-            sector = current_sector or "未命名板块"
-            if sector in seen:
-                continue
-            seen.add(sector)
-            items.append(
+            seen_dates.add(record_date)
+            turnover_text = _plain_cell_text(_cell_at(row, sector_turnover_index))
+            total_turnover_text = _plain_cell_text(_cell_at(row, total_turnover_index))
+            share_text = _plain_cell_text(_cell_at(row, share_index))
+            change_text = _plain_cell_text(_cell_at(row, change_index))
+            sector_observations.append(
                 {
-                    "sector": sector,
-                    "date": _plain_cell_text(_cell_at(row, date_index)),
-                    "turnover": sector_turnover,
-                    "total_turnover": total_turnover,
-                    "share_pct": share_pct,
+                    "date": record_date,
+                    "turnover": _numeric_amount_yi(turnover_text),
+                    "turnover_text": turnover_text,
+                    "total_turnover": _numeric_amount_yi(total_turnover_text),
+                    "total_turnover_text": total_turnover_text,
+                    "share_pct": _numeric_percent(share_text),
+                    "share_text": share_text,
                     "change_pct": _numeric_pct_point(_cell_at(row, change_index)),
+                    "change_text": change_text,
                     "status": _plain_cell_text(_cell_at(row, status_index)),
                     "note": _plain_cell_text(_cell_at(row, note_index)),
-                    "color": current_color,
                 }
             )
-            break
-        continue
-    return sorted(items, key=lambda item: float(item.get("share_pct") or 0), reverse=True)
+
+    institution_by_sector: dict[str, dict[str, object]] = {}
+    for stock_code, institution_row in institution_rows_by_code.items():
+        sector = stock_sector_by_code.get(stock_code, "")
+        if not sector:
+            continue
+        grouped = institution_by_sector.setdefault(
+            sector,
+            {"amount_yi": 0.0, "stock_names": []},
+        )
+        grouped["amount_yi"] = round(
+            float(grouped["amount_yi"]) + float(institution_row["amount_yi"]),
+            6,
+        )
+        stock_name = str(institution_row.get("stock_name") or "").strip()
+        stock_names = grouped["stock_names"]
+        if stock_name and isinstance(stock_names, list) and stock_name not in stock_names:
+            stock_names.append(stock_name)
+    for sector, grouped in institution_by_sector.items() if target_date else []:
+        amount_yi = float(grouped["amount_yi"])
+        stock_names = grouped["stock_names"] if isinstance(grouped["stock_names"], list) else []
+        detail = f"机构净买 {amount_yi:+.2f}亿"
+        if stock_names:
+            detail += "（" + "、".join(str(value) for value in stock_names) + "）"
+        capital_events_by_sector.setdefault(sector, []).append(
+            {
+                "date": target_date,
+                "kind": "institution_net_buy",
+                "amount_yi": amount_yi,
+                "stock_names": stock_names,
+                "detail": detail,
+            }
+        )
+
+    direction_by_date: dict[str, str] = {}
+    for item in direction_rows:
+        record_date = item.get("date") or ""
+        sector = item.get("sector") or ""
+        if record_date and (record_date not in direction_by_date or sector):
+            direction_by_date[record_date] = sector
+    dates = sorted(direction_by_date)[-25:]
+    if not dates or not any(direction_by_date.get(record_date) for record_date in dates):
+        return _sector_relative_path_swimlane(
+            {},
+            sector_tournament_three_axis,
+            trade_date=trade_date,
+            capital_events_by_sector=capital_events_by_sector,
+        )
+
+    recent_sectors: list[str] = []
+    for record_date in reversed(dates):
+        sector = direction_by_date[record_date]
+        if sector and sector not in recent_sectors:
+            recent_sectors.append(sector)
+    lane_sectors = recent_sectors + [sector for sector in tracked_sector_order if sector not in recent_sectors]
+    date_indexes = {record_date: item_index for item_index, record_date in enumerate(dates)}
+    lanes: list[dict[str, object]] = []
+    ascii_rows: list[tuple[str, list[str]]] = []
+    for lane_index, sector in enumerate(lane_sectors):
+        runs: list[dict[str, object]] = []
+        run_start: int | None = None
+        for date_index, record_date in enumerate(dates):
+            is_active = direction_by_date.get(record_date) == sector
+            if is_active and run_start is None:
+                run_start = date_index
+            if run_start is not None and (not is_active or date_index == len(dates) - 1):
+                run_end = date_index if is_active else date_index - 1
+                runs.append(
+                    {
+                        "start_index": run_start,
+                        "end_index": run_end,
+                        "start_date": dates[run_start],
+                        "end_date": dates[run_end],
+                    }
+                )
+                run_start = None
+
+        lane_observations: list[dict[str, object]] = []
+        for observation in observations_by_sector.get(sector, []):
+            observation_date = str(observation.get("date") or "")
+            if observation_date not in date_indexes:
+                continue
+            normalized = dict(observation)
+            date_index = date_indexes[observation_date]
+            is_direction = direction_by_date.get(observation_date) == sector
+            share_available = observation.get("share_pct") is not None
+            normalized["date_index"] = date_index
+            normalized["kind"] = "combined" if is_direction and share_available else (
+                "available" if share_available else "missing"
+            )
+            lane_observations.append(normalized)
+        lane_observations.sort(key=lambda item: int(item.get("date_index") or 0))
+
+        color = colors_by_sector.get(sector) or _CYCLE_SECTOR_COLOR_BY_NAME.get(sector) or (
+            _SECTOR_CYCLE_FALLBACK_COLORS[lane_index % len(_SECTOR_CYCLE_FALLBACK_COLORS)]
+        )
+        cells = [" " for _date in dates]
+        for run in runs:
+            for cell_index in range(int(run["start_index"]), int(run["end_index"]) + 1):
+                cells[cell_index] = "#"
+        for observation in lane_observations:
+            cell_index = int(observation["date_index"])
+            if observation.get("share_pct") is not None:
+                cells[cell_index] = "@" if cells[cell_index] == "#" else "o"
+            else:
+                cells[cell_index] = "?"
+        ascii_rows.append((sector, cells))
+        lanes.append(
+            {
+                "sector": sector,
+                "color": color,
+                "runs": runs,
+                "observations": lane_observations,
+            }
+        )
+
+    date_row = "日期 | " + " ".join(record_date[5:] for record_date in dates)
+    ascii_lines = [date_row]
+    for sector, cells in ascii_rows:
+        ascii_lines.append(f"{sector} | " + "    ".join(cells))
+    ascii_lines.append("图例 | # 当日小周期方向  o 占比可用  ? 占比暂缺  @ 方向与占比同时出现")
+    base_payload = {
+        "schema": "sector_cycle_swimlane.v1",
+        "dates": dates,
+        "lanes": lanes,
+        "ascii": "\n".join(ascii_lines),
+        "title": "25日板块周期泳道",
+        "subtitle": "连续条记录小周期方向，节点记录逐板块成交占比。",
+    }
+    return _sector_relative_path_swimlane(
+        base_payload,
+        sector_tournament_three_axis,
+        trade_date=trade_date,
+        capital_events_by_sector=capital_events_by_sector,
+    )
 
 
 def _collect_turnover_top_items(lines: list[str], limit: int = 30) -> list[dict[str, object]]:
@@ -1880,6 +3407,42 @@ def _collect_turnover_top_items(lines: list[str], limit: int = 30) -> list[dict[
             )
         return items
     return []
+
+
+def _normalize_turnover_rank_items(
+    rows: Iterable[Mapping[str, object]], trade_date: str, *, limit: int = 30,
+) -> list[dict[str, object]]:
+    """Read dated turnover facts; `turnover` is already expressed in 亿元.
+
+    Keep this independent of the Markdown core table, which only lists >100亿.
+    Missing dates/amounts are not inferred and missing returns remain unknown.
+    """
+    try:
+        target_date = date.fromisoformat(trade_date).isoformat()
+    except ValueError:
+        return []
+    by_code: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping) or row.get("trade_date") != target_date:
+            continue
+        code = str(row.get("code") or "").strip()
+        name = str(row.get("name") or "").strip()
+        turnover = _chart_number_or_none(row.get("turnover"))
+        if not code or not name or turnover is None or turnover <= 0 or code in by_code:
+            continue
+        by_code[code] = {
+            "code": code,
+            "name": name,
+            "turnover": turnover,
+            "change_pct": _chart_number_or_none(row.get("change_pct")),
+            "sector": str(row.get("sector") or "待确认板块"),
+            "trade_date": target_date,
+            "status": "",
+        }
+    items = sorted(by_code.values(), key=lambda item: (-float(item["turnover"]), str(item["code"])))[:limit]
+    for rank, item in enumerate(items, 1):
+        item["rank"] = rank
+    return items
 
 
 def _collect_turnover_sector_share_items(turnover_items: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -2056,6 +3619,9 @@ def _collect_new_high_share_items(lines: list[str], limit: int = 25) -> list[dic
     return []
 
 
+_LHB_SIDE_HEADINGS = ("净买入结果", "净流出结果", "净卖出结果")
+
+
 def _is_lhb_side_heading(heading: str, side: str) -> bool:
     text = _plain_cell_text(heading)
     if side == "buy":
@@ -2063,8 +3629,58 @@ def _is_lhb_side_heading(heading: str, side: str) -> bool:
     return "净流出结果" in text or "净卖出结果" in text
 
 
-def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[dict[str, object]]:
+def _frozen_limit_codes(value: object) -> set[str] | None:
+    """Normalize one frozen code list; ``None`` marks a structurally invalid payload."""
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return None
+    codes: set[str] = set()
+    for entry in value:
+        if isinstance(entry, bool) or not isinstance(entry, (str, int)):
+            return None
+        code = str(entry).strip().split(".")[0].strip()
+        if not code:
+            return None
+        codes.add(code)
+    return codes
+
+
+def _frozen_lhb_limit_status(
+    trade_date: str,
+    lhb_limit_status: Mapping[str, object] | None,
+) -> dict[str, str]:
+    """Resolve 涨停/跌停 identity from the frozen target-day identity sets only.
+
+    A missing payload, an unexpected structure, or a payload for another trade
+    date yields an empty mapping: callers then leave everything uncolored instead
+    of falling back to report text, change percentages, or candle shapes.
+    """
+    if not isinstance(lhb_limit_status, Mapping):
+        return {}
+    target_date = _valid_iso_date(trade_date)
+    if not target_date:
+        return {}
+    if _plain_cell_text(lhb_limit_status.get("trade_date")) != target_date:
+        return {}
+    up_codes = _frozen_limit_codes(lhb_limit_status.get("limit_up_codes"))
+    down_codes = _frozen_limit_codes(lhb_limit_status.get("limit_down_codes"))
+    if up_codes is None or down_codes is None:
+        return {}
+    frozen_status = {code: "涨停" for code in up_codes - down_codes}
+    frozen_status.update({code: "跌停" for code in down_codes - up_codes})
+    return frozen_status
+
+
+def _collect_lhb_flow_items(
+    lines: list[str],
+    limit_per_side: int = 10,
+    *,
+    trade_date: str = "",
+    lhb_frozen_limits: Mapping[str, str] | None = None,
+) -> list[dict[str, object]]:
+    target_date = _valid_iso_date(trade_date)
+    frozen_status = dict(lhb_frozen_limits or {})
     current_heading = ""
+    heading_dates: dict[int, str] = {}
     items: list[dict[str, object]] = []
     index = 0
     while index < len(lines):
@@ -2072,6 +3688,11 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
         heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
         if heading_match:
             current_heading = heading_match.group(2)
+            level = len(heading_match.group(1))
+            heading_dates = {key: value for key, value in heading_dates.items() if key < level}
+            heading_date = re.search(r"\b\d{4}-\d{2}-\d{2}\b", current_heading)
+            if heading_date:
+                heading_dates[level] = heading_date.group()
             index += 1
             continue
         if not _is_table_start(lines, index):
@@ -2094,8 +3715,7 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
         code_index = _header_index(headers, "代码", "股票代码")
         sector_index = _header_index(headers, "所属板块", "板块")
         change_index = _header_index(headers, "涨跌幅", "涨幅")
-        status_index = _header_index(headers, "涨停状态", "状态")
-        candle_index = _header_index(headers, "蜡烛图形态")
+        date_index = _header_index(headers, "交易日期", "交易日", "日期")
         if min(amount_index, name_index, sector_index) < 0:
             continue
 
@@ -2107,14 +3727,12 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
                 continue
             signed_amount = abs(amount) if side == "buy" else -abs(amount)
             change_pct = _numeric_percent(_cell_at(row, change_index))
-            status = _plain_cell_text(_cell_at(row, status_index))
-            if not status:
-                status = _limit_status_from_turnover_row(
-                    change_pct,
-                    _cell_at(row, candle_index),
-                    stock_code=_plain_cell_text(_cell_at(row, code_index)),
-                    stock_name=_plain_cell_text(_cell_at(row, name_index)),
-                )
+            code = _plain_cell_text(_cell_at(row, code_index))
+            row_date = _plain_cell_text(_cell_at(row, date_index))
+            dates = [*heading_dates.values(), *([row_date] if row_date else [])]
+            matches_target = bool(target_date) and all(value == target_date for value in dates)
+            limit_status = frozen_status.get(code.split(".")[0].strip(), "") if matches_target else ""
+            status = limit_status
             rank_text = _plain_cell_text(_cell_at(row, rank_index))
             try:
                 rank = int(rank_text)
@@ -2124,12 +3742,13 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
                 {
                     "rank": rank,
                     "name": _plain_cell_text(_cell_at(row, name_index)),
-                    "code": _plain_cell_text(_cell_at(row, code_index)),
+                    "code": code,
                     "sector": _plain_cell_text(_cell_at(row, sector_index)),
                     "amount": signed_amount,
                     "abs_amount": abs(amount),
                     "change_pct": change_pct,
                     "status": status,
+                    "limit_status": limit_status,
                     "side": side,
                 }
             )
@@ -2318,15 +3937,57 @@ def _collect_intraday_feedback_review(lines: list[str]) -> dict[str, object]:
     }
 
 
-def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str, object]:
+def _chinext_close_by_date(
+    value: Mapping[str, object] | None,
+    trade_date: str,
+) -> dict[str, float]:
+    if not isinstance(value, Mapping) or not isinstance(value.get("items"), list):
+        return {}
+    target_date = _valid_iso_date(str(trade_date or ""))
+    close_by_date: dict[str, float] = {}
+    for item in value["items"]:
+        if not isinstance(item, Mapping):
+            continue
+        item_date = _valid_iso_date(str(item.get("date") or item.get("trade_date") or ""))
+        close = _chart_number_or_none(item.get("close"))
+        if not item_date or (target_date and item_date > target_date) or close is None or close <= 0:
+            continue
+        close_by_date[item_date] = close
+    return close_by_date
+
+
+def _collect_bear_chart_payload(
+    markdown_text: str,
+    trade_date: str,
+    *,
+    chinext_index_trend: Mapping[str, object] | None = None,
+    sector_tournament_three_axis: Mapping[str, object] | None = None,
+    turnover_rank: Iterable[Mapping[str, object]] | None = None,
+    lhb_frozen_limits: Mapping[str, str] | None = None,
+) -> dict[str, object]:
     lines = markdown_text.splitlines()
-    sector_items = _collect_sector_turnover_chart_items(lines, trade_date)
+    sector_cycle_swimlane = _collect_sector_cycle_swimlane(
+        lines,
+        sector_tournament_three_axis=sector_tournament_three_axis,
+        trade_date=trade_date,
+    )
     market_turnover_items = _collect_market_turnover_top50_items(lines)
     new_high_share_items = _collect_new_high_share_items(lines)
-    turnover_items = _collect_turnover_top_items(lines, limit=30)
+    turnover_items = (
+        _normalize_turnover_rank_items(turnover_rank, trade_date)
+        if turnover_rank is not None
+        else _collect_turnover_top_items(lines, limit=30)
+    )
+    turnover_source = (
+        f"{trade_date} 成交额全量榜，按金额降序取前30；单位：亿元"
+        if turnover_rank is not None
+        else "仅正文成交核心样本；未提供目标日完整成交榜，不代表全市场前30"
+    )
+    if len(turnover_items) < 30:
+        turnover_source += f"；可核实 {len(turnover_items)} 条，不补齐缺失记录"
     turnover_sector_items = _collect_turnover_sector_share_items(turnover_items)
     board_tag_items = _collect_board_tag_rank_items(lines)
-    lhb_items = _collect_lhb_flow_items(lines)
+    lhb_items = _collect_lhb_flow_items(lines, trade_date=trade_date, lhb_frozen_limits=lhb_frozen_limits)
     intraday_feedback_review = _collect_intraday_feedback_review(lines)
     payload: dict[str, object] = {}
     if intraday_feedback_review:
@@ -2336,11 +3997,21 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
             "subtitle": "同屏比较上证、旧仓和目标对象的分时强弱",
         }
     if market_turnover_items:
+        chinext_by_date = _chinext_close_by_date(chinext_index_trend, trade_date)
+        aligned_chinext_count = 0
+        if chinext_by_date:
+            for item in market_turnover_items:
+                close = chinext_by_date.get(str(item.get("date") or ""))
+                item["chinext_close"] = close
+                if close is not None:
+                    aligned_chinext_count += 1
         payload["market_turnover_top50_trend"] = {
             "items": market_turnover_items,
             "title": "两市成交额与Top50占比",
             "subtitle": "柱看两市成交额，线看头部成交集中度",
         }
+        if aligned_chinext_count:
+            payload["market_turnover_top50_trend"]["chinext_available_count"] = aligned_chinext_count
     if new_high_share_items:
         payload["new_high_share_trend"] = {
             "items": new_high_share_items,
@@ -2348,23 +4019,23 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
             "subtitle": "5%及以上为极致扩散，2%到5%为有效扩散，1%到2%为扩散偏冷，0.2%到1%为极低扩散；低于0.2%或个位数为扩散断层。",
             "thresholds": build_new_high_breadth_thresholds(),
         }
-    if sector_items:
-        payload["sector_turnover_share"] = {
-            "items": sector_items,
-            "title": "板块成交额占比",
-            "subtitle": "只取目标日行；变化按同板块历史比较",
-        }
+    if sector_cycle_swimlane:
+        payload["sector_cycle_swimlane"] = sector_cycle_swimlane
     if turnover_items:
         if turnover_sector_items:
             payload["turnover_sector_share"] = {
                 "items": turnover_sector_items,
                 "title": "成交额Top30板块占比",
-                "subtitle": "按成交核心结果表汇总板块成交额",
+                "subtitle": turnover_source,
             }
         payload["turnover_top30"] = {
             "items": turnover_items,
             "title": "成交额Top30",
-            "subtitle": "来自成交核心结果表，红涨绿跌",
+            "subtitle": turnover_source,
+            "trade_date": trade_date,
+            "unit": "亿元",
+            "source": "turnover_rank" if turnover_rank is not None else "markdown_core_table",
+            "complete": turnover_rank is not None and len(turnover_items) == 30,
         }
     if board_tag_items:
         payload["board_tag_rank_bar"] = {
@@ -2376,7 +4047,8 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
         payload["lhb_net_flow"] = {
             "items": lhb_items,
             "title": "龙虎榜净额表态",
-            "subtitle": "正轴为净买入，负轴为净流出",
+            "subtitle": "正轴为净买入，负轴为净流出；柱色只按净额方向（正红负绿），收盘涨停与跌停身份只在表格和提示里标出，不按涨跌幅推断",
+            "trade_date": trade_date,
         }
     return payload
 
@@ -2435,6 +4107,20 @@ def _normalize_t0_market_breadth_payload(
     }
 
 
+def _normalize_cffex_position_trend_payload(
+    value: Mapping[str, object] | None,
+    trade_date: str,
+    *,
+    limit: int = 60,
+) -> dict[str, object]:
+    # Historical callers still import this name; current chart projection lives
+    # with the CFFEX facts so this compatibility facade does not pull the old
+    # report renderer into the current reading path.
+    from report.cffex_index_futures_position_evidence import normalize_cffex_position_trend_payload
+
+    return normalize_cffex_position_trend_payload(value, trade_date, limit=limit)
+
+
 def _bear_chart_card_html(
     chart_id: str,
     *,
@@ -2444,10 +4130,36 @@ def _bear_chart_card_html(
     footnote: str,
     item_count: int,
     tall: bool = False,
+    window_sizes: Iterable[int] = (),
+    default_window_size: int | None = None,
 ) -> str:
     if item_count <= 0:
         return ""
     tall_class = " is-tall" if tall else ""
+    chart_style = f' style="height:{item_count * 36 + 42}px;min-height:0"' if chart_id == "turnover_top30" else ""
+    normalized_window_sizes = list(
+        dict.fromkeys(
+            size
+            for raw_size in window_sizes
+            if (size := int(raw_size)) > 0
+        )
+    )
+    window_control = ""
+    if len(normalized_window_sizes) > 1:
+        buttons = []
+        for index, size in enumerate(normalized_window_sizes):
+            pressed = str(size == default_window_size if default_window_size is not None else index == 0).lower()
+            buttons.append(
+                f'<button type="button" data-window-size="{size}" '
+                f'aria-pressed="{pressed}">{size}日</button>'
+            )
+        window_control = (
+            '<div class="bear-chart-toolbar">'
+            f'<div class="bear-chart-window-control" data-bear-chart-window-control="{_html(chart_id)}" '
+            f'role="group" aria-label="{_html(title)}时间范围">'
+            + "".join(buttons)
+            + "</div></div>"
+        )
     return (
         f'<section class="bear-chart-card" data-bear-chart-card="{_html(chart_id)}">'
         '<div class="bear-chart-copy">'
@@ -2455,12 +4167,241 @@ def _bear_chart_card_html(
         f"<h4>{_html(title)}</h4>"
         f"<p>{_html(subtitle)}</p>"
         "</div>"
+        f"{window_control}"
         f'<div class="bear-chart-frame{tall_class}">'
-        f'<div class="bear-chart" data-bear-chart="{_html(chart_id)}" role="img" aria-label="{_html(title)}"></div>'
+        f'<div class="bear-chart" data-bear-chart="{_html(chart_id)}"{chart_style} role="img" aria-label="{_html(title)}"></div>'
         "</div>"
         f'<p class="bear-chart-footnote">{_html(footnote)} · 当前样本 {item_count} 条</p>'
         "</section>"
     )
+
+
+def _bear_sector_cycle_swimlane_html(payload: Mapping[str, object]) -> str:
+    dates = payload.get("dates") if isinstance(payload.get("dates"), list) else []
+    lanes = payload.get("lanes") if isinstance(payload.get("lanes"), list) else []
+    if not dates or not lanes:
+        return ""
+    is_relative_path = payload.get("schema") == "sector_relative_path_swimlane.v2"
+    lane_count = len(lanes)
+    chart_height = max(340, lane_count * (74 if is_relative_path else 46) + 82)
+    track_width = max(760, len(dates) * 58)
+    lane_label_parts = []
+    for lane in lanes:
+        if not isinstance(lane, Mapping):
+            continue
+        sector = str(lane.get("sector") or "未命名板块")
+        color = str(lane.get("color") or "#6B7280")
+        if is_relative_path:
+            roles = lane.get("roles") if isinstance(lane.get("roles"), list) else []
+            role_text = " / ".join(str(item) for item in roles if str(item).strip()) or "观察方向"
+            intervals = (
+                lane.get("activity_intervals")
+                if isinstance(lane.get("activity_intervals"), list)
+                else []
+            )
+            interval = next(
+                (item for item in intervals if isinstance(item, Mapping)),
+                {},
+            )
+            start_date = str(
+                interval.get("source_start_date") or interval.get("start_date") or ""
+            )
+            end_date = str(
+                interval.get("source_end_date") or interval.get("end_date") or ""
+            )
+            interval_text = (
+                f"{start_date} → {end_date}"
+                if start_date and end_date
+                else "暂无可核实区间"
+            )
+            span_days = int(_chart_number_or_none(interval.get("span_trading_days")) or 0)
+            span_text = f"{span_days}个交易日" if span_days else "持续日待确认"
+            interval_status = str(interval.get("status") or "暂无可核实反馈")
+            basis_values = (
+                interval.get("basis_labels")
+                if isinstance(interval.get("basis_labels"), list)
+                else []
+            )
+            basis_set = {str(item) for item in basis_values if str(item).strip()}
+            basis_groups = []
+            if basis_set & {"机构净买", "主力净流入", "资金回流"}:
+                basis_groups.append("主力/机构资金")
+            if basis_set & {"轮动", "冷却后回流"}:
+                basis_groups.append("轮动/回流")
+            if basis_set & {"价格响应", "跨日反馈"}:
+                basis_groups.append("价格/跨日响应")
+            if "成交参与" in basis_set:
+                basis_groups.append("成交参与")
+            basis_text = " / ".join(basis_groups) or "证据类型待确认"
+            lane_label_parts.append(
+                '<span class="sector-cycle-lane-label is-relative-path">'
+                f'<i style="--sector-cycle-color:{_html(color)}"></i>'
+                '<span class="sector-cycle-lane-copy">'
+                f'<strong>{_html(sector)}</strong>'
+                f'<small>{_html(interval_text)} · {_html(span_text)}</small>'
+                f'<small>{_html(role_text)} · {_html(interval_status)}</small>'
+                f'<small>证据：{_html(basis_text)}</small>'
+                '</span></span>'
+            )
+        else:
+            lane_label_parts.append(
+                '<span class="sector-cycle-lane-label">'
+                f'<i style="--sector-cycle-color:{_html(color)}"></i>'
+                f'{_html(sector)}</span>'
+            )
+    lane_labels = "".join(lane_label_parts)
+    ascii_text = str(payload.get("ascii") or "")
+    title = str(payload.get("title") or "25日板块周期泳道")
+    subtitle = str(payload.get("subtitle") or "连续条记录小周期方向，节点记录逐板块成交占比。")
+    if is_relative_path:
+        start_date = str(payload.get("interval_start_date") or "")
+        end_date = str(payload.get("interval_end_date") or "")
+        interval_text = (
+            f"{start_date} → {end_date}"
+            if start_date and end_date
+            else "暂无可核实区间"
+        )
+        interval_count = int(
+            _chart_number_or_none(payload.get("interval_lane_count")) or 0
+        )
+        capital_date_count = int(
+            _chart_number_or_none(payload.get("capital_event_date_count")) or 0
+        )
+        stage_mainlines = payload.get("stage_mainlines") if isinstance(payload.get("stage_mainlines"), list) else []
+        stage_text = "、".join(str(item) for item in stage_mainlines if str(item).strip()) or "阶段方向未形成"
+        daily_attack = str(payload.get("daily_attack_line") or "当日主攻方向未形成")
+        path_status = str(payload.get("path_status") or "归一价格路径未生成")
+        if path_status == "事实不足":
+            path_status = "归一价格路径未生成"
+        context_html = (
+            '<div class="sector-cycle-context" aria-label="板块反馈区间摘要">'
+            f'<span><b>反馈总区间</b>{_html(interval_text)}</span>'
+            f'<span><b>有反馈板块</b>{interval_count}/{lane_count}个</span>'
+            f'<span><b>资金参与日期</b>{capital_date_count}个交易日</span>'
+            f'<span><b>阶段 / 当日</b>{_html(stage_text)} / {_html(daily_attack)}</span>'
+            '</div>'
+            + (
+                '<p class="sector-cycle-insufficient">暂无可核实的板块反馈起止区间。</p>'
+                if not interval_count
+                else ""
+            )
+        )
+        legend_html = (
+            '<span><i class="is-feedback-range"></i>反馈起止区间</span>'
+            '<span><i class="is-response"></i>价格/跨日反馈</span>'
+            '<span><i class="is-rotation"></i>轮动/回流</span>'
+            '<span><i class="is-fund"></i>主力资金</span>'
+            '<span><i class="is-institution"></i>机构净买</span>'
+            '<span><i class="is-turnover"></i>成交参与</span>'
+            '<span><i class="is-path"></i>归一价格辅助线</span>'
+        )
+        label_width = 244
+        aria_title = "板块反馈区间泳道图"
+        footnote = (
+            f"横轴共 {len(dates)} 个交易日；线段表示开始至结束的交易日区间，节点表示逐日证据；"
+            f"归一价格路径仅作辅助（{path_status}），缺失不补0"
+        )
+    else:
+        context_html = ""
+        legend_html = (
+            '<span><i class="is-run"></i>小周期方向</span>'
+            '<span><i class="is-combined"></i>方向与占比同时出现</span>'
+            '<span><i class="is-available"></i>占比可用</span>'
+            '<span><i class="is-missing"></i>占比暂缺</span>'
+        )
+        label_width = 148
+        aria_title = "最近25个交易日板块周期泳道图"
+        footnote = f"横轴共 {len(dates)} 个交易日，缺失占比不按 0 处理"
+    card_class = " is-relative-path" if is_relative_path else ""
+    return (
+        f'<section class="bear-chart-card sector-cycle-card{card_class}" '
+        'data-bear-chart-card="sector_cycle_swimlane" data-sector-cycle-card '
+        f'style="--sector-cycle-label-width:{label_width}px">'
+        '<div class="bear-chart-copy">'
+        f'<span class="bear-chart-eyebrow">{"反馈区间" if is_relative_path else "周期轮动"}</span>'
+        f'<h4>{_html(title)}</h4>'
+        f'<p>{_html(subtitle)}</p>'
+        '</div>'
+        f'{context_html}'
+        '<div class="sector-cycle-legend" aria-label="泳道图图例">'
+        f'{legend_html}'
+        '</div>'
+        f'<div class="sector-cycle-shell" style="--sector-cycle-height:{chart_height}px">'
+        f'<div class="sector-cycle-lane-labels" aria-hidden="true">{lane_labels}</div>'
+        f'<div class="sector-cycle-track-scroll" role="region" aria-label="{_html(aria_title)}横向时间轴" tabindex="0">'
+        f'<div class="bear-chart sector-cycle-chart" data-bear-chart="sector_cycle_swimlane" '
+        f'style="width:{track_width}px;height:{chart_height}px" role="img" '
+        f'aria-label="{_html(aria_title)}"></div>'
+        '</div></div>'
+        '<div class="sector-cycle-ascii" data-sector-cycle-ascii role="region" '
+        f'aria-label="{_html(title)}文本泳道" tabindex="0">'
+        '<strong>文本泳道</strong>'
+        f'<pre>{_html(ascii_text)}</pre></div>'
+        '<div class="sector-cycle-scroll-controls" data-sector-cycle-scroll-controls>'
+        '<button type="button" data-sector-cycle-scroll-backward aria-label="时间轴向左滚动" disabled>'
+        '<span aria-hidden="true">&#8592;</span></button>'
+        '<input type="range" min="0" max="0" value="0" step="1" '
+        f'data-sector-cycle-scroll-range aria-label="横向浏览{_html(title)}时间轴" disabled>'
+        '<button type="button" data-sector-cycle-scroll-forward aria-label="时间轴向右滚动" disabled>'
+        '<span aria-hidden="true">&#8594;</span></button>'
+        '</div>'
+        f'<p class="bear-chart-footnote">{_html(footnote)}</p>'
+        '</section>'
+    )
+
+
+def _sector_cycle_raw_records_open_html() -> str:
+    return (
+        '<details class="sector-cycle-raw-records" data-sector-cycle-raw-records>'
+        '<summary><span>原始记录</span><small>逐板块明细与25日记录</small></summary>'
+        '<div class="sector-cycle-raw-records-body">'
+    )
+
+
+_SECTOR_CYCLE_RAW_RECORDS_CLOSE_HTML = "</div></details>"
+
+
+def _bear_appendix_section_open_html(
+    heading_markdown: str,
+    heading_title: str,
+    anchor: str,
+    stock_refs: tuple[str, ...],
+) -> str:
+    return (
+        '<details class="bear-appendix-section" data-bear-appendix-section>'
+        f'<summary id="{_html(anchor)}" data-bear-appendix-summary>'
+        '<span class="bear-appendix-section-title">'
+        f'{_heading_inline(heading_markdown, stock_refs, section_title=heading_title)}'
+        '</span></summary>'
+        '<div class="bear-appendix-section-body">'
+    )
+
+
+_BEAR_APPENDIX_SECTION_CLOSE_HTML = "</div></details>"
+
+
+def _is_primary_sector_cycle_heading(title: str) -> bool:
+    return (
+        re.fullmatch(
+            r"(?:\d+[.、]\s*)?主线成交额占比趋势(?:（近期热点板块连续跟踪）)?",
+            _plain_cell_text(title),
+        )
+        is not None
+    )
+
+
+def _markdown_has_primary_sector_cycle_heading(lines: list[str]) -> bool:
+    in_fenced_code = False
+    for line in lines:
+        if _is_fenced_code_start(line):
+            in_fenced_code = not in_fenced_code
+            continue
+        if in_fenced_code:
+            continue
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line.strip())
+        if match and _is_primary_sector_cycle_heading(_strip_inline_markdown(match.group(2))):
+            return True
+    return False
 
 
 _MARKET_STRUCTURE_CHART_RE = re.compile(r'^::market-structure-chart\{(?P<attrs>.*)\}$')
@@ -2606,7 +4547,8 @@ def _is_heat_core_section(section_title: str) -> bool:
 
 
 def _is_lhb_section(section_title: str) -> bool:
-    return "龙虎榜结果" in section_title or str(section_title or "") in {"净买入结果", "净流出结果"}
+    text = _plain_cell_text(section_title)
+    return "龙虎榜结果" in text or any(side in text for side in _LHB_SIDE_HEADINGS)
 
 
 def _heat_core_status_signal(value: str) -> str:
@@ -2623,19 +4565,6 @@ def _heat_core_status_signal(value: str) -> str:
         return "signal-hot"
     if re.fullmatch(r"\d+(天)?\d*板", text) or re.fullmatch(r"\d+连板", text):
         return "signal-hot"
-    return ""
-
-
-def _row_limit_status_signal(headers: list[str], row: list[str]) -> str:
-    for header_index, header_value in enumerate(headers):
-        if header_index >= len(row):
-            continue
-        header_text = _table_header_text(header_value)
-        if header_text not in {"连板标签", "涨停标签", "涨停状态", "状态"}:
-            continue
-        signal = _heat_core_status_signal(row[header_index])
-        if signal:
-            return signal
     return ""
 
 
@@ -2683,23 +4612,43 @@ def _heat_core_limit_signal(
     return ""
 
 
-def _lhb_limit_signal(headers: list[str], row: list[str], cell_index: int, section_title: str) -> str:
+def _lhb_row_code(headers: list[str], row: list[str]) -> str:
+    code_index = _header_index(headers, "代码", "股票代码", "证券代码")
+    candidates = [_cell_at(row, code_index)] if code_index >= 0 else []
+    candidates.extend(row)
+    for candidate in candidates:
+        code = _plain_cell_text(candidate).split(".")[0].strip()
+        if re.fullmatch(r"\d{6}", code):
+            return code
+    return ""
+
+
+def _frozen_limit_row_signal(
+    headers: list[str],
+    row: list[str],
+    frozen_limits: Mapping[str, str],
+) -> str:
+    status = frozen_limits.get(_lhb_row_code(headers, row), "")
+    if status == "涨停":
+        return "signal-hot"
+    if status == "跌停":
+        return "signal-cold"
+    return ""
+
+
+def _lhb_limit_signal(
+    headers: list[str],
+    row: list[str],
+    cell_index: int,
+    section_title: str,
+    frozen_limits: Mapping[str, str],
+) -> str:
     if not _is_lhb_section(section_title):
         return ""
     header = headers[cell_index] if cell_index < len(headers) else ""
     if _table_header_text(header) not in {"涨跌幅", "涨幅"}:
         return ""
-    return _row_limit_status_signal(headers, row)
-
-
-def _lhb_signal_strength_signal(headers: list[str], row: list[str], cell_index: int, section_title: str) -> str:
-    if not _is_lhb_section(section_title):
-        return ""
-    header = headers[cell_index] if cell_index < len(headers) else ""
-    if _table_header_text(header) != "信号强度":
-        return ""
-    text = row[cell_index] if cell_index < len(row) else ""
-    return _heat_core_status_signal(text)
+    return _frozen_limit_row_signal(headers, row, frozen_limits)
 
 
 def _signal_class(
@@ -2709,19 +4658,17 @@ def _signal_class(
     *,
     section_title: str = "",
     limit_pools: LimitPools | None = None,
+    lhb_frozen_limits: Mapping[str, str] | None = None,
 ) -> str:
     limit_pools = limit_pools or LimitPools(up=frozenset(), down=frozenset())
+    lhb_frozen_limits = lhb_frozen_limits or {}
     limit_signal = _heat_core_limit_signal(headers, row, cell_index, section_title, limit_pools)
     if limit_signal:
         return limit_signal
 
-    lhb_signal = _lhb_limit_signal(headers, row, cell_index, section_title)
+    lhb_signal = _lhb_limit_signal(headers, row, cell_index, section_title, lhb_frozen_limits)
     if lhb_signal:
         return lhb_signal
-
-    lhb_strength_signal = _lhb_signal_strength_signal(headers, row, cell_index, section_title)
-    if lhb_strength_signal:
-        return lhb_strength_signal
 
     header = headers[cell_index] if cell_index < len(headers) else ""
     label = row[0] if row else ""
@@ -2795,6 +4742,7 @@ def _render_table(
     *,
     section_title: str = "",
     limit_pools: LimitPools | None = None,
+    lhb_frozen_limits: Mapping[str, str] | None = None,
     hide_board_tag_heatbar: bool = False,
 ) -> tuple[str, int]:
     headers = _split_table_row(lines[index])
@@ -2804,6 +4752,9 @@ def _render_table(
         if not _is_table_separator(lines[index]):
             rows.append(_split_table_row(lines[index]))
         index += 1
+
+    if _is_candidate_lifecycle_table(section_title, headers):
+        return _render_candidate_lifecycle_table(headers, rows, stock_refs), index
 
     if _is_position_day_order_table(headers, rows):
         return _render_position_day_order_table(headers, rows, stock_refs), index
@@ -2831,6 +4782,7 @@ def _render_table(
                 cell_index,
                 section_title=section_title,
                 limit_pools=limit_pools,
+                lhb_frozen_limits=lhb_frozen_limits,
             )
             cell_html = _table_cell_inline(
                 headers,
@@ -2867,6 +4819,7 @@ def _collect_paragraph(lines: list[str], index: int) -> tuple[str, int]:
             break
         if (
             stripped.startswith("#")
+            or stripped.startswith("<!--")
             or stripped.startswith(">")
             or stripped.startswith("- ")
             or stripped == "---"
@@ -2880,6 +4833,14 @@ def _collect_paragraph(lines: list[str], index: int) -> tuple[str, int]:
     return " ".join(paragraph), index
 
 
+def _skip_html_comment(lines: list[str], index: int) -> int:
+    while index < len(lines):
+        if "-->" in lines[index]:
+            return index + 1
+        index += 1
+    return index
+
+
 def _collect_prefixed(lines: list[str], index: int, prefix: str) -> tuple[list[str], int]:
     items = []
     while index < len(lines) and lines[index].strip().startswith(prefix):
@@ -2888,21 +4849,36 @@ def _collect_prefixed(lines: list[str], index: int, prefix: str) -> tuple[list[s
     return items, index
 
 
-def _render_nav(headings: Iterable[Heading]) -> str:
+def _render_nav(headings: Iterable[Heading], *, mobile: bool = False) -> str:
     items = []
+    appendix_items = []
     for index, heading in enumerate(headings):
         if heading.level > 3:
             continue
-        active_class = " is-active" if index == 0 else ""
+        active_class = " is-active" if index == 0 and not mobile else ""
         class_name = f' class="level-{heading.level}{active_class}"'
         current_attr = ' aria-current="true"' if active_class else ""
-        items.append(
+        link = (
             f'<a{class_name}{current_attr} href="#{_html(heading.anchor)}" data-outline-anchor="{_html(heading.anchor)}">'
             f"{_html(heading.title)}</a>"
         )
+        if mobile and heading.is_detailed_appendix:
+            appendix_items.append(link)
+        else:
+            items.append(link)
+    if mobile and appendix_items:
+        items.append(
+            '<details class="mobile-nav-appendix">'
+            '<summary><span>详细附录</span>'
+            f'<small>{len(appendix_items)}项</small></summary>'
+            '<div class="mobile-nav-appendix-links">'
+            + "\n".join(appendix_items)
+            + "</div></details>"
+        )
     if not items:
         return ""
-    return '<nav class="outline-nav" aria-label="当前日报标题导航">' + "\n".join(items) + "</nav>"
+    nav_class = "mobile-nav" if mobile else "outline-nav"
+    return f'<nav class="{nav_class}" aria-label="当前日报标题导航">' + "\n".join(items) + "</nav>"
 
 
 def render_markdown_report_html(
@@ -2914,15 +4890,35 @@ def render_markdown_report_html(
     output_path: str | Path | None = None,
     tomorrow_action_calendar: Mapping[str, object] | None = None,
     t0_market_breadth: Mapping[str, object] | None = None,
+    chinext_index_trend: Mapping[str, object] | None = None,
+    sector_tournament_three_axis: Mapping[str, object] | None = None,
+    cffex_index_futures_position_evidence: Mapping[str, object] | None = None,
+    turnover_rank: Iterable[Mapping[str, object]] | None = None,
+    lhb_limit_status: Mapping[str, object] | None = None,
 ) -> str:
     markdown_text = _sanitize_reader_markdown_text(markdown_text)
     lines = markdown_text.splitlines()
+    has_primary_sector_cycle_heading = _markdown_has_primary_sector_cycle_heading(lines)
     stock_refs = _collect_stock_refs(markdown_text)
     limit_pools = _collect_limit_pools(markdown_text)
-    bear_chart_payload = _collect_bear_chart_payload(markdown_text, trade_date)
+    lhb_frozen_limits = _frozen_lhb_limit_status(trade_date, lhb_limit_status)
+    bear_chart_payload = _collect_bear_chart_payload(
+        markdown_text,
+        trade_date,
+        chinext_index_trend=chinext_index_trend,
+        sector_tournament_three_axis=sector_tournament_three_axis,
+        turnover_rank=turnover_rank,
+        lhb_frozen_limits=lhb_frozen_limits,
+    )
     normalized_market_breadth = _normalize_t0_market_breadth_payload(t0_market_breadth, trade_date)
     if normalized_market_breadth:
         bear_chart_payload["t0_market_breadth"] = normalized_market_breadth
+    normalized_cffex_position_trend = _normalize_cffex_position_trend_payload(
+        cffex_index_futures_position_evidence,
+        trade_date,
+    )
+    if normalized_cffex_position_trend:
+        bear_chart_payload["cffex_position_trend"] = normalized_cffex_position_trend
     used_anchors: dict[str, int] = {}
     headings: list[Heading] = []
     calendar_html = _render_tomorrow_action_calendar(tomorrow_action_calendar)
@@ -2932,12 +4928,20 @@ def render_markdown_report_html(
     index = 0
     current_h2_title = ""
     current_section_title = ""
+    sector_cycle_raw_records_open = False
+    sector_cycle_raw_records_close_level = 0
+    in_detailed_appendix = False
+    appendix_section_open = False
 
     while index < len(lines):
         line = lines[index]
         stripped = line.strip()
         if not stripped:
             index += 1
+            continue
+
+        if stripped.startswith("<!--"):
+            index = _skip_html_comment(lines, index)
             continue
 
         market_structure_chart = _render_market_structure_chart(stripped, output_path)
@@ -2950,6 +4954,14 @@ def render_markdown_report_html(
         if heading_match:
             level = len(heading_match.group(1))
             heading_title = _strip_inline_markdown(heading_match.group(2))
+            plain_heading_title = _plain_cell_text(heading_title)
+            if sector_cycle_raw_records_open and level <= sector_cycle_raw_records_close_level:
+                fragments.append(_SECTOR_CYCLE_RAW_RECORDS_CLOSE_HTML)
+                sector_cycle_raw_records_open = False
+                sector_cycle_raw_records_close_level = 0
+            if appendix_section_open and level <= 3:
+                fragments.append(_BEAR_APPENDIX_SECTION_CLOSE_HTML)
+                appendix_section_open = False
             if _is_stale_price_band_heading(lines, index, heading_title, level, trade_date):
                 index = _skip_section(lines, index, level)
                 continue
@@ -2957,14 +4969,34 @@ def render_markdown_report_html(
                 fragments.append(f"<p><strong>{_inline(heading_match.group(2), stock_refs)}</strong></p>")
                 index += 1
                 continue
+            if level <= 2:
+                in_detailed_appendix = level == 2 and plain_heading_title == "八、详细附录"
             anchor = _heading_anchor(heading_title, used_anchors)
             heading_class = _heading_class(level, heading_title)
             class_attr = f' class="{heading_class}"' if heading_class else ""
-            headings.append(Heading(level=level, title=heading_title, anchor=anchor))
-            fragments.append(
-                f'<h{level}{class_attr} id="{_html(anchor)}">'
-                f'{_heading_inline(heading_match.group(2), stock_refs, section_title=heading_title)}</h{level}>'
+            headings.append(
+                Heading(
+                    level=level,
+                    title=heading_title,
+                    anchor=anchor,
+                    is_detailed_appendix=in_detailed_appendix and level == 3,
+                )
             )
+            if in_detailed_appendix and level == 3:
+                fragments.append(
+                    _bear_appendix_section_open_html(
+                        heading_match.group(2),
+                        heading_title,
+                        anchor,
+                        stock_refs,
+                    )
+                )
+                appendix_section_open = True
+            else:
+                fragments.append(
+                    f'<h{level}{class_attr} id="{_html(anchor)}">'
+                    f'{_heading_inline(heading_match.group(2), stock_refs, section_title=heading_title)}</h{level}>'
+                )
             market_breadth_chart = bear_chart_payload.get("t0_market_breadth")
             if (
                 re.fullmatch(r"(?:\d+[.、]\s*)?指数与市场底色", heading_title)
@@ -2990,24 +5022,62 @@ def render_markdown_report_html(
                     )
                 )
                 inserted_charts.add("t0_market_breadth")
-            sector_chart = bear_chart_payload.get("sector_turnover_share")
+            cffex_position_chart = bear_chart_payload.get("cffex_position_trend")
             if (
-                "主线成交额占比趋势" in heading_title
-                and isinstance(sector_chart, dict)
-                and "sector_turnover_share" not in inserted_charts
+                plain_heading_title == "股指期货持仓结构（研究证据）"
+                and isinstance(cffex_position_chart, dict)
+                and "cffex_position_trend" not in inserted_charts
             ):
-                items = sector_chart.get("items") if isinstance(sector_chart.get("items"), list) else []
+                items = (
+                    cffex_position_chart.get("items")
+                    if isinstance(cffex_position_chart.get("items"), list)
+                    else []
+                )
                 fragments.append(
                     _bear_chart_card_html(
-                        "sector_turnover_share",
-                        eyebrow="容量雷达",
-                        title="板块成交额占比",
-                        subtitle="横向比较目标日热点板块的成交额占比，看资金最集中流向。",
-                        footnote="图表来自下方板块成交额连续跟踪表",
+                        "cffex_position_trend",
+                        eyebrow="衍生品结构",
+                        title=str(
+                            cffex_position_chart.get("title")
+                            or "股指期货净空结构趋势"
+                        ),
+                        subtitle=str(cffex_position_chart.get("subtitle") or ""),
+                        footnote=(
+                            "默认显示最近60个交易日，可切换20日；不足60日按已有样本展示；"
+                            "缺失值不补0，目标日精确值与名义金额复核见下表"
+                        ),
                         item_count=len(items),
+                        tall=True,
+                        window_sizes=(20, 60),
+                        default_window_size=60,
                     )
                 )
-                inserted_charts.add("sector_turnover_share")
+                inserted_charts.add("cffex_position_trend")
+            sector_cycle_chart = bear_chart_payload.get("sector_cycle_swimlane")
+            is_primary_sector_cycle_heading = _is_primary_sector_cycle_heading(heading_title)
+            is_sector_cycle_appendix_heading = (
+                plain_heading_title == "附录：近期热点板块成交额连续跟踪"
+            )
+            if (
+                (is_primary_sector_cycle_heading or is_sector_cycle_appendix_heading)
+                and isinstance(sector_cycle_chart, dict)
+            ):
+                should_insert_sector_cycle_chart = (
+                    "sector_cycle_swimlane" not in inserted_charts
+                    and (
+                        is_primary_sector_cycle_heading
+                        or (
+                            is_sector_cycle_appendix_heading
+                            and not has_primary_sector_cycle_heading
+                        )
+                    )
+                )
+                if should_insert_sector_cycle_chart:
+                    fragments.append(_bear_sector_cycle_swimlane_html(sector_cycle_chart))
+                    inserted_charts.add("sector_cycle_swimlane")
+                fragments.append(_sector_cycle_raw_records_open_html())
+                sector_cycle_raw_records_open = True
+                sector_cycle_raw_records_close_level = 3 if is_primary_sector_cycle_heading else 4
             lhb_chart = bear_chart_payload.get("lhb_net_flow")
             if (
                 "龙虎榜结果" in heading_title
@@ -3020,8 +5090,8 @@ def render_markdown_report_html(
                         "lhb_net_flow",
                         eyebrow="资金表态",
                         title="龙虎榜净额表态",
-                        subtitle="右侧看净买入强度，左侧看净流出压力；先看方向，再看是否验证主线。",
-                        footnote="图表来自龙虎榜净买入/净流出结果表",
+                        subtitle=str(lhb_chart["subtitle"]),
+                        footnote="净额来自龙虎榜结果表；涨跌停以目标日收盘身份为准，未确认不作标色",
                         item_count=len(items),
                         tall=True,
                     )
@@ -3053,6 +5123,10 @@ def render_markdown_report_html(
             continue
 
         if _is_table_start(lines, index):
+            is_sector_cycle_direction_table = (
+                sector_cycle_raw_records_open
+                and _table_has_headers(lines, index, "日期", "小周期方向", "主线成交额")
+            )
             intraday_feedback_chart = bear_chart_payload.get("intraday_feedback_review")
             if (
                 isinstance(intraday_feedback_chart, dict)
@@ -3087,6 +5161,7 @@ def render_markdown_report_html(
                 and _table_has_headers(lines, index, "日期", "Top50占比", "Top50成交额", "两市成交额")
             ):
                 items = market_turnover_chart.get("items") if isinstance(market_turnover_chart.get("items"), list) else []
+                has_chinext = int(market_turnover_chart.get("chinext_available_count") or 0) > 0
                 fragments.extend(
                     [
                         _bear_chart_card_html(
@@ -3100,8 +5175,16 @@ def render_markdown_report_html(
                         _bear_chart_card_html(
                             "top50_share_trend",
                             eyebrow="头部集中度",
-                            title="Top50成交占比趋势",
-                            subtitle="折线只看头部成交集中度。",
+                            title=(
+                                "Top50成交占比与创业板指趋势"
+                                if has_chinext
+                                else "Top50成交占比趋势"
+                            ),
+                            subtitle=(
+                                "双轴比较头部成交集中度与创业板指数走势。"
+                                if has_chinext
+                                else "折线只看头部成交集中度。"
+                            ),
                             footnote="图表来自Top50成交额占比趋势表",
                             item_count=len(items),
                         ),
@@ -3151,8 +5234,8 @@ def render_markdown_report_html(
                             "turnover_sector_share",
                             eyebrow="结构占比",
                             title="成交额Top30板块占比",
-                            subtitle="把成交核心个股按板块汇总，先看资金容量集中在哪些方向。",
-                            footnote="图表来自成交核心结果表，按表内样本成交额重新汇总",
+                            subtitle="按同一成交榜汇总板块金额，观察资金容量集中方向。",
+                            footnote=str(turnover_sector_chart.get("subtitle") or ""),
                             item_count=len(sector_items),
                         )
                     )
@@ -3163,10 +5246,9 @@ def render_markdown_report_html(
                         "turnover_top30",
                         eyebrow="成交核心",
                         title="成交额Top30",
-                        subtitle="按成交额排序，柱长看成交额，柱尾直接显示涨跌幅，颜色跟随涨跌。",
-                        footnote="图表来自成交核心结果表；若正文只输出部分行，图表同步只展示表内样本",
+                        subtitle="按成交额排序，柱长看金额，柱尾显示成交额与涨跌幅；红涨绿跌。在图内向下滚动查看全部记录。",
+                        footnote=str(turnover_chart.get("subtitle") or ""),
                         item_count=len(items),
-                        tall=True,
                     )
                 )
                 inserted_charts.add("turnover_top30")
@@ -3198,9 +5280,14 @@ def render_markdown_report_html(
                 stock_refs,
                 section_title=current_section_title,
                 limit_pools=limit_pools,
+                lhb_frozen_limits=lhb_frozen_limits,
                 hide_board_tag_heatbar=is_board_tag_rank_table,
             )
             fragments.append(table_html)
+            if is_sector_cycle_direction_table:
+                fragments.append(_SECTOR_CYCLE_RAW_RECORDS_CLOSE_HTML)
+                sector_cycle_raw_records_open = False
+                sector_cycle_raw_records_close_level = 0
             continue
 
         if _is_fenced_code_start(stripped):
@@ -3234,9 +5321,15 @@ def render_markdown_report_html(
             continue
         index += 1
 
+    if sector_cycle_raw_records_open:
+        fragments.append(_SECTOR_CYCLE_RAW_RECORDS_CLOSE_HTML)
+    if appendix_section_open:
+        fragments.append(_BEAR_APPENDIX_SECTION_CLOSE_HTML)
+
     first_h1 = next((heading for heading in headings if heading.level == 1), None)
     page_title = title or (first_h1.title if first_h1 else "A股日报")
     nav = _render_nav(headings)
+    mobile_nav = _render_nav(headings, mobile=True)
     template = Template(_template_path().read_text(encoding="utf-8"))
     return template.safe_substitute(
         title=_html(page_title),
@@ -3244,6 +5337,7 @@ def render_markdown_report_html(
         source=_html(source_label),
         outline_title=_html(page_title),
         outline_nav=nav,
+        mobile_nav=mobile_nav,
         document_body="\n".join(fragments),
         echarts_loader=_echarts_loader_html(output_path),
         mermaid_loader=_mermaid_loader_html(output_path, enabled=has_mermaid_diagram),
@@ -3261,6 +5355,11 @@ def render_markdown_report_file(
     prepend_markdown: str = "",
     tomorrow_action_calendar: Mapping[str, object] | None = None,
     t0_market_breadth: Mapping[str, object] | None = None,
+    chinext_index_trend: Mapping[str, object] | None = None,
+    sector_tournament_three_axis: Mapping[str, object] | None = None,
+    cffex_index_futures_position_evidence: Mapping[str, object] | None = None,
+    turnover_rank: Iterable[Mapping[str, object]] | None = None,
+    lhb_limit_status: Mapping[str, object] | None = None,
 ) -> Path:
     source = Path(markdown_path)
     output = Path(html_path) if html_path is not None else source.with_suffix(".html")
@@ -3275,6 +5374,11 @@ def render_markdown_report_file(
         output_path=output,
         tomorrow_action_calendar=tomorrow_action_calendar,
         t0_market_breadth=t0_market_breadth,
+        chinext_index_trend=chinext_index_trend,
+        sector_tournament_three_axis=sector_tournament_three_axis,
+        cffex_index_futures_position_evidence=cffex_index_futures_position_evidence,
+        turnover_rank=turnover_rank,
+        lhb_limit_status=lhb_limit_status,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")
@@ -3288,7 +5392,76 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--title", default="")
     parser.add_argument("--trade-date", default="")
     parser.add_argument("--source-label", default="Markdown日报")
+    parser.add_argument("--snapshot-json", default="", help="目标日冻结快照；读取完整成交榜及已有图表事实，不改写快照")
+    parser.add_argument(
+        "--chinext-index-trend-json",
+        default="",
+        help="创业板指数历史载荷 JSON 文件",
+    )
+    parser.add_argument(
+        "--sector-tournament-three-axis-json",
+        default="",
+        help="板块资金扩散淘汰赛三坐标载荷 JSON 文件",
+    )
+    parser.add_argument(
+        "--cffex-position-evidence-json",
+        default="",
+        help="中金所股指期货持仓结构载荷 JSON 文件",
+    )
     args = parser.parse_args(argv)
+    snapshot_data = {}
+    if args.snapshot_json:
+        try:
+            snapshot = json.loads(Path(args.snapshot_json).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"冻结快照无法读取：{exc}")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("data"), dict):
+            parser.error("冻结快照必须包含日期与 data 对象")
+        snapshot_date = str(snapshot.get("date") or "")
+        try:
+            date.fromisoformat(snapshot_date)
+        except ValueError:
+            parser.error("冻结快照日期无效")
+        if args.trade_date and args.trade_date != snapshot_date:
+            parser.error("冻结快照日期与目标交易日不一致")
+        args.trade_date = snapshot_date
+        snapshot_data = snapshot["data"]
+        if snapshot_data.get("target_date", snapshot_date) != snapshot_date:
+            parser.error("冻结快照内外日期不一致")
+        if not isinstance(snapshot_data.get("turnover_rank"), list):
+            parser.error("冻结快照缺少完整成交榜 turnover_rank")
+
+    chinext_index_trend = None
+    if args.chinext_index_trend_json:
+        payload_path = Path(args.chinext_index_trend_json)
+        try:
+            chinext_index_trend = json.loads(payload_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"创业板指数历史载荷无法读取：{exc}")
+        if not isinstance(chinext_index_trend, dict):
+            parser.error("创业板指数历史载荷必须是 JSON 对象")
+
+    sector_tournament_three_axis = None
+    if args.sector_tournament_three_axis_json:
+        payload_path = Path(args.sector_tournament_three_axis_json)
+        try:
+            sector_tournament_three_axis = json.loads(payload_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"板块资金扩散淘汰赛三坐标载荷无法读取：{exc}")
+        if not isinstance(sector_tournament_three_axis, dict):
+            parser.error("板块资金扩散淘汰赛三坐标载荷必须是 JSON 对象")
+
+    cffex_index_futures_position_evidence = None
+    if args.cffex_position_evidence_json:
+        payload_path = Path(args.cffex_position_evidence_json)
+        try:
+            cffex_index_futures_position_evidence = json.loads(
+                payload_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"中金所股指期货持仓结构载荷无法读取：{exc}")
+        if not isinstance(cffex_index_futures_position_evidence, dict):
+            parser.error("中金所股指期货持仓结构载荷必须是 JSON 对象")
 
     path = render_markdown_report_file(
         args.markdown_path,
@@ -3296,6 +5469,17 @@ def main(argv: list[str] | None = None) -> int:
         title=args.title,
         trade_date=args.trade_date,
         source_label=args.source_label,
+        chinext_index_trend=chinext_index_trend or snapshot_data.get("chinext_index_trend"),
+        sector_tournament_three_axis=sector_tournament_three_axis or (
+            snapshot_data.get("selection_workflow") or {}
+        ).get("sector_tournament_three_axis"),
+        cffex_index_futures_position_evidence=cffex_index_futures_position_evidence or snapshot_data.get("cffex_index_futures_position_evidence"),
+        turnover_rank=snapshot_data.get("turnover_rank"),
+        lhb_limit_status={
+            "trade_date": args.trade_date,
+            "limit_up_codes": snapshot_data.get("limit_up_codes"),
+            "limit_down_codes": snapshot_data.get("limit_down_codes"),
+        } if args.snapshot_json else None,
     )
     print(f"HTML 日报已生成: {path}")
     return 0

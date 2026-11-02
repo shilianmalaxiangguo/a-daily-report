@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr
+import io
 import importlib.util
 import sys
 import tempfile
@@ -87,7 +89,7 @@ class DailyReportWechatDraftSkillTest(unittest.TestCase):
         self.assertEqual(context.trade_date, "2099-01-03")
         self.assertEqual(context.report_path, html_path.resolve())
 
-    def test_empty_target_defaults_to_empty_position_post_copy(self):
+    def test_missing_target_remains_unconfirmed_in_post_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / "2099-01-03_A股日报_完整版.md"
             report_path.write_text(
@@ -102,15 +104,23 @@ class DailyReportWechatDraftSkillTest(unittest.TestCase):
             )
             context = self.module.report_context_from_input(report_path)
 
-        self.assertEqual(self.module.default_title(context), "今日空仓")
-        self.assertEqual(self.module.default_digest(context), "今日空仓")
+        self.assertEqual(self.module.default_title(context), "日报目标待确认")
+        self.assertEqual(self.module.default_digest(context), "日报目标待确认")
         html = self.module.build_article_html(
             [("账户日序表", "file:///tmp/a.png"), ("板块资金扩散淘汰赛", "file:///tmp/b.png")],
             context,
         )
         self.assertEqual(html.count("<img "), 2)
-        self.assertIn("今日标的：空仓", html)
+        self.assertIn("今日标的：待确认", html)
         self.assertIn("模拟持仓，不作为投资买卖依据", html)
+
+    def test_cli_requires_an_explicit_path_and_has_no_latest_selector(self):
+        for argv in ([], ['--latest']):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                self.module.parse_args(argv)
+        args = self.module.parse_args(['archive.html', '--env-file', ''])
+        self.assertEqual(args.report, 'archive.html')
+        self.assertIsNone(args.env_file)
 
     def test_non_empty_target_defaults_to_strategy_post_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,6 +173,57 @@ class DailyReportWechatDraftSkillTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "可能被截断"):
                 self.module.ensure_not_truncated(png_path, Path(tmp) / "source.html")
+
+    def test_current_reading_input_is_rejected_before_reading_or_capture(self):
+        args = self.module.parse_args(["2026-10-20_A股日报_板块日报.md"])
+        with (
+            patch.object(self.module, "report_context_from_input") as read_report,
+            patch.object(self.module, "render_html_section_png") as capture,
+            self.assertRaisesRegex(ValueError, "历史完整版"),
+        ):
+            self.module.build_outputs(args)
+        read_report.assert_not_called()
+        capture.assert_not_called()
+
+    def test_missing_sibling_html_does_not_select_another_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "selected" / "2026-10-20_A股日报_完整版.md"
+            reports = root / "reports"
+            reports.mkdir()
+            (reports / "2026-10-20_A股日报_完整版.html").write_text("<html></html>", encoding="utf-8")
+            with patch.object(self.module.os, "getcwd", return_value=str(root)):
+                self.assertIsNone(self.module.resolve_html_report(report_path, "2026-10-20"))
+
+    def test_explicit_screenshot_source_must_match_report_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "2026-10-20_A股日报_完整版.md"
+            other = root / "2026-10-30_A股日报_完整版.html"
+            other.write_text("<html></html>", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "日期.*不一致"):
+                self.module.resolve_html_report(report_path, "2026-10-20", str(other))
+
+    def test_matching_sibling_or_explicit_same_day_html_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "2026-10-20_A股日报_完整版.md"
+            sibling = report_path.with_suffix(".html")
+            sibling.write_text("<html></html>", encoding="utf-8")
+            self.assertEqual(self.module.resolve_html_report(report_path, "2026-10-20"), sibling.resolve())
+            explicit = root / "2026-10-20_历史复核.html"
+            explicit.write_text("<html></html>", encoding="utf-8")
+            self.assertEqual(
+                self.module.resolve_html_report(report_path, "2026-10-20", str(explicit)), explicit.resolve()
+            )
+
+    def test_current_reading_cannot_be_used_as_explicit_capture_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / "2026-10-20_A股日报_板块日报.html"
+            current.write_text("<html></html>", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "历史完整版 HTML"):
+                self.module.resolve_html_report(root / "2026-10-20_A股日报_完整版.md", "2026-10-20", str(current))
 
     def test_create_draft_posts_utf8_json_without_unicode_escapes(self):
         class FakeResponse:

@@ -1,0 +1,39 @@
+{
+  "files": [
+    {
+      "source": "tests/test_llm_wiki_context.py",
+      "historical_module": "tests/legacy_llm_wiki_context.py",
+      "sha256": "ec2f10baec692c77ee212f63cadc7d9e1680b38ab05c66e3be15242796eb0c70",
+      "head_sha256": "0f2fe34c8df95b21c819da26947688e69abb901bb17f7e6aeec01a33615f7476",
+      "includes_prior_worktree_changes": true
+    },
+    {
+      "source": "tests/test_llm_wiki_hook.py",
+      "historical_module": "tests/legacy_llm_wiki_hook.py",
+      "sha256": "45bb2f86b4a7e2d740910072fcce849e666540a9bc00d72052c12e3e10ff221a",
+      "head_sha256": "45bb2f86b4a7e2d740910072fcce849e666540a9bc00d72052c12e3e10ff221a",
+      "includes_prior_worktree_changes": false
+    },
+    {
+      "source": "tests/test_llm_wiki_lint.py",
+      "historical_module": "tests/legacy_llm_wiki_lint.py",
+      "sha256": "5c49242164ab66d5310421993986d8ad2d8d27c4885856e6fe91f16318581e3f",
+      "head_sha256": "5c49242164ab66d5310421993986d8ad2d8d27c4885856e6fe91f16318581e3f",
+      "includes_prior_worktree_changes": false
+    },
+    {
+      "source": "tests/test_llm_wiki_manifest.py",
+      "historical_module": "tests/legacy_llm_wiki_manifest.py",
+      "sha256": "8f17240c3edbe66ec3b5cf5fe26ac53c24be53ac0579c6684f77fe9b42c9fa4b",
+      "head_sha256": "d980861e43e71278c574ad729ebe16d61ee82968fda3c8f7685f96349e53081d",
+      "includes_prior_worktree_changes": true
+    },
+    {
+      "source": "tests/test_llm_wiki_router.py",
+      "historical_module": "tests/legacy_llm_wiki_router.py",
+      "sha256": "4d884c26ea1cd72e3b423a59bf5f465ca5c4fe1d30819444aabf7cae12b77eb4",
+      "head_sha256": "b8de454e79da573e0807626bc1e5840953460e4068d9927a790cdb5ec9aca4cd",
+      "includes_prior_worktree_changes": true
+    }
+  ]
+}

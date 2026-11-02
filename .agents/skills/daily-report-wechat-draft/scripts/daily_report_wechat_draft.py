@@ -72,18 +72,6 @@ SECTOR_TOURNAMENT_SECTION = SectionCaptureSpec(
 CAPTURE_SECTIONS = (ACCOUNT_DAY_ORDER_SECTION, SECTOR_TOURNAMENT_SECTION)
 
 
-def project_root() -> Path:
-    return Path.cwd()
-
-
-def latest_official_report(root: Path) -> Path:
-    reports_dir = root / "reports"
-    candidates = sorted(reports_dir.glob("*_A股日报_完整版.md"))
-    if not candidates:
-        raise FileNotFoundError("未找到 reports/*_A股日报_完整版.md")
-    return candidates[-1]
-
-
 def find_chromium() -> str:
     candidates = [
         os.environ.get("CHROMIUM_BIN", ""),
@@ -147,7 +135,7 @@ def is_empty_target(value: str) -> bool:
 
 
 def display_target(report: ReportContext) -> str:
-    return "空仓" if is_empty_target(report.final_target) else report.final_target
+    return "待确认" if is_empty_target(report.final_target) else report.final_target
 
 
 def report_context_from_input(report_path: Path) -> ReportContext:
@@ -162,27 +150,24 @@ def report_context_from_input(report_path: Path) -> ReportContext:
 
 
 def resolve_html_report(report_path: Path, trade_date: str, explicit_html: str = "") -> Path | None:
+    if "完整版" not in report_path.stem or report_path.suffix.lower() not in {".md", ".html"}:
+        raise ValueError("公众号草稿只接受显式选择的历史完整版，不读取当前板块日报")
     if explicit_html:
         path = Path(explicit_html).expanduser().resolve()
-        if not path.exists():
+        if not path.is_file():
             raise FileNotFoundError(f"指定的 HTML 不存在：{path}")
-        return path
-    if report_path.suffix.lower() == ".html":
-        return report_path.expanduser().resolve()
-
-    same_stem = report_path.with_suffix(".html")
-    if same_stem.exists():
-        return same_stem.resolve()
-
-    reports_dir = project_root() / "reports"
-    candidates = [
-        reports_dir / f"{trade_date}_A股日报_完整版.html",
-        reports_dir / f"{trade_date}_板块资金扩散生成前复核.html",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    return None
+    else:
+        path = report_path.expanduser().resolve()
+        if path.suffix.lower() != ".html":
+            path = path.with_suffix(".html")
+        if not path.is_file():
+            return None
+    if path.suffix.lower() != ".html" or "板块日报" in path.stem:
+        raise ValueError(f"截图来源必须为历史完整版 HTML：{path}")
+    html_date = extract_trade_date(path.read_text(encoding="utf-8"), path)
+    if html_date != trade_date:
+        raise ValueError(f"文案日期{trade_date}与截图日期{html_date}不一致：{path}")
+    return path
 
 
 def style_text_from_soup(soup: BeautifulSoup) -> str:
@@ -630,7 +615,7 @@ def build_draft_payload(
 
 def default_title(report: ReportContext) -> str:
     if is_empty_target(report.final_target):
-        return "今日空仓"
+        return "日报目标待确认"
     return "今日策略"
 
 
@@ -639,8 +624,13 @@ def default_digest(report: ReportContext) -> str:
 
 
 def build_outputs(args: argparse.Namespace) -> dict[str, Any]:
-    root = project_root()
-    report_path = Path(args.report).expanduser() if args.report else latest_official_report(root)
+    if not args.report:
+        raise ValueError(
+            "公众号草稿仅支持显式传入历史完整版路径；不自动选择最新报告，也不读取当前板块日报"
+        )
+    report_path = Path(args.report).expanduser()
+    if "完整版" not in report_path.stem or report_path.suffix.lower() not in {".md", ".html"}:
+        raise ValueError("公众号草稿只接受显式选择的历史完整版，不读取当前板块日报")
     report = report_context_from_input(report_path)
     out_dir = Path(args.out_dir).expanduser() / report.trade_date
     title = args.title or default_title(report)
@@ -753,9 +743,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="把日报 HTML 固定区块截图成 PNG，并可写入微信公众号草稿。"
     )
-    source = parser.add_mutually_exclusive_group()
-    source.add_argument("report", nargs="?", help="日报 Markdown 或 HTML 路径；未提供时可用 --latest")
-    source.add_argument("--latest", action="store_true", help="使用 reports/ 下最新完整版日报")
+    parser.add_argument("report", help="显式传入历史完整版 Markdown 或 HTML 路径")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUTPUT_ROOT), help="输出目录，默认 output/wechat-drafts")
     parser.add_argument("--html-report", default="", help="指定用于截图的日报 HTML；默认找同名 HTML")
     parser.add_argument("--title", default="", help="草稿标题；默认按报告日期生成")
@@ -767,15 +755,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--account-slot", default=os.environ.get("DAILY_REPORT_WECHAT_SLOT", "1"), help="多账号槽位，默认 1")
     parser.add_argument("--json", action="store_true", help="用 JSON 输出结果")
     args = parser.parse_args(argv)
-    if not args.report and not args.latest:
-        args.latest = True
     if args.env_file == "":
         args.env_file = None
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv or sys.argv[1:])
+    args = parse_args(argv if argv is not None else sys.argv[1:])
     try:
         result = build_outputs(args)
     except Exception as exc:

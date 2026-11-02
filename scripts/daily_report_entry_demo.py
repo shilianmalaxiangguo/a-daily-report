@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.14
 # -*- coding: utf-8 -*-
 
 # 强制无缓冲输出，确保日志实时显示
@@ -37,40 +37,44 @@ A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-
 13. 新股日历：Tushare new_share（首选）→ Sina 新股日历 / 本地解析（兜底）
 
 使用方法：
-    python3 daily_report_entry_demo.py [YYYY-MM-DD]
+    .generated/venv-py314/bin/python3.14 scripts/daily_report_current.py [YYYY-MM-DD]
     默认获取昨天数据
 """
+
+# The historical module remains importable for old replay tools, but command
+# execution must not load its retired account/selection graph.  Dispatch before
+# the compatibility imports below.
+if __name__ == "__main__":
+    from daily_report_current import main as _current_main
+    from orchestrator.run_log_runtime import run_with_log_capture as _run_with_log_capture
+
+    raise SystemExit(_run_with_log_capture(_current_main, argv=sys.argv))
 
 import sys
 import os
 import datetime
+import hashlib
+import json
 import math
 import types
 import time
 import signal
 import threading
 import re
+from copy import deepcopy
 from enum import Enum
 from pathlib import Path
 
-# 添加项目脚本路径，用于导入量化交易系统
-sys.path.insert(0, '/Users/chaixixi/WorkBuddy/Claw/scripts')
-
-# ============================================================
-# 量化交易系统（价格结构+箱体辅助方案）
-# ============================================================
-try:
-    from quant_trading_system import (
-        analyze_buy_signal,
-        check_sell_signal,
-        format_step4_report,
-        step4_quantitative_analysis,
-        TradeSignal
-    )
-    QUANT_SYSTEM_AVAILABLE = True
-except ImportError as e:
-    print(f"[警告] 量化交易系统加载失败: {e}")
-    QUANT_SYSTEM_AVAILABLE = False
+# The retired external quant system used to be imported from a machine-specific
+# WorkBuddy checkout here.  The current reading entry does not use that system;
+# keep an explicit unavailable value for legacy helper calls without touching an
+# external path or printing a startup warning.
+QUANT_SYSTEM_AVAILABLE = False
+analyze_buy_signal = None
+check_sell_signal = None
+format_step4_report = None
+step4_quantitative_analysis = None
+TradeSignal = None
 
 import daily_report_analysis_utils as analysis_utils
 import daily_report_markdown_hooks as markdown_hooks
@@ -80,6 +84,7 @@ from daily_report_render import (
     _inject_report_variant_banner,
     _render_report_with_display_mode,
     assert_report_required_facts_complete,
+    build_market_reading_preflight,
     build_report_outputs,
     build_report_preflight,
     etf_turnover_series_date_failure,
@@ -94,6 +99,12 @@ from daily_report_render import (
     save_stock_diagnostic_output,
 )
 from report.markdown_report_html import render_markdown_report_html
+from report.sector_daily_report import save_sector_daily, sector_daily_output_path
+from report.sector_fact_loader import collect_market_reading_data
+from report.cffex_index_futures_position_evidence import (
+    build_unavailable_cffex_evidence,
+    load_cffex_index_futures_position_evidence,
+)
 from report.tomorrow_action_calendar import (
     build_tomorrow_action_calendar_from_service,
     empty_tomorrow_action_calendar,
@@ -137,6 +148,11 @@ from domains.watch_candidates.infer import (
 from domains.market_activity.report_sections import (
     build_advanced_activity_report_sections,
     build_market_activity_report_sections,
+)
+from domains.market_activity.new_high_runtime import (
+    is_missing_new_high_sector,
+    new_high_feedback_has_invalid_content,
+    reconcile_new_high_feedback_identity,
 )
 from domains.market_activity.support import (
     get_stock_sector as run_get_stock_sector,
@@ -227,6 +243,7 @@ from portfolio.position_management_report import (
     parse_position_string as run_parse_position_string,
 )
 from portfolio.position_strategy_report import (
+    _current_report_blocks_new_entry as run_current_report_blocks_new_entry,
     _read_previous_report_target as run_read_previous_report_target,
     render_position_strategy_report,
     save_position_strategy_report,
@@ -257,6 +274,10 @@ from report.market_language_translation_artifacts import (
     write_fresh_market_language_translation,
     write_replay_market_language_translation,
 )
+from report.market_polarization_evidence import (
+    EXPECTED_AVAILABLE_FROM as MARKET_POLARIZATION_AVAILABLE_FROM,
+    EXPECTED_SOURCE_DATE as MARKET_POLARIZATION_SOURCE_DATE,
+)
 from market_data.daily_price_runtime import (
     compute_bar_change_pct as run_compute_bar_change_pct,
     compute_stop_loss_mainline_anchor as run_compute_stop_loss_mainline_anchor,
@@ -274,6 +295,7 @@ from market_data.daily_price_runtime import (
     is_one_word_limit_bar as run_is_one_word_limit_bar,
     merge_daily_price_bars as run_merge_daily_price_bars,
     resolve_big_yang_confluence_anchor as run_resolve_big_yang_confluence_anchor,
+    reset_daily_price_runtime_query_cache as run_reset_daily_price_runtime_query_cache,
     run_with_wall_clock_timeout as run_run_with_wall_clock_timeout,
     to_bs_code as run_to_bs_code,
 )
@@ -452,6 +474,27 @@ from report.report_document_builder import (
     replace_placeholder_lines,
 )
 from report.runtime import render_markdown_report_runtime
+from report.daily_report_consensus import (
+    apply_consensus_to_selection_workflow,
+    build_frozen_batch,
+    build_funnel_records,
+    build_period_windows,
+    calculate_consensus,
+    consensus_output_directory,
+    funnel_summary,
+    make_llm_reviewer,
+    render_consensus_summary,
+    review_timing_summary,
+    run_consensus_reviews,
+    shanghai_rfc3339,
+    write_consensus_outputs,
+)
+from report.formal_account_decision import (
+    build_decision_product_freeze,
+    build_formal_account_decision,
+    prepare_formal_decision_input,
+    validate_decision_product_freeze,
+)
 from report.market_research_renderer import (
     render_gem_breathing_pool_section,
     render_gem_breathing_step2_section,
@@ -691,6 +734,7 @@ STRATEGY_FACTOR_SNAPSHOT_VERSION = "v3"
 DISPLAY_MVP_MODE = True
 EMIT_HELPER_DIAGNOSTICS = True
 REPORT_RUNTIME_CACHE = None
+REPORT_RUNTIME_TIMING_ROWS = None
 DECISION_STRICT_MODE = True
 ALLOW_DISPLAY_DEGRADED_ABNORMAL_SNAPSHOT = False
 LEDGER_MODE_FROZEN = "frozen"
@@ -943,7 +987,12 @@ def _source_health_check_passed(source_health, check_id):
     return False
 
 
-def get_daily_data(target_date=None, *, skip_tushare_precheck=False):
+def get_daily_data(
+    target_date=None,
+    *,
+    skip_tushare_precheck=False,
+    historical_rebuild=False,
+):
     if not skip_tushare_precheck:
         _run_tushare_provider_precheck(target_date)
     return run_input_runtime(
@@ -953,8 +1002,20 @@ def get_daily_data(target_date=None, *, skip_tushare_precheck=False):
             for key, value in globals().items()
             if not (key.startswith("__") and key.endswith("__"))
         },
-        config={},
+        config={"historical_rebuild": bool(historical_rebuild)},
     )
+
+
+def _attach_market_polarization_source_date(data, target_date):
+    """Attach the study's publication date without replacing market fact dates."""
+    if not isinstance(data, dict) or not data:
+        return data
+    if str(target_date or "").strip() >= MARKET_POLARIZATION_AVAILABLE_FROM:
+        data.setdefault(
+            "market_polarization_source_date",
+            MARKET_POLARIZATION_SOURCE_DATE,
+        )
+    return data
 
 
 def _load_runtime_data_snapshot(target_date):
@@ -1221,7 +1282,6 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
         helpers={
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": _load_runtime_data_snapshot,
             "sector_name_matches": sector_name_matches,
             "_safe_float": _safe_float,
             "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
@@ -1237,7 +1297,6 @@ def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_d
         helpers={
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": _load_runtime_data_snapshot,
             "_safe_float": _safe_float,
             "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
@@ -1307,7 +1366,6 @@ def _build_market_style_switch_snapshot(target_date, data, observation_snapshot=
             "_round_or_none": _round_or_none,
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": _load_runtime_data_snapshot,
             "_parse_status_board_count": _parse_status_board_count,
             "_count_keyword_hits_in_mapping": _count_keyword_hits_in_mapping,
             "normalize_stock_code": normalize_stock_code,
@@ -1325,7 +1383,6 @@ def _build_unified_sector_strength_rows(data):
             "_score_to_star_rank": _score_to_star_rank,
             "stock_matches_sector": stock_matches_sector,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": _load_runtime_data_snapshot,
             "sector_name_matches": sector_name_matches,
             "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
@@ -1941,10 +1998,26 @@ def _snapshot_observation_payload(snapshot_path, requested_mode, *, error=None):
     return output
 
 
-def _save_data_snapshot_with_observation(data, target_date, run_mode, observer):
-    input_payload = {"target_date": target_date, "requested_mode": run_mode}
+def _save_data_snapshot_with_observation(
+    data,
+    target_date,
+    run_mode,
+    observer,
+    *,
+    overwrite_existing=False,
+):
+    input_payload = {
+        "target_date": target_date,
+        "requested_mode": run_mode,
+        "overwrite_existing": bool(overwrite_existing),
+    }
     try:
-        snapshot_path = _save_data_snapshot(data, target_date, mode=run_mode)
+        snapshot_path = _save_data_snapshot(
+            data,
+            target_date,
+            mode=run_mode,
+            overwrite_existing=bool(overwrite_existing),
+        )
     except Exception as error:
         observer.record_step(
             "save_data_snapshot",
@@ -3755,6 +3828,33 @@ def append_strategy_performance_section(report, performance_summary):
     )
 
 
+def prepare_cffex_index_futures_position_evidence(data, target_date, *, run_mode):
+    frozen_payload = (
+        data.get("cffex_index_futures_position_evidence")
+        if isinstance(data, dict)
+        else None
+    )
+    query_date = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).date().isoformat()
+    try:
+        service = DatabaseService.postgres_from_environment_or_local_default()
+        return load_cffex_index_futures_position_evidence(
+            target_date,
+            service=service,
+            replay=run_mode == LEDGER_MODE_REPLAY,
+            frozen_payload=frozen_payload,
+            query_date=query_date,
+            allow_fresh_write=run_mode != LEDGER_MODE_REPLAY,
+        )
+    except Exception as error:
+        return build_unavailable_cffex_evidence(
+            target_date,
+            reason=f"中金所股指期货持仓事实准备失败：{error}",
+            query_date=query_date,
+        )
+
+
 def generate_markdown_report(
     data,
     target_date,
@@ -3768,6 +3868,7 @@ def generate_markdown_report(
     candidate_trace_root_dir=None,
     postgres_only=False,
     market_language_translation=None,
+    cffex_index_futures_position_evidence=None,
 ):
     runtime_result = render_markdown_report_runtime(
         data,
@@ -3777,6 +3878,7 @@ def generate_markdown_report(
         run_mode=run_mode,
         persist_strategy_tracking=persist_strategy_tracking,
         market_language_translation=market_language_translation,
+        cffex_index_futures_position_evidence=cffex_index_futures_position_evidence,
         helpers={
             key: value
             for key, value in globals().items()
@@ -3922,8 +4024,7 @@ def _postgres_loaded_data_has_target_facts(result, data):
 
 
 def _missing_new_high_sector_text(value):
-    text = str(value or "").strip()
-    return not text or text in {"-", "未知", "未归类", "待补充板块", "待补事实", "暂无"}
+    return is_missing_new_high_sector(value)
 
 
 def _new_high_feedback_trend_needs_refresh(snapshot, target_date=""):
@@ -3955,6 +4056,8 @@ def _new_high_feedback_trend_needs_refresh(snapshot, target_date=""):
 def _new_high_feedback_needs_target_refresh(snapshot, target_date=""):
     if not isinstance(snapshot, dict) or not snapshot.get("available"):
         return False
+    if new_high_feedback_has_invalid_content(snapshot):
+        return True
     if _new_high_feedback_trend_needs_refresh(snapshot, target_date):
         return True
     top_stocks = [row for row in (snapshot.get("top_stocks") or []) if isinstance(row, dict)]
@@ -3993,6 +4096,34 @@ def _refresh_postgres_new_high_feedback_if_stale(data, target_date):
                     "source": refreshed.get("source"),
                     "new_high_count": refreshed.get("new_high_count"),
                     "leading_sectors": refreshed.get("leading_sectors"),
+                },
+            }
+        )
+    return data
+
+
+def _reconcile_loaded_new_high_feedback_identity(data, target_date):
+    if not isinstance(data, dict):
+        return data
+    feedback, identity = reconcile_new_high_feedback_identity(
+        data.get("new_high_feedback"),
+        data.get("stock_full_info") or {},
+        target_date=target_date,
+    )
+    if not isinstance(feedback, dict):
+        return data
+    data["new_high_feedback"] = feedback
+    complete = bool(feedback.get("available") and identity.get("complete"))
+    data.setdefault("data_status", {})["创新高趋势反馈"] = complete
+    data.setdefault("step_status", {})["创新高趋势反馈获取"] = complete
+    if identity.get("issues"):
+        data.setdefault("module_logs", []).append(
+            {
+                "step": "postgres.new_high_feedback_identity",
+                "status": "degraded",
+                "output": {
+                    "source": identity.get("source") or "new_high_feedback.top_stocks",
+                    "issues": identity.get("issues") or [],
                 },
             }
         )
@@ -4275,8 +4406,10 @@ def load_daily_report_data_from_postgres(target_date, *, allow_live_refresh=True
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True
     normalize_inferred_previous_target_records(data)
+    _reconcile_loaded_new_high_feedback_identity(data, target_date)
     if allow_live_refresh:
         _refresh_postgres_new_high_feedback_if_stale(data, target_date)
+        _reconcile_loaded_new_high_feedback_identity(data, target_date)
     _fill_new_high_feedback_trend_rows_from_report_files(data, target_date)
     _restore_postgres_sector_first_runtime_facts(data, target_date)
     normalize_inferred_previous_target_records(data)
@@ -4636,10 +4769,14 @@ def _daily_report_data_path_label(args):
         return "PostgreSQL-only"
     if getattr(args, "replay", False):
         return "replay-json"
+    if getattr(args, "historical_rebuild", False):
+        return "historical-rebuild"
     return "live"
 
 
 def _auto_postgres_fast_render_eligible(args):
+    if _resolve_daily_report_output_mode(args) == "sector":
+        return False
     return not any(
         (
             getattr(args, "postgres_only", False),
@@ -4648,6 +4785,7 @@ def _auto_postgres_fast_render_eligible(args):
             getattr(args, "source_health_only", False),
             bool(getattr(args, "stock", None)),
             getattr(args, "force_live", False),
+            getattr(args, "historical_rebuild", False),
         )
     )
 
@@ -4714,6 +4852,15 @@ def _select_daily_report_data_path(args, target_date):
             "preflight": {},
         }
 
+    postgres_health_probe = {
+        "connected": True,
+        "covered": bool(data),
+        "row_count": max(
+            int(_safe_float((data or {}).get("postgres_field_count"))),
+            len(data or {}),
+        ),
+    }
+
     try:
         date_failure = _postgres_fast_render_date_failure(data, target_date)
         preflight = build_report_preflight(data, target_date)
@@ -4727,6 +4874,7 @@ def _select_daily_report_data_path(args, target_date):
             "reason": safe_reason or "目标日期关键数据检查异常",
             "data": {},
             "preflight": {},
+            "postgres_health_probe": postgres_health_probe,
         }
     if date_failure or failures:
         reason = date_failure or "关键数据检查未通过：{}".format("、".join(failures))
@@ -4737,6 +4885,7 @@ def _select_daily_report_data_path(args, target_date):
             "reason": redact_sensitive_text(reason),
             "data": {},
             "preflight": preflight,
+            "postgres_health_probe": postgres_health_probe,
         }
     return {
         "eligible": True,
@@ -4745,6 +4894,7 @@ def _select_daily_report_data_path(args, target_date):
         "reason": "目标日期 PostgreSQL 事实和关键数据检查均已通过",
         "data": data,
         "preflight": preflight,
+        "postgres_health_probe": postgres_health_probe,
     }
 
 
@@ -4863,6 +5013,8 @@ def _inject_previous_report_target_as_existing_position(
         return {}
     if previous_target.get("previous_position_ended") is True:
         source_report_date = str(previous_target.get("source_report_date") or "").strip()
+        if source_report_date != _entry_previous_trade_day(target_date):
+            return {}
         source_note = f"；上一份日报来源={source_report_date}" if source_report_date else ""
         empty_summary = {
             "has_position": False,
@@ -5000,6 +5152,14 @@ def _prepend_position_timeline_markdown(markdown_text, position_timeline_markdow
     return prepend_position_timeline_markdown(markdown_text, position_timeline_markdown)
 
 
+def _sector_tournament_three_axis_for_bear(data):
+    data = data if isinstance(data, dict) else {}
+    workflow = data.get("selection_workflow")
+    workflow = workflow if isinstance(workflow, dict) else {}
+    artifact = workflow.get("sector_tournament_three_axis")
+    return artifact if isinstance(artifact, dict) else {}
+
+
 def _sync_position_timeline_into_saved_markdown(saved_report_paths=None, position_timeline_markdown=""):
     timeline = str(position_timeline_markdown or "").strip()
     if not timeline:
@@ -5018,6 +5178,25 @@ def _sync_position_timeline_into_saved_markdown(saved_report_paths=None, positio
     return True
 
 
+def _lhb_limit_status_for_bear(target_date, data):
+    """冻结目标日的涨跌停身份；缺失或日期不符时保持空集合，不做任何推断。"""
+    payload = data if isinstance(data, dict) else {}
+    codes = []
+    for key in ("limit_up_codes", "limit_down_codes"):
+        values = payload.get(key)
+        if isinstance(values, (set, frozenset, list, tuple)):
+            codes.append(sorted({
+                text for text in (str(value or "").strip() for value in values) if text
+            }))
+        else:
+            codes.append([])
+    return {
+        "trade_date": str(target_date or "").strip()[:10],
+        "limit_up_codes": codes[0],
+        "limit_down_codes": codes[1],
+    }
+
+
 def _render_daily_report_html_for_acceptance(
     target_date,
     markdown_text,
@@ -5025,6 +5204,11 @@ def _render_daily_report_html_for_acceptance(
     output_path,
     tomorrow_action_calendar=None,
     t0_market_breadth=None,
+    chinext_index_trend=None,
+    sector_tournament_three_axis=None,
+    cffex_index_futures_position_evidence=None,
+    turnover_rank=None,
+    lhb_limit_status=None,
 ):
     try:
         return render_markdown_report_html(
@@ -5035,6 +5219,13 @@ def _render_daily_report_html_for_acceptance(
             output_path=output_path,
             tomorrow_action_calendar=tomorrow_action_calendar,
             t0_market_breadth=t0_market_breadth,
+            chinext_index_trend=chinext_index_trend,
+            sector_tournament_three_axis=sector_tournament_three_axis,
+            turnover_rank=turnover_rank,
+            lhb_limit_status=lhb_limit_status,
+            cffex_index_futures_position_evidence=(
+                cffex_index_futures_position_evidence
+            ),
         )
     except ReportCriticalDataMissingError:
         raise
@@ -5042,6 +5233,45 @@ def _render_daily_report_html_for_acceptance(
         raise ReportCriticalDataMissingError(
             f"Bear HTML 渲染失败，停止生成：{exc}"
         ) from exc
+
+
+def _daily_report_bear_html_input_hash(
+    target_date,
+    markdown_text,
+    *,
+    output_path,
+    tomorrow_action_calendar=None,
+    t0_market_breadth=None,
+    chinext_index_trend=None,
+    sector_tournament_three_axis=None,
+    cffex_index_futures_position_evidence=None,
+    turnover_rank=None,
+    lhb_limit_status=None,
+):
+    payload = {
+        "target_date": str(target_date or ""),
+        "markdown_text": str(markdown_text or ""),
+        "output_path": str(output_path or ""),
+        "tomorrow_action_calendar": tomorrow_action_calendar,
+        "t0_market_breadth": t0_market_breadth,
+        "chinext_index_trend": chinext_index_trend,
+        "sector_tournament_three_axis": sector_tournament_three_axis,
+        "turnover_rank": turnover_rank,
+        "lhb_limit_status": lhb_limit_status,
+        "cffex_index_futures_position_evidence_hash": (
+            str(cffex_index_futures_position_evidence.get("artifact_hash") or "")
+            if isinstance(cffex_index_futures_position_evidence, dict)
+            else ""
+        ),
+    }
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _bear_chart_number_or_none(value):
@@ -5057,6 +5287,64 @@ def _bear_chart_count_or_none(value):
     if number is None or number < 0:
         return None
     return int(number)
+
+
+def _build_chinext_index_trend_for_bear(
+    target_date,
+    *,
+    service=None,
+    limit=25,
+):
+    target_date = str(target_date or "").strip()[:10]
+    try:
+        datetime.date.fromisoformat(target_date)
+    except ValueError:
+        return {}
+    try:
+        limit = max(int(limit or 25), 1)
+    except (TypeError, ValueError):
+        limit = 25
+
+    service = service or _postgres_index_bar_service()
+    index_reader = getattr(service, "query_index_daily_bars", None) if service is not None else None
+    if not callable(index_reader):
+        return {}
+    try:
+        rows = index_reader(
+            "sz399006",
+            target_date,
+            window_days=limit,
+            finite_positive_close_only=True,
+        ) or []
+    except Exception:
+        return {}
+
+    close_by_date = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        trade_date = str(row.get("trade_date") or row.get("date") or "").strip()[:10]
+        try:
+            datetime.date.fromisoformat(trade_date)
+        except ValueError:
+            continue
+        close = _bear_chart_number_or_none(row.get("close"))
+        if trade_date > target_date or close is None or close <= 0:
+            continue
+        close_by_date[trade_date] = close
+
+    items = [
+        {"date": trade_date, "close": close_by_date[trade_date]}
+        for trade_date in sorted(close_by_date)[-limit:]
+    ]
+    if not items:
+        return {}
+    return {
+        "schema": "chinext_index_trend.v1",
+        "index_code": "sz399006",
+        "items": items,
+        "basis": f"截至报告日的最近{limit}个交易日；缺失事实保持空值。",
+    }
 
 
 def _bear_chart_fact_matches_date(value, expected_date):
@@ -5221,9 +5509,18 @@ def _try_save_daily_report_html_from_saved_markdown(
     validate_html=None,
     html_text=None,
     t0_market_breadth=None,
+    chinext_index_trend=None,
+    sector_tournament_three_axis=None,
+    cffex_index_futures_position_evidence=None,
+    sector_snapshot=None,
+    turnover_rank=None,
 ):
     temporary_path = None
     try:
+        if sector_snapshot is not None and (
+            not isinstance(sector_snapshot, dict) or sector_snapshot.get('date') != target_date
+        ):
+            raise ValueError('板块快照日期不符，停止生成')
         full_report_value = str((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "").strip()
         if not full_report_value:
             raise FileNotFoundError("完整版日报路径缺失")
@@ -5240,6 +5537,18 @@ def _try_save_daily_report_html_from_saved_markdown(
                 markdown_text,
                 output_path=path,
                 t0_market_breadth=t0_market_breadth,
+                chinext_index_trend=chinext_index_trend,
+                sector_tournament_three_axis=sector_tournament_three_axis,
+                lhb_limit_status=_lhb_limit_status_for_bear(
+                    target_date, (sector_snapshot or {}).get('data')
+                ),
+                turnover_rank=(
+                    turnover_rank if turnover_rank is not None else
+                    ((sector_snapshot or {}).get("data") or {}).get("turnover_rank")
+                ),
+                cffex_index_futures_position_evidence=(
+                    cffex_index_futures_position_evidence
+                ),
             )
         if callable(validate_html):
             validate_html(html_text)
@@ -5257,6 +5566,11 @@ def _try_save_daily_report_html_from_saved_markdown(
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+    if sector_snapshot is not None:
+        _save_sector_daily_reading_page(
+            sector_snapshot['data'], target_date, source_html=html_text,
+            saved_report_paths=saved_report_paths,
+        )
     print(f"HTML 日报已生成: {path}")
     return path
 
@@ -5282,6 +5596,81 @@ def _sector_capital_source_payloads(data, target_date=""):
         }.items()
         if isinstance(value, dict) and value
     }
+
+
+def _save_sector_daily_reading_page(data, target_date, *, source_html, saved_report_paths):
+    try:
+        full_path = Path(saved_report_paths[REPORT_VARIANT_FULL]).with_suffix('.html')
+        from datetime import datetime as report_datetime
+        from zoneinfo import ZoneInfo
+        origin = ('as_of_report' if report_datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat() == target_date
+                  else 'historical_rebuild')
+        return save_sector_daily(
+            source_html, target_date,
+            snapshot={'date': target_date, 'data': data},
+            full_html_path=full_path,
+            origin=origin,
+        )
+    except Exception as exc:
+        raise ReportCriticalDataMissingError(f'板块日报生成失败，停止生成：{exc}') from exc
+
+
+def _sector_full_html_anchor(target_date, run_mode):
+    """Build the legacy-named anchor used only for sector path derivation."""
+    return Path(_get_report_output_path(target_date, mode=run_mode)).with_suffix(".html")
+
+
+def _save_standalone_sector_reading_page(data, target_date, *, run_mode, source_mode=None):
+    """Render the current reading page directly from dated facts.
+
+    A selected historical sector page supplies chart facts, never old actions.
+    Output mode and source mode are independent, so replay cannot mix versions.
+    """
+    anchor = _sector_full_html_anchor(target_date, run_mode)
+    source_html = None
+    source_path = None
+    if source_mode in (LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY):
+        source_path = sector_daily_output_path(_sector_full_html_anchor(target_date, source_mode))
+        if source_path.is_file():
+            candidate = source_path.read_text(encoding='utf-8')
+            if 'id="sector-hypothesis-record"' in candidate or 'id="sector-retained-history"' in candidate:
+                source_html = candidate
+    from zoneinfo import ZoneInfo
+
+    origin = (
+        "as_of_report"
+        if datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat() == target_date
+        else "historical_rebuild"
+    )
+    try:
+        return save_sector_daily(
+            source_html,
+            target_date,
+            snapshot={"date": target_date, "data": data},
+            full_html_path=anchor,
+            origin=origin,
+            historical_snapshot=source_mode in (LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY),
+            source_html_path=source_path if source_html else None,
+        )
+    except ValueError:
+        # The official first-publish check and the write are separate filesystem
+        # operations. If another process publishes in between, retry in replay
+        # instead of replacing its page.
+        if run_mode != LEDGER_MODE_FROZEN:
+            raise
+        official_page = sector_daily_output_path(anchor)
+        if not official_page.exists():
+            raise
+        replay_anchor = _sector_full_html_anchor(target_date, LEDGER_MODE_REPLAY)
+        return save_sector_daily(
+            source_html,
+            target_date,
+            snapshot={"date": target_date, "data": data},
+            full_html_path=replay_anchor,
+            origin="historical_rebuild",
+            historical_snapshot=source_mode in (LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY),
+            source_html_path=source_path if source_html else None,
+        )
 
 
 def _try_save_elimination_tournament_html(data, target_date, *, saved_report_paths=None):
@@ -5464,38 +5853,61 @@ def _record_daily_report_phase(phase_timings, phase, started_at):
     return ended_at
 
 
+def _record_daily_report_subphase(subphase_timings, phase, started_at):
+    ended_at = time.monotonic()
+    subphase_timings.append(
+        {
+            "phase": str(phase or "").strip(),
+            "elapsed_seconds": max(0.0, ended_at - float(started_at)),
+        }
+    )
+    return ended_at
+
+
 def _build_daily_report_phase_timing_rows(phase_timings, elapsed_seconds):
-    total_hundredths = max(int(round((max(0.0, float(elapsed_seconds)) + 1e-9) * 100)), 0)
-    remaining_hundredths = total_hundredths
-    rows = []
+    total_seconds = max(0.0, float(elapsed_seconds))
+    total_hundredths = max(int(round((total_seconds + 1e-9) * 100)), 0)
+    raw_rows = []
+    recorded_seconds = 0.0
     for item in phase_timings or []:
         phase = str((item or {}).get("phase") or "").strip()
         if not phase:
             continue
-        requested_hundredths = max(
-            int(round(max(0.0, float((item or {}).get("elapsed_seconds") or 0.0)) * 100)),
-            0,
-        )
-        duration_hundredths = min(requested_hundredths, remaining_hundredths)
+        duration = max(0.0, float((item or {}).get("elapsed_seconds") or 0.0))
+        raw_rows.append((phase, duration))
+        recorded_seconds += duration
+    raw_rows.append(("其他收尾", max(0.0, total_seconds - recorded_seconds)))
+
+    remaining_hundredths = total_hundredths
+    rows = []
+    for index, (phase, duration) in enumerate(raw_rows):
+        if index == len(raw_rows) - 1:
+            duration_hundredths = remaining_hundredths
+        else:
+            requested_hundredths = max(int(round(duration * 100)), 0)
+            duration_hundredths = min(requested_hundredths, remaining_hundredths)
         remaining_hundredths -= duration_hundredths
         rows.append(
             {
                 "phase": phase,
                 "elapsed_seconds": duration_hundredths / 100.0,
-                "share_pct": round(duration_hundredths / total_hundredths * 100, 1)
-                if total_hundredths
-                else 0.0,
+                "share_pct": 0.0,
             }
         )
-    rows.append(
-        {
-            "phase": "其他收尾",
-            "elapsed_seconds": remaining_hundredths / 100.0,
-            "share_pct": round(remaining_hundredths / total_hundredths * 100, 1)
-            if total_hundredths
-            else 0.0,
-        }
-    )
+    if total_hundredths:
+        for row in rows:
+            duration_hundredths = int(round(row["elapsed_seconds"] * 100))
+            row["share_pct"] = round(
+                duration_hundredths / total_hundredths * 100,
+                1,
+            )
+    return rows
+
+
+def _build_daily_report_subphase_timing_rows(subphase_timings, elapsed_seconds):
+    rows = _build_daily_report_phase_timing_rows(subphase_timings, elapsed_seconds)
+    if rows:
+        rows[-1]["phase"] = "未细分耗时"
     return rows
 
 
@@ -5507,6 +5919,8 @@ def _append_daily_report_duration_log(
     data_path_label,
     report_write_label,
     phase_timing_rows=None,
+    build_timing_rows=None,
+    save_timing_rows=None,
 ):
     elapsed_text = _format_elapsed_seconds(elapsed_seconds)
     print(
@@ -5520,6 +5934,26 @@ def _append_daily_report_duration_log(
                 row.get("share_pct", 0.0),
             )
         )
+    if build_timing_rows:
+        print("   日报构建与首次检查分项:")
+        for row in build_timing_rows:
+            print(
+                "     - {}: {} 秒（{}%）".format(
+                    row.get("phase", ""),
+                    _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                    row.get("share_pct", 0.0),
+                )
+            )
+    if save_timing_rows:
+        print("   附属页面检查与主日报保存分项:")
+        for row in save_timing_rows:
+            print(
+                "     - {}: {} 秒（{}%）".format(
+                    row.get("phase", ""),
+                    _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                    row.get("share_pct", 0.0),
+                )
+            )
     run_log_path = (saved_paths or {}).get(REPORT_VARIANT_RUN_LOG)
     if not run_log_path:
         return None
@@ -5557,6 +5991,44 @@ def _append_daily_report_duration_log(
                     ],
                 ]
             )
+        if build_timing_rows:
+            append_text = "\n".join(
+                [
+                    append_text,
+                    "",
+                    "### 日报构建与首次检查分项",
+                    "",
+                    "| 环节 | 耗时 | 占该阶段 |",
+                    "|------|-----:|---------:|",
+                    *[
+                        "| {} | {} 秒 | {}% |".format(
+                            row.get("phase", ""),
+                            _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                            row.get("share_pct", 0.0),
+                        )
+                        for row in build_timing_rows
+                    ],
+                ]
+            )
+        if save_timing_rows:
+            append_text = "\n".join(
+                [
+                    append_text,
+                    "",
+                    "### 附属页面检查与主日报保存分项",
+                    "",
+                    "| 环节 | 耗时 | 占该阶段 |",
+                    "|------|-----:|---------:|",
+                    *[
+                        "| {} | {} 秒 | {}% |".format(
+                            row.get("phase", ""),
+                            _format_elapsed_seconds(row.get("elapsed_seconds", 0.0)),
+                            row.get("share_pct", 0.0),
+                        )
+                        for row in save_timing_rows
+                    ],
+                ]
+            )
         path.write_text(f"{current_text.rstrip()}\n\n{append_text}\n", encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         print(f"⚠️ 耗时统计写入失败，已保留日报正文: {exc}")
@@ -5564,664 +6036,415 @@ def _append_daily_report_duration_log(
     return str(path)
 
 
-def main():
-    """主函数"""
-    import argparse
-    report_started_at = time.perf_counter()
-    phase_started_at = report_started_at
-    phase_timings = []
-    report_phase_timing_rows = []
-    
-    parser = argparse.ArgumentParser(description='A股日报数据获取入口 - SKILL.md对齐版')
-    parser.add_argument('date', nargs='?', default=None,
-                       help='目标日期，格式: YYYY-MM-DD (默认: 昨天)')
-    parser.add_argument('--no-report', action='store_true',
-                       help='不生成报告文件，只获取数据')
-    parser.add_argument('-p', '--position', type=str, default=None,
-                       help='持仓信息，格式: "我的仓位是股票1 仓位1%% 股票2 仓位2%% ..."')
-    parser.add_argument('--tomorrow-empty', action='store_true',
-                       help='显式指定明日空仓：不买新股、集合竞价卖清全部可卖旧仓、不做T')
-    parser.add_argument('--replay', action='store_true',
-                       help='复盘模式：从快照读数据，只重新拉财联社日历，用最新skill生成报告')
-    parser.add_argument('--postgres-only', action='store_true',
-                       help='PostgreSQL-only 模式：从 PostgreSQL 读取日报事实，不读取 JSON 快照主来源')
-    parser.add_argument('--import-json-to-postgres', action='store_true',
-                       help='把指定日期的历史快照筛选为复盘取证事实后导入 PostgreSQL，不生成日报')
-    parser.add_argument('--stock', type=str, default=None,
-                       help='生成单票诊断，输入股票代码，如 002364')
-    parser.add_argument('--stock-name', type=str, default='',
-                       help='单票诊断可选股票名称，提升可读性')
-    parser.add_argument('--overwrite-official', action='store_true',
-                       help='显式覆盖该日期正式日报；默认保护已有正式历史')
-    parser.add_argument('--source-health-only', action='store_true',
-                       help='只生成日报数据源检查 JSON/HTML，不进入完整日报生成')
-    parser.add_argument('--force-live', action='store_true',
-                       help='明确重新采集实时数据，不自动使用目标日期 PostgreSQL 事实重渲染')
-    
-    args = parser.parse_args()
-    
-    if args.date:
-        target_date = args.date
-    else:
-        import datetime as _dt
-        today = _dt.datetime.now()
-        yesterday = today - _dt.timedelta(days=1)
-        target_date = yesterday.strftime("%Y-%m-%d")
-
-    if args.postgres_only and args.replay:
-        raise ReportCriticalDataMissingError("PostgreSQL-only 不能与 --replay 同时使用")
-    if args.import_json_to_postgres and (args.postgres_only or args.replay):
-        raise ReportCriticalDataMissingError("--import-json-to-postgres 不能与 --postgres-only 或 --replay 同时使用")
-    if args.force_live and (args.postgres_only or args.replay or args.import_json_to_postgres):
-        raise ReportCriticalDataMissingError("--force-live 不能与 --postgres-only、--replay 或 --import-json-to-postgres 同时使用")
-
-    if args.import_json_to_postgres:
-        snapshot_data, _ = load_data_snapshot(target_date)
-        if not isinstance(snapshot_data, dict) or not snapshot_data:
-            raise ReportCriticalDataMissingError(f"{target_date} 历史快照缺失，无法导入 PostgreSQL")
-        result = import_daily_report_data_to_postgres(target_date, snapshot_data)
-        print(f"🐘 PostgreSQL 复盘取证事实已导入: {result.get('source', '')} / fields={result.get('field_count', 0)}")
-        print(f"   structured={result.get('structured_counts', {})}")
-        return 0
-
-    requested_postgres_only = bool(args.postgres_only)
-    data_path_selection = _select_daily_report_data_path(args, target_date)
-    selected_data_path = str(data_path_selection.get("selected_path") or "live")
-    data_path_reason = redact_sensitive_text(data_path_selection.get("reason", ""))
-    auto_postgres_fast_render = selected_data_path == "postgres_only" and not requested_postgres_only
-    preloaded_postgres_data = data_path_selection.get("data") if auto_postgres_fast_render else {}
-    if auto_postgres_fast_render:
-        args.postgres_only = True
-        print(f"🐘 目标日事实已就绪，采用 PostgreSQL 快速重渲染: {target_date}")
-    elif data_path_selection.get("eligible"):
-        print(f"🌐 目标日快速重渲染不可用，继续实时采集: {data_path_reason}")
-    phase_started_at = _record_daily_report_phase(
-        phase_timings,
-        "参数解析与目标日事实判断",
-        phase_started_at,
+def _raise_if_postgres_only_would_overwrite_official(args, target_date):
+    if not bool(args.postgres_only and args.overwrite_official):
+        return
+    official_paths = (
+        Path(_get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)),
+        Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN)),
+    )
+    if not any(path.exists() for path in official_paths):
+        return
+    raise ReportCriticalDataMissingError(
+        "PostgreSQL 快速重渲染不能覆盖已有正式日报；"
+        "请省略 --overwrite-official 生成实验产物，或使用 --force-live --overwrite-official 重新采集正式事实。"
     )
 
-    global _POSTGRES_ONLY_RUNTIME, _LAST_DAILY_REPORT_POSTGRES_SERVICE
-    _POSTGRES_ONLY_RUNTIME = bool(args.postgres_only)
-    _LAST_DAILY_REPORT_POSTGRES_SERVICE = None
-    previous_postgres_only_guard = os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME")
-    if args.postgres_only:
-        os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
 
-    saved_report_paths = {}
+def _historical_rebuild_note_markdown(target_date, data):
+    rebuild = (data or {}).get("historical_rebuild") or {}
+    excluded_sources = [
+        str(item).strip()
+        for item in rebuild.get("excluded_sources") or []
+        if str(item or "").strip()
+    ]
+    excluded_text = "、".join(excluded_sources) or "无"
+    return "\n".join(
+        [
+            "## 历史重建说明",
+            "",
+            f"> 本报告按 {target_date} 的目标日事实重新采集；目标日、来源日和查询日均固定为 {target_date}。",
+            f"> 未参与历史判断：{excluded_text}。目标日无法证明的事实保留缺失，不使用当前数据替代。",
+            "",
+        ]
+    )
+
+
+def _inject_historical_rebuild_note(report_outputs, target_date, data):
+    note = _historical_rebuild_note_markdown(target_date, data)
+    for variant in (REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY):
+        text = str((report_outputs or {}).get(variant) or "")
+        if not text or "## 历史重建说明" in text:
+            continue
+        lines = text.splitlines()
+        insert_at = 1 if lines and lines[0].startswith("# ") else 0
+        lines[insert_at:insert_at] = ["", note.rstrip(), ""]
+        report_outputs[variant] = "\n".join(lines).rstrip() + "\n"
+    return report_outputs
+
+
+HISTORICAL_REBUILD_DECISION_EXPECTATIONS = {
+    "2026-08-13": {
+        "upstream_candidate_count": 30,
+        "selection_candidate_count": 46,
+        "trade_signal_count": 0,
+        "execution_object": None,
+        "position_pct": 0.0,
+        "position_plan": "0%不参与",
+        "execution_identity": "无明日执行对象",
+    }
+}
+
+
+def _historical_rebuild_decision_check(data, target_date):
+    expected = HISTORICAL_REBUILD_DECISION_EXPECTATIONS.get(str(target_date or ""))
+    if not expected:
+        return {
+            "passed": False,
+            "observed": {},
+            "failures": [f"{target_date} 尚无已确认的历史重建决定基准"],
+        }
+    workflow = (data or {}).get("selection_workflow") or {}
+    front = ((data or {}).get("two_layer_decision_payload") or {}).get("front_decision") or {}
+    upstream_candidate_count = len((data or {}).get("candidates") or [])
+    selection_candidate_count = len(workflow.get("candidate_pool") or [])
+    signal_count = len((data or {}).get("trade_signals") or [])
+    execution_object = front.get("execution_object")
+    position_pct = _safe_float(front.get("position_pct"), -1.0)
+    position_plan = str(front.get("position_plan") or "").strip()
+    execution_identity = str(front.get("execution_identity") or "").strip()
+    observed = {
+        "upstream_candidate_count": upstream_candidate_count,
+        "selection_candidate_count": selection_candidate_count,
+        "trade_signal_count": signal_count,
+        "execution_object": execution_object,
+        "position_pct": position_pct,
+        "position_plan": position_plan,
+        "execution_identity": execution_identity,
+    }
+    failures = []
+    if upstream_candidate_count != expected["upstream_candidate_count"]:
+        failures.append(
+            "上游量化候选数={}，预期{}".format(
+                upstream_candidate_count,
+                expected["upstream_candidate_count"],
+            )
+        )
+    if selection_candidate_count != expected["selection_candidate_count"]:
+        failures.append(
+            "正式选择流程候选数={}，预期{}".format(
+                selection_candidate_count,
+                expected["selection_candidate_count"],
+            )
+        )
+    if signal_count != expected["trade_signal_count"]:
+        failures.append(
+            f"交易信号数={signal_count}，预期{expected['trade_signal_count']}"
+        )
+    if execution_object not in (None, "", {}, []):
+        failures.append(f"明日执行对象={execution_object}，预期无")
+    if position_pct != expected["position_pct"] or position_plan != expected["position_plan"]:
+        failures.append(
+            f"明日新仓={position_pct:g}%/{position_plan or '缺失'}，预期0%不参与"
+        )
+    if execution_identity != expected["execution_identity"]:
+        failures.append(
+            f"执行性质={execution_identity or '缺失'}，预期无明日执行对象"
+        )
+    return {"passed": not failures, "observed": observed, "failures": failures}
+
+
+def _assert_historical_rebuild_decision(data, target_date):
+    if str(target_date or "") not in HISTORICAL_REBUILD_DECISION_EXPECTATIONS:
+        print("历史决定对照：无已确认基准可比；继续执行目标日事实与日报一致性检查。")
+        return {"passed": None, "observed": {}, "failures": [], "status": "no_baseline"}
+    result = _historical_rebuild_decision_check(data, target_date)
+    if result["passed"]:
+        print(
+            "✅ 历史重建决定核对通过: 上游量化候选{}只 / 正式选择流程候选{}只 / 信号{}个 / "
+            "无明日执行对象 / 0%不参与".format(
+                result["observed"]["upstream_candidate_count"],
+                result["observed"]["selection_candidate_count"],
+                result["observed"]["trade_signal_count"],
+            )
+        )
+        return result
+    raise ReportCriticalDataMissingError(
+        "{} 历史重建决定与已确认结果不一致，停止生成；{}".format(
+            target_date,
+            "；".join(result["failures"]),
+        )
+    )
+
+
+def _resolve_daily_report_output_mode(args, *, run_mode=""):
+    explicit = str(getattr(args, "output_mode", "") or "").strip()
+    if explicit:
+        return explicit
+    # 当前日报默认只做事实阅读；full 只定位既有历史原件。
+    return "sector"
+
+
+def _existing_legacy_report_paths(target_date, *, replay=False):
+    reports = Path(__file__).resolve().parents[1] / "reports"
+    if replay:
+        reports /= "replay"
+    suffix = "_replay" if replay else ""
+    stem = f"{target_date}_A股日报_完整版{suffix}"
+    return (reports / f"{stem}.md", reports / f"{stem}.html")
+
+
+def _daily_report_consensus_now():
+    return shanghai_rfc3339(datetime.datetime.now(datetime.timezone.utc))
+
+
+def _short_consensus_fact_rows(data, target_date):
+    facts = (
+        data.get("candidate_decision_evidence_facts")
+        if isinstance(data, dict)
+        else None
+    )
+    if not isinstance(facts, dict) or not facts:
+        raise ReportCriticalDataMissingError(
+            "正式候选事实缺失，关键数据不完整，停止生成"
+        )
+    report_date = str(facts.get("report_date") or facts.get("target_date") or "").strip()
+    query_date = str(facts.get("query_date") or "").strip()
+    source_date = str(facts.get("source_date") or "").strip()
+    available_at = str(facts.get("available_at") or "").strip()
+    if report_date != target_date or query_date != target_date:
+        raise ReportCriticalDataMissingError(
+            "正式候选事实的目标日期或查询日期不一致，关键数据不完整，停止生成"
+        )
+    try:
+        normalized_source_date = datetime.date.fromisoformat(source_date).isoformat()
+    except (TypeError, ValueError) as error:
+        raise ReportCriticalDataMissingError(
+            "正式候选事实缺少可核对的来源日期，关键数据不完整，停止生成"
+        ) from error
+    if normalized_source_date > target_date or not available_at:
+        raise ReportCriticalDataMissingError(
+            "正式候选事实的来源日期或可用时间无法证明，关键数据不完整，停止生成"
+        )
+    return [
+        {
+            "fact_id": "candidate_decision_evidence_facts",
+            "trade_date": report_date,
+            "source_date": normalized_source_date,
+            "query_date": query_date,
+            "available_at": available_at,
+            "value": deepcopy(facts),
+        }
+    ]
+
+
+def _quarantine_failed_consensus_outputs(output_result):
+    raw_output_dir = str((output_result or {}).get("output_dir") or "").strip()
+    if not raw_output_dir:
+        return ""
+    output_dir = Path(raw_output_dir)
+    if not output_dir.is_dir():
+        return ""
+    failed_root = output_dir.parent / "_failed"
+    failed_root.mkdir(parents=True, exist_ok=True)
+    failed_dir = failed_root / output_dir.name
+    if failed_dir.exists():
+        failed_dir = failed_root / f"{output_dir.name}-{time.time_ns()}"
+    os.replace(output_dir, failed_dir)
+    return str(failed_dir)
+
+
+def _run_daily_report_consensus_short(
+    data,
+    target_date,
+    *,
+    run_mode,
+    output_root=None,
+    reviewer=None,
+    model_version="",
+    database_service=None,
+    run_id=None,
+    now_fn=None,
+):
+    raise ReportCriticalDataMissingError(
+        "short 旧账户共识生成已停用；新版采样尚未实现，不再运行旧账户规则"
+    )
+
+def _target_close_missing(preflight):
+    """Neither the benchmark close nor any concept quote exists: the session has not closed or not published."""
+    status = {check.get("label"): check.get("status") for check in (preflight or {}).get("checks") or []}
+    return status.get("指数背景") == "missing" and status.get("板块样本") == "missing"
+
+
+def main():
+    """Generate the current reading page, never the retired account workflow."""
+    import argparse
+    from zoneinfo import ZoneInfo
+
+    started_at = time.perf_counter()
+    parser = argparse.ArgumentParser(description="A股日报：目标日市场与板块阅读")
+    parser.add_argument("date", nargs="?", help="目标日期 YYYY-MM-DD，默认上海日期的昨天")
+    parser.add_argument("--output-mode", choices=("sector", "full", "short"), default=None,
+                        help="sector 生成当前板块日报（默认）；full 仅定位历史原件；short 已停用")
+    parser.add_argument("--replay", action="store_true", help="只读选定的冻结快照，不联网刷新")
+    parser.add_argument("--snapshot-source", choices=("official", "replay"), default="official",
+                        help="回放来源：official 正式快照（默认），replay 历史重建快照；不混合版本")
+    parser.add_argument("--historical-rebuild", action="store_true", help="按目标日来源重新整理，只写 replay")
+    parser.add_argument("--force-live", action="store_true", help="明确重新采集当日事实")
+    parser.add_argument("--no-report", action="store_true", help="核对资料但不保存快照或阅读页")
+    parser.add_argument("--source-health-only", action="store_true", help="只检查阅读所需来源")
+    # Keep old argument names solely to return a useful error before any I/O.
+    parser.add_argument("-p", "--position", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--tomorrow-empty", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--postgres-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--import-json-to-postgres", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--stock", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--stock-name", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--overwrite-official", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    output_mode = _resolve_daily_report_output_mode(args)
+    if output_mode == "short":
+        parser.error("short 旧账户共识生成已停用；它不是新版 Wiki 的采样方案，请使用默认板块日报")
+    if (args.position is not None or args.tomorrow_empty or args.postgres_only
+            or args.import_json_to_postgres or args.stock or args.stock_name or args.overwrite_official):
+        parser.error("当前日报不接收旧账户、单票处方、导入或正式覆盖参数；请直接查阅历史原件")
+
+    today = datetime.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    raw_date = args.date or (today - datetime.timedelta(days=1)).isoformat()
+    try:
+        target_date = datetime.date.fromisoformat(raw_date).isoformat()
+        if raw_date != target_date:
+            raise ValueError("noncanonical date")
+    except ValueError:
+        parser.error("目标日期格式不符，请使用 YYYY-MM-DD")
+    if target_date > today.isoformat():
+        parser.error("目标日期不能晚于当前上海日期，停止生成")
+    if args.snapshot_source == "replay" and not args.replay:
+        parser.error("--snapshot-source replay 必须与 --replay 一起使用，避免静默替换正式事实")
+    if sum((args.replay, args.historical_rebuild, args.force_live)) > 1:
+        parser.error("--replay、--historical-rebuild、--force-live 只能选择一种资料来源")
+    if args.force_live and target_date != today.isoformat():
+        parser.error("--force-live 仅用于当日板块阅读；历史日期请使用冻结快照或 --historical-rebuild")
+    if output_mode == "full":
+        if args.no_report or args.source_health_only or args.historical_rebuild or args.force_live or args.snapshot_source != "official":
+            parser.error("full 只定位已有历史原件，不采集、不重算、不生成新建议")
+        originals = [path for path in _existing_legacy_report_paths(target_date, replay=args.replay)
+                     if path.is_file()]
+        print("历史原件：旧操作层已废除，内容不是当前建议；本次不重算、不写入。")
+        for path in originals:
+            print(f"历史文件: {path}")
+        if not originals:
+            print(f"{target_date} 没有已有完整版原件；不会为此重新生成旧建议。")
+        return 0 if originals else 1
+
+    snapshot_mode = LEDGER_MODE_REPLAY if args.snapshot_source == "replay" else LEDGER_MODE_FROZEN
+    data = None
+    selected_data_path = "live"
+    if args.replay:
+        data, _ = load_data_snapshot(target_date, mode=snapshot_mode)
+        selected_data_path = "replay"
+    elif not (args.force_live or args.historical_rebuild):
+        data, _ = load_data_snapshot(target_date)
+        if isinstance(data, dict):
+            selected_data_path = "snapshot"
+        elif target_date != today.isoformat():
+            raise ReportCriticalDataMissingError(
+                f"{target_date} 正式冻结快照缺失；可用 --replay --snapshot-source replay 读取已有重建快照，"
+                "或明确 --historical-rebuild 按目标日来源重新整理"
+            )
+    if args.replay and not isinstance(data, dict):
+        raise ReportCriticalDataMissingError(f"{target_date} 选定来源的冻结快照缺失，停止生成")
+
     observer = build_report_run_observer(
         run_name=f"daily-report.entry.{target_date}",
-        trace_input={
-            "target_date": target_date,
-            "replay": bool(args.replay),
-            "postgres_only": bool(args.postgres_only),
-            "requested_postgres_only": requested_postgres_only,
-            "auto_postgres_fast_render": auto_postgres_fast_render,
-            "data_path": selected_data_path,
-            "data_path_reason": data_path_reason,
-            "force_live": bool(args.force_live),
-            "no_report": bool(args.no_report),
-            "stock": args.stock or "",
-        },
+        trace_input={"target_date": target_date, "output_mode": "sector",
+                     "data_path": selected_data_path, "snapshot_source": args.snapshot_source},
         metadata={"runner": "daily_report_entry_demo"},
     )
-    run_status = "success"
-    run_error = None
-    report_preflight = {}
-    audit_result = {}
-    data = {}
-    position_timeline_markdown = ""
-    position_strategy_report = ""
-    bear_html_text = ""
-    chanlun_html = ""
-    market_language_translation = {}
-    market_language_storage = {}
-    fresh_wiki_persistence_ready = True
+    status, error = "success", None
+    saved_paths = {}
+    preflight = {}
     try:
-        source_health = run_source_health_check(
+        health = run_source_health_check(
             target_date,
-            replay=bool(args.replay and not args.postgres_only),
-            postgres_only=bool(args.postgres_only),
+            replay=selected_data_path in {"snapshot", "replay"},
+            snapshot_mode=snapshot_mode,
+            reading_mode=True,
+            historical_rebuild=bool(args.historical_rebuild),
+            include_cffex=False,
+            artifact_dir=(Path(__file__).resolve().parents[1] / "logs" / "source_health" / "sector"
+                          / ("replay" if selected_data_path != "live" else "live")),
         )
-        for line in render_source_health_terminal_lines(source_health):
+        for line in render_source_health_terminal_lines(health):
             print(line)
-        observer.record_step(
-            "source_health",
-            status="error" if source_health.get("overall_result") == SOURCE_HEALTH_STOP else "success",
-            input_payload={
-                "target_date": target_date,
-                "replay": bool(args.replay),
-                "postgres_only": bool(args.postgres_only),
-                "auto_postgres_fast_render": auto_postgres_fast_render,
-                "data_path": selected_data_path,
-                "data_path_reason": data_path_reason,
-                "source_health_only": bool(args.source_health_only),
-            },
-            output_payload={
-                "overall_result": source_health.get("overall_result", ""),
-                "stop_reason_count": len(source_health.get("stop_reasons") or []),
-                "warning_count": len(source_health.get("warnings") or []),
-                "artifacts": source_health.get("artifacts") or {},
-            },
-        )
+        if health.get("overall_result") == SOURCE_HEALTH_STOP:
+            raise ReportCriticalDataMissingError(source_health_failure_message(health))
         if args.source_health_only:
             return 0
-        if source_health.get("overall_result") == SOURCE_HEALTH_STOP:
-            run_status = "error"
-            run_error = ReportCriticalDataMissingError(source_health_failure_message(source_health))
-            return 1
-        phase_started_at = _record_daily_report_phase(
-            phase_timings,
-            "数据源检查",
-            phase_started_at,
-        )
+        if selected_data_path == "live":
+            data = collect_market_reading_data(target_date)
+        preflight = build_market_reading_preflight(
+            data, target_date, historical_snapshot=selected_data_path in {'snapshot', 'replay'})
+        observer.record_step("market_reading_preflight", status="success",
+                             input_payload={"target_date": target_date}, output_payload=preflight)
+        for check in preflight.get("checks") or []:
+            if check.get("status") == "missing":
+                print(f"- {check.get('label', '')}: 待确认（不转成账户决定）")
+        if selected_data_path == "live" and _target_close_missing(preflight):
+            raise ReportCriticalDataMissingError(
+                f"{target_date} 的收盘行情尚未取得（指数与概念行情均缺），可能尚未收盘或来源未更新；"
+                "停止生成，不保存快照、不发布页面，请在收盘数据更新后再生成"
+            )
+        if args.no_report:
+            return 0
 
-        if args.postgres_only:
-            print(f"📅 从 PostgreSQL 读取日报事实: {target_date}")
-            data = preloaded_postgres_data or load_daily_report_data_from_postgres(target_date)
-        elif args.replay:
-            data, target_date = replay_from_snapshot(target_date)
-        else:
-            print(f"📅 获取数据: {target_date}")
-            data = get_daily_data(
-                target_date,
-                skip_tushare_precheck=_source_health_check_passed(source_health, "tushare.runtime"),
-            )
-            if isinstance(data, dict) and data:
-                data.setdefault("target_date", target_date)
-                data.setdefault("source_date", target_date)
-        data_is_empty = not isinstance(data, dict) or not data
-        observer.record_step(
-            "load_daily_data",
-            status="success",
-            input_payload={
-                "target_date": target_date,
-                "replay": bool(args.replay),
-                "postgres_only": bool(args.postgres_only),
-            },
-            output_payload={"data_keys": list((data or {}).keys())[:30], "empty": data_is_empty},
+        # A historical rebuild is an experiment even when its target is today;
+        # never let it publish an official snapshot or page by accident.
+        run_mode = (
+            LEDGER_MODE_REPLAY
+            if args.replay or args.historical_rebuild or target_date != today.isoformat()
+            else LEDGER_MODE_FROZEN
         )
-        if data_is_empty:
-            error = ReportCriticalDataMissingError(
-                f"{target_date} 日报数据为空，关键数据不完整，停止生成"
+        official_page = sector_daily_output_path(_sector_full_html_anchor(target_date, LEDGER_MODE_FROZEN))
+        if official_page.exists():
+            run_mode = LEDGER_MODE_REPLAY
+        if selected_data_path == "live":
+            snapshot_path = _save_data_snapshot_with_observation(
+                data, target_date, run_mode, observer, overwrite_existing=False
             )
-            observer.record_step(
-                "report_preflight",
-                status="error",
-                input_payload={"target_date": target_date},
-                output_payload={"failure_count": 1, "failures": ["日报数据"]},
-                error=error,
-            )
-            raise error
-        if data:
-            if not args.tomorrow_empty:
-                _clear_cached_explicit_cli_tomorrow_account_action(data)
-            _normalize_inferred_previous_target_records(data)
-            report_preflight = build_report_preflight(data, target_date)
-            preflight_failures = list(report_preflight.get("failures") or [])
-            observer.record_step(
-                "report_preflight",
-                status="error" if preflight_failures else "success",
-                input_payload={"target_date": target_date},
-                output_payload={
-                    "failure_count": len(preflight_failures),
-                    "failures": preflight_failures,
-                },
-            )
-            for line in render_report_preflight_lines(report_preflight):
-                print(line)
-            if preflight_failures:
-                raise ReportCriticalDataMissingError(
-                    "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
-                        target_date,
-                        "、".join(preflight_failures),
-                        "\n".join(render_report_preflight_lines(report_preflight)),
-                    )
-                )
-
-        run_mode = LEDGER_MODE_REPLAY if args.replay else LEDGER_MODE_FROZEN
-        if run_mode == LEDGER_MODE_FROZEN and not args.overwrite_official:
-            official_ledger = load_strategy_performance_ledger(mode=LEDGER_MODE_FROZEN)
-            official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
-            official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
-            if official_record or os.path.exists(official_report_path):
-                _audit_existing_official_report_or_raise(
-                    target_date,
-                    official_report_path,
-                    strict=False,
-                    expected_position_summary=_existing_position_summary_for_audit(data),
-                )
+            # Snapshot IO can downgrade a frozen write to replay when an
+            # official snapshot already exists or a competing writer wins.
+            snapshot_text = str(snapshot_path or "")
+            if snapshot_text and (
+                Path(snapshot_text).parent.name == "replay"
+                or Path(snapshot_text).name.endswith("_replay.json")
+            ):
                 run_mode = LEDGER_MODE_REPLAY
-                print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
-        phase_started_at = _record_daily_report_phase(
-            phase_timings,
-            "数据读取与生成前检查",
-            phase_started_at,
-        )
-
-        # 生成日报（除非指定不生成）
-        if not args.no_report and data:
-            if args.tomorrow_empty:
-                data["tomorrow_account_action"] = build_tomorrow_empty_account_action(
-                    source="explicit_cli"
-                )
-            elif not is_tomorrow_empty_account_action(data.get("tomorrow_account_action")):
-                data.pop("tomorrow_account_action", None)
-                _clear_stale_tomorrow_empty_resolution_copies(data)
-            positions = []
-            if args.position is not None:
-                print(f"\n📊 解析持仓信息...")
-                if _is_empty_position_input(args.position):
-                    data["position_context_provided"] = True
-                    empty_summary = {
-                        "has_position": False,
-                        "summary": "已确认今日空仓",
-                        "position_source": "explicit_empty_input",
-                    }
-                    personal_position_context = data.get("personal_position_context")
-                    personal_position_context = (
-                        dict(personal_position_context)
-                        if isinstance(personal_position_context, dict)
-                        else {}
-                    )
-                    personal_position_context["existing_position_summary"] = empty_summary
-                    data["personal_position_context"] = personal_position_context
-                    data["existing_position_summary"] = dict(empty_summary)
-                    print("   ✅ 已确认今日空仓")
-                else:
-                    positions = parse_position_string(args.position)
-                    if positions:
-                        print(f"   ✅ 解析到 {len(positions)} 只持仓股票")
-                        data["personal_position_context"] = build_personal_position_context(data, positions)
-                    else:
-                        data["position_context_provided"] = False
-                        print(f"   ⚠️ 持仓信息解析失败，请检查格式")
-            else:
-                data.setdefault("position_context_provided", False)
-
-            has_personal_positions = bool(positions) or _has_existing_position_context(data)
-            if has_personal_positions:
-                data["position_context_provided"] = True
-            elif not bool(data.get("position_context_provided")):
-                injected_existing = _inject_previous_report_target_as_existing_position(
-                    data,
-                    target_date,
-                    prefer_postgres_history=bool(args.postgres_only),
-                )
-                inferred_position = _position_from_inferred_previous_target(injected_existing)
-                if inferred_position:
-                    positions = [inferred_position]
-                if injected_existing:
-                    has_personal_positions = bool(injected_existing.get("has_position"))
-
-            market_language_translation = prepare_market_language_translation(
-                data,
-                target_date=target_date,
-                analysis_mode="replay" if run_mode == LEDGER_MODE_REPLAY else "fresh",
-                root_dir=Path(__file__).resolve().parents[1],
-            )
-            report_outputs = build_report_outputs(
-                data,
-                target_date,
-                supplementary_perspective="",
-                has_personal_positions=has_personal_positions,
-                run_mode=run_mode,
-                position_report_text="",
-                persist_runtime_artifacts=False,
-                persist_decision_ledger=False,
-                market_language_translation=market_language_translation,
-            )
-            planned_report_path = Path(_get_report_output_path(target_date, mode=run_mode))
-            planned_report_paths = {REPORT_VARIANT_FULL: str(planned_report_path)}
-            position_strategy_report = render_position_strategy_report(
-                data,
-                target_date,
-                positions,
-                source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
-                output_root=planned_report_path.parent,
-                prefer_postgres_history=True,
-            )
-            position_timeline_markdown = _extract_position_timeline_markdown(position_strategy_report)
-            report_outputs[REPORT_VARIANT_FULL] = _prepend_position_timeline_markdown(
-                report_outputs.get(REPORT_VARIANT_FULL, ""),
-                position_timeline_markdown,
-            )
-            bear_html_text = _render_daily_report_html_for_acceptance(
-                target_date,
-                report_outputs.get(REPORT_VARIANT_FULL, ""),
-                output_path=planned_report_path.with_suffix(".html"),
-            )
-            tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
-            tomorrow_decision = _align_chanlun_tomorrow_decision_with_report(
-                tomorrow_decision,
-                report_outputs.get(REPORT_VARIANT_FULL, ""),
-            )
-            chanlun_html = _build_sh_index_chanlun_html_for_audit(
-                target_date,
-                tomorrow_decision=tomorrow_decision,
-            )
-            audit_result = _audit_generated_report_with_chanlun_html(
-                report_outputs,
-                companion_html=chanlun_html,
-                position_companion_html=bear_html_text,
-                source_path=planned_report_path,
-                expected_position_summary=_existing_position_summary_for_audit(data),
-                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
-                prefer_postgres_history=True,
-            )
-            report_outputs[REPORT_VARIANT_RUN_LOG] = finalize_run_log_text(
-                report_outputs.get(REPORT_VARIANT_RUN_LOG, ""),
-                audit_result,
-            )
-            observer.record_step(
-                "build_report_outputs",
-                status="success" if audit_result.get("passed") else "needs_review",
-                input_payload={"target_date": target_date, "run_mode": run_mode},
-                output_payload={
-                    "output_variants": list(report_outputs.keys()),
-                    "audit_passed": bool(audit_result.get("passed")),
-                    "finding_count": int(audit_result.get("finding_count") or len(audit_result.get("findings") or [])),
-                },
-            )
-
-        if not args.no_report and data and not args.postgres_only:
-            fresh_wiki_persistence_ready = False
-            _assert_fresh_llm_wiki_trace_complete(
-                data,
-                target_date,
-                run_mode=run_mode,
-            )
-            fresh_wiki_persistence_ready = True
-        phase_started_at = _record_daily_report_phase(
-            phase_timings,
-            "日报构建与首次检查",
-            phase_started_at,
-        )
-
-        postgres_synced = False
-        if data:
-            if args.postgres_only:
-                result = import_daily_report_data_to_postgres(target_date, data)
-                print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
-                postgres_synced = True
-                observer.record_step(
-                    "postgres_sync",
-                    status="success",
-                    input_payload={"target_date": target_date, "postgres_only": True},
-                    output_payload={
-                        "source": result.get("source", ""),
-                        "field_count": result.get("field_count", 0),
-                    },
-                )
-            else:
-                try:
-                    result = import_daily_report_data_to_postgres(target_date, data)
-                except Exception as exc:
-                    observer.record_step(
-                        "postgres_sync",
-                        status="error",
-                        input_payload={"target_date": target_date, "postgres_only": False},
-                        output_payload={},
-                        error=exc,
-                    )
-                    print(f"PostgreSQL 日报事实未同步：{exc}")
-                    raise ReportCriticalDataMissingError(
-                        "PostgreSQL 日报事实未同步，停止生成；不会写入日报或完整 JSON 快照。"
-                    ) from exc
-                else:
-                    print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
-                    postgres_synced = True
-                    observer.record_step(
-                        "postgres_sync",
-                        status="success",
-                        input_payload={"target_date": target_date, "postgres_only": False},
-                        output_payload={
-                            "source": result.get("source", ""),
-                            "field_count": result.get("field_count", 0),
-                        },
-                    )
-
-        if postgres_synced and not args.no_report and data:
-            tomorrow_action_calendar = _build_tomorrow_action_calendar_for_bear(
-                target_date,
-                run_mode=run_mode,
-                service=_LAST_DAILY_REPORT_POSTGRES_SERVICE,
-            )
-            t0_market_breadth = _build_t0_market_breadth_for_bear(
-                target_date,
-                service=_LAST_DAILY_REPORT_POSTGRES_SERVICE,
-                new_high_rows=(data.get("new_high_feedback") or {}).get("trend_rows"),
-            )
-            bear_html_text = _render_daily_report_html_for_acceptance(
-                target_date,
-                report_outputs.get(REPORT_VARIANT_FULL, ""),
-                output_path=planned_report_path.with_suffix(".html"),
-                tomorrow_action_calendar=tomorrow_action_calendar,
-                t0_market_breadth=t0_market_breadth,
-            )
-            audit_result = _audit_generated_report_with_chanlun_html(
-                report_outputs,
-                companion_html=chanlun_html,
-                position_companion_html=bear_html_text,
-                source_path=planned_report_path,
-                expected_position_summary=_existing_position_summary_for_audit(data),
-                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
-                prefer_postgres_history=True,
-            )
-            _try_persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
-        phase_started_at = _record_daily_report_phase(
-            phase_timings,
-            "事实同步与 Bear 复核",
-            phase_started_at,
-        )
-
-        if not args.no_report and data:
-            companion_html_paths = []
-            elimination_html_path = _try_save_elimination_tournament_html(
-                data,
-                target_date,
-                saved_report_paths=planned_report_paths,
-            )
-            if elimination_html_path:
-                companion_html_paths.append(elimination_html_path)
-            sector_preflight_html_path = _try_save_sector_capital_preflight_html(
-                data,
-                target_date,
-                saved_report_paths=planned_report_paths,
-            )
-            if sector_preflight_html_path:
-                companion_html_paths.append(sector_preflight_html_path)
-            _audit_generated_report_with_companion_html_paths(
-                report_outputs,
-                companion_html_paths,
-                source_path=planned_report_path,
-                expected_position_summary=_existing_position_summary_for_audit(data),
-                expected_turnover_rows=_expected_turnover_rows_for_audit(data),
-                prefer_postgres_history=True,
-            )
-            chanlun_html_path = save_sh_index_chanlun_html_report(
-                target_date,
-                root=Path(__file__).resolve().parents[1],
-                tomorrow_decision=tomorrow_decision,
-                fetch_minute_bars=_postgres_only_index_minute_fetcher if args.postgres_only else None,
-                sse_loader=_postgres_only_index_daily_loader if args.postgres_only else None,
-                allow_live_fallback=not args.postgres_only,
-            )
-            print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
-            if not position_strategy_report:
-                position_strategy_report = render_position_strategy_report(
-                    data,
-                    target_date,
-                    positions,
-                    source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
-                    output_root=planned_report_path.parent,
-                    prefer_postgres_history=True,
-                )
-            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
-            position_timeline_markdown = _extract_position_timeline_markdown(position_strategy_report)
-
-            if postgres_synced:
-                _try_save_daily_report_html_from_saved_markdown(
-                    target_date,
-                    run_mode=run_mode,
-                    saved_report_paths=planned_report_paths,
-                    prepend_markdown=position_timeline_markdown,
-                    html_text=bear_html_text,
-                    t0_market_breadth=t0_market_breadth,
-                )
-            saved_report_paths = save_report_outputs(
-                report_outputs,
-                target_date,
-                mode=run_mode,
-                overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
-                postgres_only=bool(args.postgres_only),
-            )
-            observer.record_step(
-                "save_report_outputs",
-                status="success",
-                input_payload={"target_date": target_date, "run_mode": run_mode},
-                output_payload={"output_variants": list(saved_report_paths.keys())},
-            )
-            read_verified_saved_report_markdown(
-                saved_report_paths.get(REPORT_VARIANT_FULL),
-                report_outputs.get(REPORT_VARIANT_FULL, ""),
-            )
-            if run_mode == LEDGER_MODE_FROZEN:
-                if not postgres_synced:
-                    raise ReportCriticalDataMissingError(
-                        "PostgreSQL 日报事实未同步，市场语言研究证据不写入"
-                    )
-                if _LAST_DAILY_REPORT_POSTGRES_SERVICE is None:
-                    market_language_storage = {
-                        "storage": "not_written",
-                        "reason": "本次整日同步未提供可复用的数据库服务",
-                    }
-                else:
-                    market_language_storage = write_fresh_market_language_translation(
-                        market_language_translation,
-                        root_dir=Path(__file__).resolve().parents[1],
-                        service=_LAST_DAILY_REPORT_POSTGRES_SERVICE,
-                    )
-            else:
-                artifact_root = Path(__file__).resolve().parents[1]
-                market_language_storage = write_replay_market_language_translation(
-                    market_language_translation,
-                    root_dir=artifact_root,
-                )
-            observer.record_step(
-                "market_language_translation",
-                status="success",
-                input_payload={"target_date": target_date, "run_mode": run_mode},
-                output_payload={
-                    "storage": market_language_storage.get("storage", ""),
-                    "artifact_path": market_language_storage.get("artifact_path", ""),
-                    "canonical_hash": market_language_storage.get("canonical_hash", ""),
-                },
-            )
-
-        if args.stock and data:
-            stock_report = generate_single_stock_diagnostic_markdown(
-                data,
-                target_date,
-                stock_code=args.stock,
-                stock_name=args.stock_name,
-                run_mode=run_mode,
-            )
-            save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
-        phase_started_at = _record_daily_report_phase(
-            phase_timings,
-            "附属页面检查与主日报保存",
-            phase_started_at,
-        )
-
-        if data:
-            if postgres_synced and not args.no_report:
-                if not args.postgres_only:
-                    snapshot_path = _save_data_snapshot_with_observation(
-                        data,
-                        target_date,
-                        run_mode,
-                        observer,
-                    )
-            phase_started_at = _record_daily_report_phase(
-                phase_timings,
-                "快照保存",
-                phase_started_at,
-            )
-            elapsed_seconds = time.perf_counter() - report_started_at
-            report_phase_timing_rows = _build_daily_report_phase_timing_rows(
-                phase_timings,
-                elapsed_seconds,
-            )
-            _append_daily_report_duration_log(
-                saved_report_paths,
-                target_date=target_date,
-                elapsed_seconds=elapsed_seconds,
-                data_path_label=_daily_report_data_path_label(args),
-                report_write_label=run_mode if not args.no_report else "未生成",
-                phase_timing_rows=report_phase_timing_rows,
-            )
-
+        path = _save_standalone_sector_reading_page(
+            data, target_date, run_mode=run_mode,
+            source_mode=snapshot_mode if selected_data_path in {'snapshot', 'replay'} else None)
+        if Path(path).parent.name == 'replay':
+            run_mode = LEDGER_MODE_REPLAY
+        saved_paths = {"sector_reading": str(path)}
+        observer.record_step("save_sector_reading", status="success",
+                             input_payload={"target_date": target_date, "run_mode": run_mode},
+                             output_payload={"path": str(path)})
+        print(f"日报优先阅读: {path}")
         return 0
     except Exception as exc:
-        run_status = "error"
-        run_error = exc
-        observer.record_step(
-            "daily_report_entry",
-            status="error",
-            input_payload={"target_date": target_date},
-            output_payload={},
-            error=exc,
-        )
+        status, error = "error", exc
+        observer.record_step("daily_report_entry", status="error", input_payload={"target_date": target_date},
+                             output_payload={}, error=exc)
         raise
     finally:
-        report_quality_score = build_report_quality_score(
-            target_date=target_date,
-            run_status=run_status,
-            mode=run_mode if "run_mode" in locals() else "",
-            preflight=report_preflight,
-            audit_result=audit_result,
-            decision_ledger_result=(data or {}).get("decision_ledger_artifacts") if isinstance(data, dict) else None,
-            output_paths=saved_report_paths,
-            error=run_error,
-            report_expected=not bool(args.no_report),
-            decision_ledger_expected=not bool(args.no_report),
-        )
-        if fresh_wiki_persistence_ready:
-            report_quality_ledger = persist_report_quality_score(
-                report_quality_score,
-                root_dir=Path(__file__).resolve().parents[1],
-                run_id=f"daily-report.entry.{target_date}",
-            )
-        else:
-            report_quality_ledger = {
-                "status": "not_written",
-                "reason": "知识引用资料不完整，停止写入质量记录",
-            }
-        report_quality_score["local_ledger"] = report_quality_ledger
-        observer.finish(
-            status=run_status,
-            output_payload={
-                "target_date": target_date,
-                "replay": bool(args.replay),
-                "postgres_only": bool(args.postgres_only),
-                "requested_postgres_only": requested_postgres_only,
-                "auto_postgres_fast_render": auto_postgres_fast_render,
-                "data_path": selected_data_path,
-                "data_path_reason": data_path_reason,
-                "no_report": bool(args.no_report),
-                "report_saved": bool(saved_report_paths),
-                "error": str(run_error) if run_error else "",
-                "phase_timings": report_phase_timing_rows,
-                "report_quality_score": report_quality_score,
-                "report_quality_ledger": report_quality_ledger,
-            },
-        )
-        _POSTGRES_ONLY_RUNTIME = False
-        if previous_postgres_only_guard is None:
-            os.environ.pop("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", None)
-        else:
-            os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = previous_postgres_only_guard
+        observer.finish(status=status, output_payload={
+            "target_date": target_date, "output_mode": "sector", "data_path": selected_data_path,
+            "snapshot_source": args.snapshot_source, "replay": bool(args.replay),
+            "report_saved": bool(saved_paths), "primary_report_path": saved_paths.get("sector_reading", ""),
+            "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+            "preflight": preflight, "error": str(error) if error else "",
+            "report_quality_ledger": {"status": "not_written", "reason": "板块阅读不写旧完整报告质量记录"},
+        })
 
 
 if __name__ == "__main__":

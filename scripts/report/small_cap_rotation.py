@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from report.small_cap_artifacts import evidence_hash
+from report.sector_reading_history import evidence_hash
 
 SCHEMA = 'small_cap_plan.v7'
 SCHEMAS = ('small_cap_plan.v1', 'small_cap_plan.v2', 'small_cap_plan.v3', 'small_cap_plan.v4', 'small_cap_plan.v5',
@@ -279,10 +279,12 @@ def build_plan(value, target_date, *, sessions, records, chinext, frozen=None, c
 
     frozen: earlier official plans by date; the first one published for this period (on the decision day or later)
     gives the lists for the rest of the period, so they cannot change from one day's report to the next."""
-    from report.strategy_backtest import history_from_artifact
+    from report.small_cap_history import history_from_artifact
     days = value['trade_dates']
     if not sessions or max(sessions) < days[0]:
         return None, '交易日历不全，不能确定换手日'
+    if not records:
+        return None, '财报增长数据缺失，不能判断股票是否符合条件'
     all_sessions = sorted({s for s in sessions if s >= ANCHOR} | {d for d in days if d >= ANCHOR})
     position = all_sessions.index(target_date)
     since = position % CYCLE
@@ -474,9 +476,9 @@ def render_plan(soup, plan, backtest=None):
     due = [o for o in (plan.get('account') or {}).get('orders') or [] if o.get('status') == 'due']
     if due and plan['sessions_since']:
         names = '、'.join(f"{o['name']}（{_pct(o['gain_pct'])}）" for o in due)
-        section.append(text('p', f"今天收盘到了止盈线：{names}，{upcoming}开盘卖，卖出的钱留到下一个换手日。", 'dash-takeaway dash-plan-due'))
+        section.append(text('p', f"单期模拟今天收盘到了止盈线：{names}；若真实持仓和原始买价一致，规则是在{upcoming}开盘卖，钱留到下一个换手日。", 'dash-takeaway dash-plan-due'))
     if not plan['picks']:
-        section.append(text('p', '这一期没有符合条件的股票，空着。'))
+        section.append(text('p', '本期冻结名单为空，须先核对财报与行情覆盖；不据此推断真实账户应当空仓。'))
     rows = soup.new_tag('table', attrs={'class': 'dash-table dash-table-compact'})
     head = soup.new_tag('tr')
     for label in ('', '股票', '板块', '行业', '20日日均成交额（亿）', '最近一季收入同比', '最近一季利润同比', '报告期', '定名单时收盘', '一手约（元）'):
@@ -512,7 +514,7 @@ def render_plan(soup, plan, backtest=None):
         pool = (f"股票池（{holding['pool_size']}只等权）{_pct(holding['pool_pct'])}、中证2000{_pct(holding.get('csi2000_pct'))}、"
                 if 'pool_pct' in holding else '')
         shadow = f"，不止盈为{_pct(holding['basket_hold_pct'])}" if holding.get('basket_hold_pct') is not None else ''
-        section.append(text('p', f"本期实际买入（{holding['entry_date']}开盘）：{'、'.join(holding['names'])}；到今天收盘合计{_pct(holding['basket_pct'])}"
+        section.append(text('p', f"本期等权模拟买入（{holding['entry_date']}开盘）：{'、'.join(holding['names'])}；到今天收盘合计{_pct(holding['basket_pct'])}"
                              f"（{'按止盈10%，' if plan.get('take_profit') else ''}已扣买入成本{shadow}），同期{pool}创业板指{_pct(holding['chinext_pct'])}、中证全指{_pct(holding['csi_all_pct'])}。"))
     if account := plan.get('account'):
         section.append(_account_block(soup, text, plan, account))
@@ -534,7 +536,7 @@ def render_plan(soup, plan, backtest=None):
                          + ('持有期间：收盘比买价高10%（含分红送转），下一个交易日开盘卖，卖出的钱留到下一个换手日，这一期不再买回；'
                             '不设止损，被戴帽也不单独卖，到换手日自然换掉；' if plan.get('take_profit') else '持有期间不设止损；')
                          + f"整个账户净值跌破{FLOOR}就全部停下重新检验。"
-                         '回测与“小亏还是大亏”的分布见回测区与 Wiki 的盈利模式库。'))
+                         '完整比较见独立回测报告；日报单期演示不代表连续账户或真实成交。'))
     return section
 
 
@@ -585,7 +587,8 @@ def _pp(value):
 def _account_block(soup, text, plan, account):
     """The plan worked through the user's 10,000 yuan: lots, names passed over, cash left and the result so far."""
     box = soup.new_tag('div', attrs={'class': 'dash-plan-account'})
-    box.append(text('h3', f"按你的{account['base']:,.0f}元本金照做（万一免五）"))
+    box.append(text('h3', f"{account['base']:,.0f}元整手单期模拟（万一免五）"))
+    box.append(text('small', '佣金为成交额0.01%，无最低收费；过户费另计0.001%，卖出另计0.05%印花税。', 'dash-note'))
     table = soup.new_tag('table', attrs={'class': 'dash-table dash-table-compact'})
     head = soup.new_tag('tr')
     tracked = account['priced'] == 'open' and 'cash_now' in account
@@ -612,7 +615,7 @@ def _account_block(soup, text, plan, account):
     wrap.append(table)
     box.append(wrap)
     held = [o for o in account['orders'] if o.get('status') != 'sold'] if tracked else []
-    if held:                                  # the table's key columns in one line, readable on a phone
+    if held:
         due = [o['name'] for o in held if o['status'] == 'due']
         tail = f"今天收盘到线的：{'、'.join(due)}，{upcoming}开盘卖。" if due else '今天收盘都没有到。'
         prices = '、'.join(f"{o['name']}{o['take_profit_price']:.2f}元" for o in held)
@@ -633,7 +636,7 @@ def _account_block(soup, text, plan, account):
     box.append(text('p', line, 'dash-takeaway'))
     if tracked:
         box.append(text('small', '“买入以来”和状态按含分红送转的涨幅算；遇到除权除息，止盈价要按除权后的价格重算，以状态这一列为准。', 'dash-note'))
-    box.append(text('small', '本金按你说的1万元算，账户金额变了就告诉我改；上面“本期实际买入”一行是按规则等额买满的理论记账，这里是1万元整手买得到的实际记账。', 'dash-note'))
+    box.append(text('small', '本表每期按1万元重新起算，未承接上期现金、旧仓和原买价，未实现跨期净值底线卖出流程；不是实际持仓或连续账户。止盈提示须核对真实原买价，不能直接当成账户卖出指令。等权模拟与整手单期模拟的成本和金额口径不同。', 'dash-note'))
     return box
 
 

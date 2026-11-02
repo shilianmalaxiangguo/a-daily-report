@@ -1,319 +1,76 @@
-# 你的理念必须是
+# 当前维护约定
 
-The quality you have the fast you go, the only way to go fast is to go well.
+The better the quality, the faster you go; the only way to go fast is to go well.
 
-# 问题定义优先
+先读 [交易 Wiki](wiki/README.md)、[当前策略范围](docs/plans/2026-11-01-small-cap-current-scope.md) 和本次任务涉及的当前页面。当前 Wiki 与用户最新明确要求优先于旧日报、旧代码、旧测试和历史方案。
 
-大模型时代，把“定义问题的能力 > 提问能力 > 解决问题能力”理解为工作顺序，不是轻视执行和验证。
+## 问题与实施边界
 
-- 先定义需要改善的决定，不先选择工具、模型或答案。
-- 问题定义必须写清目标、事实边界、完成证据、不可改变项和验证方式。
-- 只询问会实质改变判断或实现的关键未知；仓库、事实源或既有文档能回答的先自行核实。
-- 解决方案以最小可验证闭环为准。有效价值取决于问题重要性、定义质量、解决质量和验证可信度，任何一项接近零，整体价值都接近零。
-- 验证失败时，先检查事实和问题定义，再修改方案；不得在错误问题上继续堆叠答案。
-- 不从“AI 能做什么”出发，先问“哪个重要决定仍然容易做错、为什么会错、怎样证明它变好了”。
+- 先明确要改善的决定、事实边界、完成证据、不可改变项和验证方式。架构或跨文件修改前简述 Goal、In Scope、Out of Scope、Non-goals、Done Definition 和 Verification。
+- 仓库能回答的事实先自行核实，只询问会实质改变实现的未知。不要把用户诊断当作已经证实的原因。
+- 每一行修改对应当前目标；不添加假设性框架、抽象或未来配置。只有当前重复复杂度确实需要时才抽取共享代码。
+- 修改前读取确切代码，修改后运行最窄且有效的检查。验证失败先核对事实和问题定义。没有新验证证据不能声明通过。
+- 完成独立审计并修复具体问题后再提交。保护工作区已有变动，不整体暂存、不整体提交、不清空工作树。需要发布时使用 develop，并先核实分支与远端差异。
 
-# Python 运行版本硬约束
+## Python 3.14
 
-本仓库所有 Python 命令、测试、脚本、日报生成、数据源检查和临时诊断都必须使用 Python 3.14。
+所有 Python 命令、脚本、测试、日报、数据检查和临时诊断必须使用固定解释器：
 
-固定解释器路径：
+    .generated/venv-py314/bin/python3.14
 
-```bash
-.generated/venv-py314/bin/python3.14
-```
+测试示例：
 
-禁止使用：
+    .generated/venv-py314/bin/python3.14 -m unittest tests.test_current_strategy_scope tests.test_current_entry_isolation
 
-```bash
-python
-python3
-venv/bin/python
-venv/bin/python3
-venv/bin/python3.11
-```
+当前入口：
 
-如果需要运行单测，必须使用：
+    .generated/venv-py314/bin/python3.14 scripts/daily_report_current.py <date> --replay
 
-```bash
-.generated/venv-py314/bin/python3.14 -m unittest ...
-```
+旧 venv 不能用于执行。外部启动项尚未全部核清前保留其文件，不能因为目录被忽略就直接删除。
 
-如果需要生成日报，必须使用：
+## 当前策略与账户边界
 
-```bash
-.generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py ...
-```
+完整买卖规则只维护在 [小盘轮换策略](wiki/交易思想/小盘轮换策略.md) v0.3；数字、模型身份和证据限制只维护在 [回测与检验证据](wiki/交易思想/回测与检验证据.md)。
+
+- 唯一主策略：5只名单加3只备选，每20个交易日换手，只买主板和创业板。换手日历锚点不因评价窗口改变。
+- 收盘相对原买价上涨至少10%（含分红送转）后，下一个可卖交易日开盘卖；跌停或停牌卖不出就顺延。现金留到下次换手，当期不回补。
+- 执行计划不叠加高开兑现；不设个股止损，戴帽不单独卖。整个账户收盘净值跌破初始本金的0.7后，次日起卖出停用；跳空、跌停和停牌可能使损失超过30%。
+- 佣金万一免五：成交额0.01%，无最低收费；过户费、卖出印花税另计。不上杠杆。
+- 当前评价窗口为2025-02-28至2026-10-29，更早数字只有历史身份。不得把回测收益当作实盘预期。
+- 日报整手表是每期以1万元重新起算的单期模拟，未承接旧仓、现金和原买价，不是连续账户或实际成交。实际账户事实不足时保留未知，不默认空仓。
+- 连续账户模型存在的备选范围和底线卖出差异必须披露；未修复、未重算前不能声称与当前计划完全一致。
+- 板块资金扩散淘汰赛仅为历史观察材料，缺完整可执行历史，不参与小盘选股、择时或资金分配，不编造收益对比。
+- 旧阿尔法/贝塔买卖建议、六项买入检查、五日退出、个股漏斗、B1/B2及旧账户结论不再日更。事实图表不自行产生另一套策略。
+
+## 桌面与表达
+
+- 只维护桌面日报，不做手机适配，也不验收手机窗口。历史档案不能恢复此要求。
+- 遵守 [日报术语契约](wiki/交易思想/日报术语契约.md)，使用条件、资格、参与、不参与、可做、不做、事实不足和待确认等交易语言；不复述旧工程口径。
+- 缺失不写成零，成交额不等于净流入。计划、模拟、建议和真实成交分别表达。
+- 读本地文件优先命令行 cat、head、cat -n；只读取任务需要的范围，不使用可能误判 UTF-8 的缓存读取方式。
 
 # 日报 bug 修复短口令
 
-当用户说 `修日报bug`、`日报有bug`、`修 YYYY-MM-DD 日报`、`重新生成昨天日报和推论`，或同类短句时，默认进入“历史日报修复”流程。不要要求用户重复完整约束。
+用户说修日报bug、日报有bug、修某日报或重新生成昨天日报时，默认进入历史日报修复。
 
-默认展开如下：
+- Goal：修复指定交易日阅读问题，生成 replay 阅读页与必要的独立事实副本。
+- In Scope：相关事实核对、阅读内容、渲染和最小测试。
+- Out of Scope：当前实时盘面重采历史、覆盖正式历史、无关重构。
+- Non-goals：不把当前热度、新闻、名单、资金流或其他当前事实混入旧日期。
+- Done Definition：指定日期 replay 产物生成，关键检查通过，说明来源、补查日期与仍缺事实。
 
-- Goal：修复指定交易日的日报问题，并重新生成该交易日的 replay 日报、推论和必要的 replay 快照。
-- In Scope：报告逻辑、推理逻辑、渲染逻辑、replay 缺口回补、与该 bug 直接相关的最小测试。
-- Out of Scope：重新按当前实时盘面全量采集历史日期、覆盖正式历史日报、顺手重构无关模块、扩展新功能。
-- Non-goals：不把今天的热度、异动、盘中新闻、顽主杯、龙虎榜、资金流、涨跌家数、成交额排行等当前数据混入历史日报。
-- Done Definition：目标日期 replay 产物重新生成，关键检查通过，并说明哪些事实来自官方快照、哪些事实按目标日期回补、哪些事实仍缺失。
+1. 先解析明确目标日期；相对日期按当前时区换算。
+2. 默认读取 snapshots/<date>.json，执行当前入口的 --replay。
+3. 正式快照不存在时，不暗中转实时全量采集。只有用户明确要求后才按目标日重建。
+4. --replay --snapshot-source replay 只读重建快照，缺所选来源就停止，不混用版本。
+5. 回补只能用明确支持目标日的来源；保留来源日、交易日和实际查询日，无法证明所属日期就留缺。
+6. 默认只写 reports/replay/ 和 snapshots/replay/。阅读页为 <date>_A股日报_板块日报_replay.html。full 只定位已有历史原件，short 停用。
+7. 先定向测试，再离线 replay。按桌面窗口核对受影响页面，并比较正式报告、快照、原始事实与图表记录的哈希。
 
-执行规则：
+## 历史索引
 
-1. 先解析目标日期；如果用户只说“昨天/前天”，按当前时区换算成明确日期；如果日期无法判断，只问日期。
-2. 历史日期优先读取 `snapshots/<date>.json`，默认命令是：
-   ```bash
-   .generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py <date> --replay
-   ```
-3. 如果官方快照不存在，不要直接改走实时全量采集；先说明缺少历史快照，并询问是否允许按目标日期重新采集。
-4. 修数据源 bug 时，不能只修实时采集路径；如果坏数据已经冻结在历史快照里，还要检查 `scripts/replay/report_replay.py` 是否需要按目标日期回补。
-5. replay 回补只能使用明确支持 `target_date=<date>` 的历史源、本地事实库、官方快照或 replay 快照；如果某个来源只能返回当前数据，不得用它补历史日期。
-6. 对会随当天变化的数据，回补时必须保留 `query_date`、`source_date`、`trade_date` 或等价字段；无法证明属于目标日期时，宁可保留缺失并报告风险。
-7. 默认只写 `reports/replay/` 和 `snapshots/replay/`；除非用户明确要求覆盖正式历史并允许 `--overwrite-official`，否则不覆盖 `reports/` 下的正式日报。
-8. 验证优先级：相关单测；然后运行 `<date> --replay`；最后对 `reports/replay/<date>_A股日报_完整版_replay.md` 运行日报一致性检查。
+[历史展示维护记录（不适用于当前入口）](docs/archive/daily-report-framework/2026-11-02/AGENTS-maintenance-history.md) 保存原文件全文；[原文哈希清单](docs/archive/daily-report-framework/2026-11-02/maintenance-manifest.json) 可核对迁移完整性。旧维护记录不再随根指令加载。
 
-# 阅读窗口偏好（用户已确认）
+验证命令与历史测试分类见 [当前验证说明](references/verification.md)。
 
-日报及其回测、数据检查附页只维护和验证桌面端。用户不需要任何手机端日报兼容，不新增手机布局、手机导航或390px验收；只有用户在后续具体任务中明确提出，才改变这个范围。
-
-本约定覆盖历史任务档案、旧 PRD、设计文档、测试说明及验证记录中的手机、窄屏和固定手机宽度要求；这些内容仅保留作历史证据，不得据此恢复手机适配。
-
-# 当前主策略覆盖（2026-11-01）
-
-小盘轮换 v0.3 是当前主策略：每20个交易日换手，5只主板和创业板股票，止盈10%后次日开盘卖出，账户净值底线0.7。旧的 B1/B2 分笔、固定盘中处理时段、旧仓动作和相关验收只属于历史参考，不覆盖当前策略交付。
-
-# 日报展示结构修改后对比
-
-当任务目标是优化日报阅读结构或 Bear HTML 展示时，默认只改渲染和文档，不改明日标的生成逻辑。
-
-| 项目 | 修改前 | 修改后 | 不变项 |
-|------|--------|--------|--------|
-| Markdown 首屏 | 板块资金证据可能出现在 `## 明日执行结论` 前，读者先看过程再找动作。 | `## 明日执行结论`、执行条件、不执行条件先出现，板块资金扩散淘汰赛和 T0 推演后置为依据。 | `selection_workflow`、`final_target_resolution`、候选池、评分和最终对象字段不因展示调整而改变。 |
-| Bear HTML | 普通标题渲染，动作段和证据段视觉权重接近。 | Bear HTML 跟随 Markdown 顺序，并用 `bear-section-action` / `bear-section-evidence` 区分动作和证据。 | HTML 只读 Markdown，不反推、不回写明日对象、仓位或执行性质。 |
-| 文档记录 | flow/testing/readme 只记录上一轮结构整理。 | flow/testing/readme/AGENTS 都要写清修改后对比和验证方式。 | 正式历史日报覆盖策略、replay 优先读取快照策略不变。 |
-
-验证要求：
-
-- 单测至少覆盖阅读地图、板块资金摘要插入顺序、Bear HTML 标题分类。
-- replay 对比必须确认 `明日执行对象`、`明日仓位`、`执行性质` 不因展示修改而变化。
-- 如果对比不一致，先按越界处理，停止声明完成并回查是否误改了决策生成路径。
-
-# 文件读取工具选择
-
-## 规则
-
-优先使用 Bash 的 cat/head 读取文件，避免使用 Read 工具。
-
-## 原因
-
-Read 工具在 Windows 环境下读取某些特定文件时会返回乱码（显示为二进制数据），而文件实际是正常的 UTF-8 编码。通过 `cat` 或 `head` 命令可以正常读取。
-
-## 问题特征
-
-- 不是所有文件都有问题，是特定文件会出现乱码
-- `file` 命令显示文件是正常 UTF-8，但 Read 工具读取乱码
-- Read 工具会缓存读取结果，同一个会话内再次读取会返回缓存
-
-## 验证结果
-
-| 方法 | 结果 |
-|------|------|
-| `file` 命令 | ✅ 显示 "Unicode text, UTF-8 text" |
-| `head`/`cat` 命令 | ✅ 正常显示内容 |
-| Read 工具 | ⚠️ 部分文件正常，部分文件乱码 |
-| Write 工具 | ✅ 正常 |
-| Edit 工具 | ⚠️ 需要先 Read，如果 Read 乱码则失败 |
-
-## 替代方案
-
-```bash
-# 读取整个文件
-cat <file>
-
-# 读取前 N 行
-head -n <lines> <file>
-
-# 读取文件并显示行号
-cat -n <file>
-```
-
-# 用户可见语言与禁止词
-
-本仓库所有用户可见文字都必须遵守 `wiki/交易思想/日报术语契约.md`，范围包括：
-
-- 助手回复、阶段性说明、计划、总结。
-- 日报正文、执行摘要、诊断输出、运行日志。
-- 新增或修改的测试名、文档、示例文案、错误提示。
-
-禁止把工程状态机、抽象权限词、系统实现词搬到用户可见文字里。
-
-明确禁用以下说法：
-
-- `硬门禁`
-- `门禁`
-- `gate`
-- `hard gate`
-- `状态机`
-- `状态机词汇`
-
-需要表达检查、阻断或是否允许执行时，统一改写为交易语言：
-
-- `条件`
-- `资格`
-- `买入资格`
-- `执行资格`
-- `可做`
-- `不做`
-- `参与`
-- `不参与`
-- `关键数据不完整，停止生成`
-- `条件未满足，停止生成`
-
-如果不得不引用用户原话或历史问题，也要用“你指出的禁用说法”“这个旧工程口径”等替代表达，不在新的用户可见输出里复述禁用词。
-
-# 历史参考：交易人格与冲动买入底层规则
-
-这条来自 2026-06-05 华电辽能做T亏损复盘，仅作历史复盘参考，不覆盖当前主策略。
-
-核心结论：
-
-- 股票会长期赚钱的人，肯定更接近淡定从容、温和处事，绝少是极端冲动的人。
-- 长期赚钱的人不一定天生没有冲动，而是冲动不能直接变成交易动作。
-- 真正的淡定从容不是慢，而是不急着证明自己、不急着修复自己、不急着补偿错过。
-- 只参与让自己从容的机会；如果一笔交易让人急、怕错过、想立刻点下去，它大概率不是机会，而是在测试旧毛病。
-
-2026-06-05 错题总结：
-
-- 0轴只是观察信号，不是买入资格。
-- 反复犯错的本质，是把观察信号错当成买入资格，把盘中冲动包装成临盘应变。
-- 买入资格必须同时满足时间窗口、回踩确认、板块情绪、亏损边界和认错线距离。
-- 没有时间窗口、没有回踩确认、没有贴近认错线，就算下一秒涨停，也不属于自己。
-- 盘中买入前必须问：这是观察信号还是买入资格？离认错线近不近？是否在前一晚允许的时间窗口内？只要答不清，就不买。
-
-# 历史参考：明日操作与2B执行口径
-
-这条来自 2026-07-06 太极实业同股T亏损复盘，仅作历史复盘参考，不覆盖当前主策略。
-
-核心结论：
-
-- “已决定50%条件执行”或“已决定满仓条件执行”仍然是T0已经决定的计划，不是T+1盘中重新决定。
-- 但执行不能写成一次性买够。正向执行默认写成：B1先买参与权，B2只在确认后补；没有确认不补足。
-- B1代表参与权，B2代表确认权。B2不是任务仓，也不是为了证明B1正确而必须补的仓。
-- 好样本才给B1+B2，坏样本只亏B1；仓位要跟随证据强度变大，而不是跟随态度变大。
-- 同股T时，已有1x旧仓先视为B1参与权；B2只在强表态存活后补，强表态失败先卖可卖旧仓。
-- 明日操作、明日策略、明天具体怎么做、出手时怎么做、真到盘中怎么做，都必须使用这套表达。
-
-禁止在正向执行文案里暗示：
-
-- 开盘必须一次性买够。
-- 第二笔是必须完成的任务仓。
-- 没有确认也要为了避免踏空而补足。
-- 已有同股1x旧仓时，还把同一只票按普通新仓开盘补到2x。
-
-# 历史参考：市场语言研究证据展示口径
-
-这条来自 2026-07-12 市场语言与一分钟量化压力研究接入，仅作历史展示参考，不覆盖当前主策略交付。
-
-核心顺序：
-
-- 完整版和摘要版都必须先给 `明日执行结论`、账户动作、执行条件与不执行条件，再展示 `市场语言翻译（研究证据）`。
-- `市场语言翻译（研究证据）` 只解释合力范围、方向、阶段、候选、确认、失效、反证和下一窗口任务，不参与候选生成、最终对象、仓位、B1/B2 或退出动作计算。
-- `09:30-09:35`、`09:50-10:10`、`14:30-14:55` 仍是三段正式处理窗口；`09:45-09:50` 只作前哨观察，全天事件记录不能变成窗口外临时动作。
-- 缺少完整一分钟事实时，明确写事实不足，不伪造精确时刻；未来高低点、未来收益、MFE/MAE 和 T+1/T+2 只进入 replay 验收。
-- 全市场涨跌家数等宽度事实必须由执行精确日期查询的数据生产端写入自身 `trade_date/source_date`；翻译层不得从外层日报日期猜测，否则三层合力只能判为事实不足。
-- Bear HTML 必须把该二级标题归入证据区，保持 Markdown 顺序；宽表和图表可以在自身容器滚动，但页面本身不得横向溢出。
-
-修改展示结构后的验证要求：
-
-- 比较接入前后 `selection_workflow`、`final_target_resolution`、明日执行对象、仓位、执行性质、B1/B2 和退出动作，必须逐字段一致。
-- 完整版与摘要版各使用研究产物的隔离副本，渲染前后原产物哈希不变。
-- 至少覆盖动作早于证据、Bear HTML 分类、事实不足、桌面窗口，以及 replay 不把未来事实写回当时判断。
-
-# Spec-Driven Scope Control
-
-For implementation tasks, always define and follow:
-
-- In Scope
-- Out of Scope
-- Non-goals
-- Done Definition
-
-If one of these is missing and the task has ambiguity, clarify before expanding architecture.
-
-Default to the smallest vertical slice that satisfies the current goal.
-
-Do not build for hypothetical future needs by default. Add abstraction only when there is present-time evidence.
-
-Before introducing a new layer/subsystem, all of the following must be true:
-
-- It is required by current In Scope or Done Definition.
-- The current implementation has concrete, repeated complexity that the new layer actually removes now.
-- The change can be explained as lower current delivery risk, not future preference.
-
-If these conditions are not met, do not introduce the abstraction in the current PR.
-
-If out-of-scope ideas are valuable, record them as follow-up proposals (RFC/ADR/todo) and keep the current PR minimal and mergeable.
-
-During review, if a PR materially exceeds the current Done Definition, request a split: merge the minimal in-scope slice first, and move expansions to separate follow-up PRs.
-
-# 统筹任务：Plan / Trellis / Grill / Legacy Trellis
-
-默认先走 Plan；简单明确的任务言出法随，直接完成。只有任务复杂度、风险和影响范围真的需要，才升级到 Trellis；方案不稳、判断困难或业务口径需要压测时，再叠加 grill-me。
-
-- Plan：小任务、单文件、明确 bug、小文案/规则、可直接验证。内部圈定目标、范围、非目标和验证方式后直接做；不创建 Trellis 任务，不写规格文档，不拆 subagent。
-- Trellis：多文件但边界清楚、局部逻辑、沿用现有模式的扩展，或需要项目规范、任务记录、知识沉淀和质量检查的任务。先用中文简述范围、风险和验证方式，再按 Trellis 任务/spec/check 流程推进。
-- Trellis + Grill：新功能、跨模块重构、共享契约、数据源、存储、业务主链路、候选池、推理或生成链路等高风险任务；或方案本身需要反例拷问、边界压测、术语统一。先用 grill-me 把决策问清楚，再用 Trellis 落任务、规格、执行和检查。
-- Grill：用户明确要求拷问、评估方案、判断方案是否正确，或当前方案虽然要做但边界明显不稳。Grill 是决策拷问，不是单独的执行流程；拷问后按 Plan 或 Trellis 推进。
-- Legacy Trellis：只处理 `.trellis` 旧任务、旧文档或迁移，不作为新任务的主流程。
-
-使用入口：
-
-- 用户不清楚任务大小时，先用 `$task-mode` 做分流判断。
-- 用户已经清楚任务大小时，可说“按 Plan 做”“这是轻量改动”“按 Trellis 做”“先 grill 我”，也可用 `/plan`、`/trellis`、`/grill`、`/legacy-trellis` 这类短口令表达自然语言意图；这些短口令代表执行模式，不自动增加额外流程。
-- 一个请求包含多个目标、任务大小不明、影响范围不清，或用户问“应该怎么做”时，自动先按 task-mode 拆分并给每个子任务标模式。
-- 进入 Trellis / Trellis + Grill，或用户明确允许 subagent 时，自动带入中文任务上下文：模式、目标、范围、非目标、验证、限制、输出要求。
-
-头脑风暴本地口径：
-
-- 用户明确要求头脑风暴，或关键设计取舍会实质改变结果时，使用独立的 `brainstorming` skill。
-- 头脑风暴只负责把目标、边界、反例和取舍讨论清楚；设计获确认后，回到本节的 Plan / Trellis / Grill 分流继续执行。
-- 非用户明确要求，不默认创建 worktree；已经在原生隔离工作区内时，不再叠加 `git worktree add`。
-- spec / plan 可以落盘，但提交到 git 前必须问用户。
-- subagent 只有用户明确允许代理或并行时才用；子代理基于具体 commit 工作时，必须创建分支，不要裸切到提交。
-- 删除文件、大规模重构、修改 git 历史、推送远程、改环境配置、改 CI、数据库变更，必须先确认。
-
-详细判断见 `.agents/skills/task-mode/SKILL.md`。
-
-# 提交前独立审计时限
-
-提交前审计用于发现遗漏，不允许本身成为新的长时间等待来源。
-
-- 一轮最多并行两个审计；每个审计只覆盖一个风险主题，例如代码行为或产物一致性，不把代码、产物、性能和文档混成一个宽任务。
-- 派发说明必须列出具体文件或产物、要回答的问题、期望的 `file:line` 证据，并要求 8 分钟内先返回已确认发现或“暂无发现”的阶段结论。
-- 主线程从派发时记录统一墙钟截止时间，两个并行审计共用 10 分钟预算，不按代理数量相加。
-- 8 分钟仍无阶段证据时立即停止该审计；已有可用证据时最多继续到 10 分钟，10 分钟一到必须停止并采用已有结论，不得延长。
-- 每次等待时长取 `60 秒`、距 8 分钟阶段节点的剩余时间、距 10 分钟截止的剩余时间三者最小值；任一节点到点立即恢复控制并执行对应处理，不能因一次等待跨过节点。
-- 被停止且没有证据的审计不在同一轮重新派发宽任务；主线程改做定向测试和关键出处抽查。
-- 最终记录每个审计的开始、结束、是否被停止、有效发现数和处理结果，明确并行墙钟时间而不是把两个时长相加。
-
-<!-- TRELLIS:START -->
-# Trellis Instructions
-
-These instructions are for AI assistants working in this project.
-
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
-
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->
+阿尔法／贝塔算法和回测证据只供显式研究；其余旧建议、旧模板和手机要求不能恢复当前执行。默认搜索排除冻结资料，历史调查用 `rg --no-ignore` 与明确路径。51份旧执行测试已退出默认发现，详情见 [小盘隔离记录](docs/plans/2026-11-02-small-cap-isolation.md)。

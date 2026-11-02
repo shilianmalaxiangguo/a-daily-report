@@ -196,6 +196,42 @@ class RunLogRuntimeTest(unittest.TestCase):
             self.assertIn("position_day_order_inferred_target_conflict", payload["error_message"])
             self.assertIn("待成交确认", payload["error_message"])
 
+    def test_run_with_log_capture_records_limit_down_pool_preflight_failure(self):
+        from daily_report_render import ReportCriticalDataMissingError, build_report_outputs
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            try:
+                with self.assertRaises(ReportCriticalDataMissingError):
+                    run_with_log_capture(
+                        lambda: build_report_outputs(
+                            {
+                                "data_status": {"跌停池": False},
+                                "dt_pool": [],
+                            },
+                            "2026-08-04",
+                            emit_preflight=False,
+                        ),
+                        argv=["daily_report_entry_demo.py", "2026-08-04", "--postgres-only"],
+                        logs_root=tmpdir,
+                        now=datetime(2026, 8, 4, 19, 30, 0),
+                    )
+            finally:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+
+            error_logs = sorted((Path(tmpdir) / "errors").glob("*.json"))
+            self.assertEqual(len(error_logs), 1)
+            error_payload = json.loads(error_logs[0].read_text(encoding="utf-8"))
+            latest_failure = json.loads((Path(tmpdir) / "latest_failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(error_payload["error_type"], "ReportCriticalDataMissingError")
+            self.assertIn("关键数据不完整，停止生成", error_payload["error_message"])
+            self.assertIn("跌停池", error_payload["error_message"])
+            self.assertEqual(latest_failure["error_log_path"], str(error_logs[0]))
+
     def test_run_with_log_capture_redacts_tokens_in_latest_failure_lines(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             stdout_buffer = io.StringIO()

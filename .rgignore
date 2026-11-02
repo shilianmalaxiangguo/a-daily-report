@@ -1,0 +1,27 @@
+# Frozen material is opt-in during investigation: rg --no-ignore <pattern> <path>.
+# These are search exclusions, not deletions or Git ignore rules.
+/docs/archive/
+/tests/legacy_*.py
+/scripts/selection/
+/scripts/execution/
+/scripts/portfolio/
+/scripts/domains/execution_chain/
+/scripts/legacy/
+/scripts/report/runtime.py
+/scripts/templates/daily_report_markdown_reader.html
+/docs/daily-report-structure-optimization/
+/docs/plans/2026-10-22-daily-report-framework-rebuild-prd.md
+/docs/plans/2026-10-23-sector-chart-reading-todo.md
+/docs/plans/2026-10-27-beta-alpha-reading-todo.md
+/docs/plans/2026-10-27-beta-alpha-visual-todo.md
+/docs/plans/2026-10-27-concept-first-audit.md
+/docs/plans/2026-10-27-concept-first-daily-todo.md
+/docs/plans/2026-10-28-market-relation-reading-prd.md
+/docs/plans/2026-10-29-alpha-beta-reading-prd.md
+/docs/plans/2026-10-30-decision-dashboard-prd.md
+/docs/plans/2026-10-30-daily-reading-backtest-prd.md
+/docs/plans/2026-10-30-benchmarks-and-profit-models-prd.md
+/wiki/交易思想/采样聚合与日报精简.md
+/wiki/交易思想/交易反馈与方法修正.md
+/wiki/交易思想/市场适配与策略生命周期.md
+/wiki/交易思想/探索、目标与踏脚石.md

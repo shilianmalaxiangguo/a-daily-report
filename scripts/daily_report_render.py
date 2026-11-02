@@ -14,11 +14,13 @@ import copy
 import datetime as _dt
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict
 import types
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from daily_report_reading_checks import ReportCriticalDataMissingError, build_market_reading_preflight
 from knowledge.topic_lifecycle import (
     build_topic_lifecycle_snapshot,
     write_topic_lifecycle_artifact,
@@ -30,8 +32,16 @@ from report.position_context import (
     normalize_inferred_previous_target_records,
     prepend_position_timeline_markdown,
 )
+from report.formal_account_decision import (
+    DECISION_PRODUCT_FREEZE_KEY,
+    build_legacy_decision_product_freeze,
+    canonical_decision_product_freeze_hash,
+    validate_decision_product_freeze,
+)
 from report.surface_wording import sanitize_user_visible_text
+from report.cffex_index_futures_position_evidence import canonical_cffex_evidence_hash
 from domains.market_state.market_language_translation import canonical_market_language_hash
+from domains.market_activity.new_high_runtime import new_high_feedback_identity_check
 from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
 from input.index_cross_validation import (
     index_cross_validation_failures,
@@ -119,18 +129,15 @@ SECTOR_FIRST_CRITICAL_INPUTS = (
     ("账户执行输入", ("position_decision", "final_target_resolution", "front_page_final_gate")),
 )
 FAILED_REQUEST_STATUSES = {"error", "degraded"}
-ALLOW_EMPTY_DATA_STATUS_LABELS = {
-    "涨停池",
-    "涨停股板块分布",
-    "跌停池",
-    "跌停股板块分布",
-    "中证500",
-    "异动检测数据",
-}
+LIMIT_POOL_STATUS_REQUIRED_FROM = _dt.date(2026, 8, 4)
+LIMIT_POOL_REPORT_DATA_FIELDS = (
+    ("涨停池", "zt_pool", (list, tuple)),
+    ("涨停股板块分布", "zt_pool_by_sector", (dict,)),
+    ("跌停池", "dt_pool", (list, tuple)),
+    ("跌停股板块分布", "dt_pool_by_sector", (dict,)),
+)
 
 
-class ReportCriticalDataMissingError(RuntimeError):
-    """Raised when a report would render with missing market-critical data."""
 
 __all__ = [
     "REPORT_VARIANT_FULL",
@@ -147,6 +154,8 @@ __all__ = [
     "generate_markdown_report_from_sections",
     "generate_markdown_report",
     "build_report_preflight",
+    "build_market_reading_preflight",
+    "render_market_reading_preflight_lines",
     "margin_pressure_date_failure",
     "render_report_preflight_lines",
     "build_report_outputs",
@@ -349,6 +358,13 @@ def _critical_data_failures(data):
         if data_status.get(label) is False or not _critical_payload_valid(data, payload_key):
             failures.append(label)
     failures.extend(_sector_first_input_failures(data))
+    coverage = data.get("candidate_history_coverage")
+    if (
+        isinstance(coverage, dict)
+        and int(_safe_float(coverage.get("requested_count"), 0)) > 0
+        and coverage.get("coverage_complete") is False
+    ):
+        failures.append("候选股历史成交额")
     return failures
 
 
@@ -597,6 +613,28 @@ def margin_pressure_date_failure(payload, target_date, *, max_stale_trade_days=1
     if latest_date == target_text:
         return ""
 
+    explicit_trade_dates = payload.get("trade_dates")
+    if isinstance(explicit_trade_dates, (list, tuple)):
+        calendar_dates = sorted({
+            normalize_kline_date_str(value)
+            for value in explicit_trade_dates
+            if normalize_kline_date_str(value)
+        })
+        if latest_date not in calendar_dates or target_text not in calendar_dates:
+            return (
+                f"融资承接压力交易日历不完整：目标日 {target_text}，"
+                f"最后事实日 {latest_date}"
+            )
+        calendar_stale_trade_days = sum(
+            1 for value in calendar_dates if latest_date < value <= target_text
+        )
+        if calendar_stale_trade_days <= int(max_stale_trade_days):
+            return ""
+        return (
+            f"融资承接压力事实过旧：目标日 {target_text}，最后事实日 {latest_date}，"
+            f"滞后 {calendar_stale_trade_days}个交易日"
+        )
+
     try:
         reported_stale_trade_days = int(payload.get("stale_trade_days"))
     except (TypeError, ValueError):
@@ -759,8 +797,6 @@ def _decision_payload_valid(data, payload_key, allow_empty, target_date=""):
             and not etf_turnover_series_date_failure(payload, target_date)
             and not _etf_turnover_series_has_coverage_anomaly(payload)
         )
-    if payload_key not in data:
-        return True
     if payload_key == "xuangubao_data":
         if not isinstance(payload, dict):
             return False
@@ -771,7 +807,12 @@ def _decision_payload_valid(data, payload_key, allow_empty, target_date=""):
             for key in ("xuangubao_news", "xuangubao_plates", "xuangubao_limit_up_reasons")
         )
     if payload_key == "new_high_feedback":
-        return isinstance(payload, dict) and payload.get("available") is True
+        identity = new_high_feedback_identity_check(payload)
+        return bool(
+            isinstance(payload, dict)
+            and payload.get("available") is True
+            and identity.get("complete")
+        )
     if payload_key == "top50_turnover_share_series":
         return isinstance(payload, dict) and bool(payload.get("rows") or [])
     if payload_key == "concept_fund_flow":
@@ -823,6 +864,19 @@ def _new_high_recent_trend_echo(data, limit=25):
     return lines
 
 
+def _new_high_identity_preflight_note(payload):
+    identity = new_high_feedback_identity_check(payload)
+    parts = []
+    for issue in identity.get("issues") or []:
+        code = str(issue.get("code") or "代码缺失").strip()
+        fields = "、".join(issue.get("missing_fields") or [])
+        parts.append(f"{code} 缺{fields or '名称或所属板块'}")
+    if not parts:
+        return ""
+    source = str(identity.get("source") or "new_high_feedback.top_stocks").strip()
+    return f"来源={source}；" + "；".join(parts)
+
+
 def _decision_request_failed(data, steps):
     logs = _request_logs_for_steps(data, steps)
     if not logs:
@@ -860,9 +914,26 @@ def _build_decision_critical_checks(data, target_date=""):
     data_status = data.get("data_status") or {}
     step_status = data.get("step_status") or {}
     checks = []
+    historical_rebuild = data.get("historical_rebuild") if isinstance(data.get("historical_rebuild"), dict) else {}
+    excluded_payloads = set(historical_rebuild.get("excluded_payloads") or [])
     for label, step_label, steps, payload_key, allow_empty in DECISION_CRITICAL_REPORT_DATA_FIELDS:
         tracked = _decision_field_tracked(data, label, step_label, steps, payload_key)
         if not tracked:
+            continue
+        if payload_key in excluded_payloads:
+            checks.append(
+                {
+                    "label": label,
+                    "step_label": step_label,
+                    "payload_key": payload_key,
+                    "status": "skipped",
+                    "provider": "historical_rebuild.target_date_fact_missing",
+                    "row_count": 0,
+                    "note": "目标日事实不足，未参与历史判断",
+                    "data_status": data_status.get(label),
+                    "step_status": step_status.get(step_label),
+                }
+            )
             continue
         data_failed = label in data_status and data_status.get(label) is False
         step_failed = step_label in step_status and step_status.get(step_label) is False
@@ -895,6 +966,8 @@ def _build_decision_critical_checks(data, target_date=""):
                     if payload_key == "etf_turnover_series"
                     else _lhb_preflight_note(data, steps)
                     if payload_key == "lhb_analysis"
+                    else _new_high_identity_preflight_note(data.get(payload_key))
+                    if payload_key == "new_high_feedback"
                     else ""
                 ),
                 "data_status": data_status.get(label),
@@ -934,6 +1007,34 @@ def _build_quant_factor_checks(data):
             }
         )
     return checks
+
+
+def _build_candidate_history_coverage_check(data):
+    data = data or {}
+    coverage = data.get("candidate_history_coverage")
+    if not isinstance(coverage, dict):
+        return None
+    requested_count = int(_safe_float(coverage.get("requested_count"), 0))
+    if requested_count <= 0:
+        return None
+    missing_codes = [str(code).strip() for code in coverage.get("missing_codes") or [] if str(code).strip()]
+    complete = coverage.get("coverage_complete") is True and not missing_codes
+    logs = _request_logs_for_steps(data, ("request.candidate_history",))
+    provider = _provider_for_steps(data, ("request.candidate_history",)) or "unknown"
+    return {
+        "label": "候选股历史成交额",
+        "step_label": "候选股历史成交额获取",
+        "payload_key": "candidate_history_coverage",
+        "status": "success" if complete else "failed",
+        "provider": provider,
+        "row_count": int(_safe_float(coverage.get("covered_count"), 0)),
+        "step_status": logs[-1].get("status") if logs else None,
+        "note": (
+            "覆盖完整"
+            if complete
+            else "缺少代码：" + "、".join(missing_codes or ["未知"])
+        ),
+    }
 
 
 def _status_label_to_factor_label(label):
@@ -1104,19 +1205,87 @@ def _build_sector_first_critical_checks(data):
     return checks
 
 
+def _limit_pool_payload_matches_target_date(payload, target_day):
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in {"trade_date", "source_date", "date"} and value not in (None, ""):
+                if parse_kline_date(value) != target_day:
+                    return False
+                continue
+            if isinstance(value, (dict, list, tuple)) and not _limit_pool_payload_matches_target_date(
+                value,
+                target_day,
+            ):
+                return False
+    elif isinstance(payload, (list, tuple)):
+        for item in payload:
+            if isinstance(item, (dict, list, tuple)) and not _limit_pool_payload_matches_target_date(
+                item,
+                target_day,
+            ):
+                return False
+    return True
+
+
+def _build_limit_pool_critical_checks(data, target_date):
+    target_day = parse_kline_date(target_date)
+    if target_day is None or target_day < LIMIT_POOL_STATUS_REQUIRED_FROM:
+        return []
+    data = data or {}
+    data_status = data.get("data_status") or {}
+    step_status = data.get("step_status") or {}
+    step_success = step_status.get("涨停跌停数据获取") is True
+    provider = _provider_for_steps(data, ("request.pool_snapshot",)) or "unknown"
+    checks = []
+    for label, payload_key, payload_types in LIMIT_POOL_REPORT_DATA_FIELDS:
+        payload = data.get(payload_key)
+        payload_valid = payload_key in data and isinstance(payload, payload_types)
+        payload_date_valid = _limit_pool_payload_matches_target_date(payload, target_day)
+        persisted_fact_complete = (
+            data.get("postgres_only") is True
+            and data_status.get(label) is True
+            and payload_valid
+            and payload_date_valid
+        )
+        status = (
+            "success"
+            if data_status.get(label) is True
+            and payload_valid
+            and (step_success or persisted_fact_complete)
+            else "failed"
+        )
+        checks.append(
+            {
+                "label": label,
+                "step_label": "涨停跌停数据获取",
+                "payload_key": payload_key,
+                "status": status,
+                "provider": provider,
+                "row_count": len(payload) if payload_valid else 0,
+                "step_status": step_status.get("涨停跌停数据获取"),
+            }
+        )
+    return checks
+
+
 def _build_registered_status_failure_checks(data, known_labels=None):
     data = data or {}
     known = set(known_labels or [])
     checks = []
     seen = set()
+    historical_rebuild = data.get("historical_rebuild") if isinstance(data.get("historical_rebuild"), dict) else {}
+    excluded_payloads = set(historical_rebuild.get("excluded_payloads") or [])
+    excluded_labels = {
+        label
+        for label, _step_label, _steps, payload_key, _allow_empty in DECISION_CRITICAL_REPORT_DATA_FIELDS
+        if payload_key in excluded_payloads
+    }
 
     for label, status in (data.get("data_status") or {}).items():
         factor_label = str(label or "").strip()
         if not factor_label or factor_label in known or factor_label in seen:
             continue
-        if factor_label in ALLOW_EMPTY_DATA_STATUS_LABELS:
-            continue
-        if status is False:
+        if status is False and factor_label not in excluded_labels:
             seen.add(factor_label)
             checks.append(
                 {
@@ -1134,9 +1303,7 @@ def _build_registered_status_failure_checks(data, known_labels=None):
         factor_label = _status_label_to_factor_label(step_label)
         if not factor_label or factor_label in known or factor_label in seen:
             continue
-        if factor_label in ALLOW_EMPTY_DATA_STATUS_LABELS:
-            continue
-        if status is False:
+        if status is False and factor_label not in excluded_labels:
             seen.add(factor_label)
             checks.append(
                 {
@@ -1194,7 +1361,11 @@ def build_report_preflight(data, target_date):
     for label, payload_key in CRITICAL_REPORT_DATA_FIELDS:
         step = step_by_payload_key[payload_key]
         tracked = _critical_field_tracked(data, label, payload_key)
-        provider = _provider_for_step(data, step)
+        provider = (
+            _provider_for_steps(data, ("request.market_stats", "request.pool_snapshot"))
+            if payload_key == "market_stats"
+            else _provider_for_step(data, step)
+        )
         if not provider:
             payload = data.get(payload_key)
             provider = payload.get("data_source") if isinstance(payload, dict) else ""
@@ -1245,9 +1416,22 @@ def build_report_preflight(data, target_date):
         )
     sector_first_checks = _build_sector_first_critical_checks(data)
     checks.extend(sector_first_checks)
-    decision_checks = _build_decision_critical_checks(data, target_date) + _build_quant_factor_checks(data)
-    known_labels = [check["label"] for check in checks + decision_checks]
-    decision_checks.extend(_build_registered_status_failure_checks(data, known_labels=known_labels))
+    decision_checks = (
+        _build_decision_critical_checks(data, target_date)
+        + _build_quant_factor_checks(data)
+        + _build_limit_pool_critical_checks(data, target_date)
+    )
+    candidate_history_check = _build_candidate_history_coverage_check(data)
+    if candidate_history_check:
+        decision_checks.append(candidate_history_check)
+    known_failed_labels = [
+        check["label"]
+        for check in checks + decision_checks
+        if check.get("status") == "failed"
+    ]
+    decision_checks.extend(
+        _build_registered_status_failure_checks(data, known_labels=known_failed_labels)
+    )
     decision_failures = [check["label"] for check in decision_checks if check["status"] == "failed"]
     all_failures = _dedupe_labels([
         check["label"]
@@ -1260,7 +1444,26 @@ def build_report_preflight(data, target_date):
         "checks": checks,
         "decision_checks": decision_checks,
         "failures": all_failures,
+        "request_diagnostics": (
+            copy.deepcopy(data.get("request_diagnostics"))
+            if isinstance(data.get("request_diagnostics"), dict)
+            else {}
+        ),
     }
+
+
+
+
+def render_market_reading_preflight_lines(preflight):
+    preflight = preflight or {}
+    lines = [f"板块阅读事实核对: {preflight.get('target_date', '')}"]
+    for check in preflight.get("checks") or []:
+        label = check.get("label", "")
+        count = int(check.get("row_count") or 0)
+        status = "已取得" if check.get("status") == "available" else "待确认"
+        suffix = f" / {count} 条" if label in {"板块样本"} else ""
+        lines.append(f"- {label}: {status}{suffix}")
+    return lines
 
 
 def render_report_preflight_lines(preflight):
@@ -1576,13 +1779,36 @@ def _preflight_failures_text(preflight):
 
 
 def _render_run_log_overview_table(preflight, target_date):
+    diagnostics = preflight.get("request_diagnostics") or {}
+    summary = diagnostics.get("summary") if isinstance(diagnostics, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    rows = [
+        ("日期", target_date),
+        ("关键数据检查", _run_log_status(preflight.get("status", "unknown"))),
+        ("缺失项", _preflight_failures_text(preflight)),
+    ]
+    if summary:
+        data_total = int(summary.get("data_status_total") or 0)
+        data_failed = int(summary.get("data_status_failed") or 0)
+        step_total = int(summary.get("step_status_total") or 0)
+        step_failed = int(summary.get("step_status_failed") or 0)
+        rows.extend(
+            [
+                ("数据项状态", f"{max(data_total - data_failed, 0)}/{data_total}"),
+                ("执行步骤状态", f"{max(step_total - step_failed, 0)}/{step_total}"),
+                (
+                    "请求诊断",
+                    "错误{error_count} / 降级{degraded_count} / 回退{fallback_count}".format(
+                        error_count=int(summary.get("error_count") or 0),
+                        degraded_count=int(summary.get("degraded_count") or 0),
+                        fallback_count=int(summary.get("fallback_count") or 0),
+                    ),
+                ),
+            ]
+        )
     return _markdown_table(
         ["项目", "值"],
-        [
-            ("日期", target_date),
-            ("关键数据检查", _run_log_status(preflight.get("status", "unknown"))),
-            ("缺失项", _preflight_failures_text(preflight)),
-        ],
+        rows,
     )
 
 
@@ -1636,6 +1862,56 @@ def _render_run_log_decision_data_table(preflight):
     if not rows:
         rows.append(("无", "-", "-", "-", "-", "-"))
     return _markdown_table(["指标", "状态", "来源", "记录数", "采集结果", "备注"], rows)
+
+
+def _request_diagnostic_impact(item, issue_type):
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    if issue_type == "降级":
+        missing_count = int(_safe_float(details.get("missing_count"), 0))
+        if missing_count:
+            return f"{missing_count}条目标记录仍缺失；其余可用记录保留"
+        return "相关数据按已披露范围使用，不补造缺失记录"
+    if issue_type == "回退":
+        completed = int(_safe_float(details.get("integrated_count"), 0))
+        required = int(_safe_float(details.get("required_count"), 0))
+        if required:
+            return f"备用来源完成{completed}/{required}条；不单独产生买入资格"
+        return "备用来源已完成采集；不单独产生买入资格"
+    return "相关数据不可用，需查看缺失项"
+
+
+def _render_run_log_request_diagnostics(preflight):
+    diagnostics = preflight.get("request_diagnostics") or {}
+    if not isinstance(diagnostics, dict) or not diagnostics:
+        return []
+    rows = []
+    for issue_type, key in (("错误", "failures"), ("降级", "degraded"), ("回退", "fallbacks")):
+        for item in diagnostics.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            target_keys = item.get("target_keys") if isinstance(item.get("target_keys"), list) else []
+            note = str(item.get("error") or item.get("message") or item.get("diagnostic_note") or "-")
+            upstream = str(item.get("upstream_error") or details.get("upstream_error") or "").strip()
+            if upstream:
+                note = f"{note}；上游原因：{upstream}"
+            rows.append(
+                (
+                    issue_type,
+                    item.get("step") or "-",
+                    item.get("provider") or "-",
+                    "、".join(str(value) for value in target_keys if str(value).strip()) or "-",
+                    note,
+                    _request_diagnostic_impact(item, issue_type),
+                )
+            )
+    if not rows:
+        rows.append(("正常", "-", "-", "-", "未发现明确请求错误、降级或回退", "无额外影响"))
+    return [
+        "## 请求诊断",
+        "",
+        *_markdown_table(["类型", "步骤", "来源", "涉及数据", "说明", "影响"], rows),
+    ]
 
 
 def _parse_dash_detail_line(line):
@@ -1707,6 +1983,8 @@ def build_run_log_text(preflight: dict, target_date: str, saved_paths: dict | No
         *_render_run_log_decision_data_table(preflight),
         *_render_run_log_echo_tables(preflight),
         "",
+        *_render_run_log_request_diagnostics(preflight),
+        "",
         "## 日报一致性检查",
         "",
         *_markdown_table(["项目", "状态", "说明"], [("正文一致性", "待完成", "待主流程完成后以终端输出为准。")]),
@@ -1767,19 +2045,23 @@ def _render_report_with_display_mode(
     candidate_trace_root_dir: str | None = None,
     emit_helper_diagnostics: bool = True,
     shared_runtime_cache: dict | None = None,
+    runtime_timing_rows: list | None = None,
     postgres_only: bool = False,
     market_language_translation: dict | None = None,
+    cffex_index_futures_position_evidence: dict | None = None,
 ) -> str:
     import daily_report_entry_demo as _demo
 
     original_display_mode = getattr(_demo, "DISPLAY_MVP_MODE", False)
     original_emit_helper_diagnostics = getattr(_demo, "EMIT_HELPER_DIAGNOSTICS", True)
     original_runtime_cache = getattr(_demo, "REPORT_RUNTIME_CACHE", None)
+    original_runtime_timing_rows = getattr(_demo, "REPORT_RUNTIME_TIMING_ROWS", None)
     original_postgres_only_runtime = getattr(_demo, "_POSTGRES_ONLY_RUNTIME", False)
     previous_postgres_only_guard = os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME")
     _demo.DISPLAY_MVP_MODE = bool(display_mvp_mode)
     _demo.EMIT_HELPER_DIAGNOSTICS = bool(emit_helper_diagnostics)
     _demo.REPORT_RUNTIME_CACHE = shared_runtime_cache
+    _demo.REPORT_RUNTIME_TIMING_ROWS = runtime_timing_rows
     if postgres_only:
         _demo._POSTGRES_ONLY_RUNTIME = True
         os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
@@ -1797,11 +2079,13 @@ def _render_report_with_display_mode(
             candidate_trace_root_dir=candidate_trace_root_dir,
             postgres_only=postgres_only,
             market_language_translation=market_language_translation,
+            cffex_index_futures_position_evidence=cffex_index_futures_position_evidence,
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
         _demo.EMIT_HELPER_DIAGNOSTICS = original_emit_helper_diagnostics
         _demo.REPORT_RUNTIME_CACHE = original_runtime_cache
+        _demo.REPORT_RUNTIME_TIMING_ROWS = original_runtime_timing_rows
         _demo._POSTGRES_ONLY_RUNTIME = original_postgres_only_runtime
         if postgres_only:
             if previous_postgres_only_guard is None:
@@ -1897,6 +2181,7 @@ def generate_markdown_report(
     candidate_trace_root_dir: str | None = None,
     postgres_only: bool = False,
     market_language_translation: dict | None = None,
+    cffex_index_futures_position_evidence: dict | None = None,
 ) -> str:
     """Render the default report text.
 
@@ -1939,6 +2224,7 @@ def generate_markdown_report(
         candidate_trace_root_dir=candidate_trace_root_dir,
         postgres_only=postgres_only,
         market_language_translation=market_language_translation,
+        cffex_index_futures_position_evidence=cffex_index_futures_position_evidence,
     )
 
 
@@ -1953,7 +2239,38 @@ def build_report_outputs(
     persist_runtime_artifacts: bool = True,
     persist_decision_ledger: bool | None = None,
     market_language_translation: dict | None = None,
+    cffex_index_futures_position_evidence: dict | None = None,
+    build_timing_rows: list | None = None,
 ):
+    timing_started_at = time.monotonic()
+
+    def record_timing(phase, *, nested_rows=None):
+        nonlocal timing_started_at
+        ended_at = time.monotonic()
+        if isinstance(build_timing_rows, list):
+            elapsed_seconds = max(0.0, ended_at - timing_started_at)
+            if nested_rows:
+                build_timing_rows.extend(dict(row) for row in nested_rows)
+                nested_seconds = sum(
+                    max(0.0, float((row or {}).get("elapsed_seconds") or 0.0))
+                    for row in nested_rows
+                    if isinstance(row, dict)
+                )
+                build_timing_rows.append(
+                    {
+                        "phase": f"{phase}/入口封装",
+                        "elapsed_seconds": max(0.0, elapsed_seconds - nested_seconds),
+                    }
+                )
+            else:
+                build_timing_rows.append(
+                    {
+                        "phase": phase,
+                        "elapsed_seconds": elapsed_seconds,
+                    }
+                )
+        timing_started_at = ended_at
+
     if isinstance(data, dict):
         normalize_inferred_previous_target_records(data)
     preflight = build_report_preflight(data, target_date)
@@ -1962,9 +2279,20 @@ def build_report_outputs(
             print(line)
     _raise_if_critical_data_missing(data, target_date, preflight=preflight)
     if isinstance(data, dict):
+        if run_mode == LEDGER_MODE_REPLAY and not isinstance(
+            data.get(DECISION_PRODUCT_FREEZE_KEY),
+            dict,
+        ):
+            legacy_freeze = build_legacy_decision_product_freeze(
+                data,
+                target_date=target_date,
+            )
+            if legacy_freeze:
+                data[DECISION_PRODUCT_FREEZE_KEY] = legacy_freeze
         data["enable_selection_workflow_quote_backfill"] = True
         if data.get("enable_selection_workflow_quote_backfill"):
             _clear_quote_sensitive_derived_outputs(data)
+    record_timing("生成前检查")
     shared_runtime_cache = {}
     postgres_only = bool((data or {}).get("postgres_only"))
     persist_decision_ledger = bool(persist_runtime_artifacts) if persist_decision_ledger is None else bool(persist_decision_ledger)
@@ -1973,6 +2301,29 @@ def build_report_outputs(
         if isinstance(market_language_translation, dict)
         else ""
     )
+    cffex_evidence_hash = (
+        canonical_cffex_evidence_hash(cffex_index_futures_position_evidence)
+        if isinstance(cffex_index_futures_position_evidence, dict)
+        else ""
+    )
+    input_decision_freeze = (
+        copy.deepcopy(data.get(DECISION_PRODUCT_FREEZE_KEY))
+        if isinstance(data, dict)
+        and isinstance(data.get(DECISION_PRODUCT_FREEZE_KEY), dict)
+        else {}
+    )
+    input_decision_freeze_valid = False
+    input_decision_freeze_hash = ""
+    if input_decision_freeze:
+        input_decision_freeze_valid, _ = validate_decision_product_freeze(
+            input_decision_freeze,
+            target_date=target_date,
+        )
+        input_decision_freeze_hash = canonical_decision_product_freeze_hash(
+            input_decision_freeze
+        )
+        data[DECISION_PRODUCT_FREEZE_KEY] = copy.deepcopy(input_decision_freeze)
+    full_runtime_timing_rows = []
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -1987,18 +2338,47 @@ def build_report_outputs(
         candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
+        runtime_timing_rows=full_runtime_timing_rows,
         postgres_only=postgres_only,
         market_language_translation=(
             copy.deepcopy(market_language_translation)
             if isinstance(market_language_translation, dict)
             else None
         ),
+        cffex_index_futures_position_evidence=(
+            copy.deepcopy(cffex_index_futures_position_evidence)
+            if isinstance(cffex_index_futures_position_evidence, dict)
+            else None
+        ),
     )
+    record_timing("完整版生成", nested_rows=full_runtime_timing_rows)
     if market_language_hash and canonical_market_language_hash(market_language_translation) != market_language_hash:
         raise RuntimeError("市场语言研究证据在完整版渲染期间被改写，停止生成")
+    if cffex_evidence_hash and canonical_cffex_evidence_hash(cffex_index_futures_position_evidence) != cffex_evidence_hash:
+        raise RuntimeError("股指期货持仓研究证据在完整版渲染期间被改写，停止生成")
+    source_decision_freeze = (
+        copy.deepcopy(data.get(DECISION_PRODUCT_FREEZE_KEY))
+        if isinstance(data, dict)
+        and isinstance(data.get(DECISION_PRODUCT_FREEZE_KEY), dict)
+        else {}
+    )
+    source_decision_freeze_hash = canonical_decision_product_freeze_hash(
+        source_decision_freeze
+    ) if source_decision_freeze else ""
+    if input_decision_freeze_valid and (
+        source_decision_freeze_hash != input_decision_freeze_hash
+    ):
+        raise RuntimeError("冻结决定在完整版渲染期间发生变化，停止生成")
+    if source_decision_freeze:
+        data[DECISION_PRODUCT_FREEZE_KEY] = copy.deepcopy(source_decision_freeze)
+    summary_data = copy.deepcopy(data)
+    if source_decision_freeze:
+        summary_data[DECISION_PRODUCT_FREEZE_KEY] = copy.deepcopy(
+            source_decision_freeze
+        )
     summary_report = _render_report_with_display_mode(
         True,
-        data,
+        summary_data,
         target_date,
         supplementary_perspective=supplementary_perspective,
         has_personal_positions=has_personal_positions,
@@ -2016,22 +2396,41 @@ def build_report_outputs(
             if isinstance(market_language_translation, dict)
             else None
         ),
+        cffex_index_futures_position_evidence=(
+            copy.deepcopy(cffex_index_futures_position_evidence)
+            if isinstance(cffex_index_futures_position_evidence, dict)
+            else None
+        ),
     )
+    record_timing("摘要版生成")
     if market_language_hash and canonical_market_language_hash(market_language_translation) != market_language_hash:
         raise RuntimeError("市场语言研究证据在摘要版渲染期间被改写，停止生成")
+    if cffex_evidence_hash and canonical_cffex_evidence_hash(cffex_index_futures_position_evidence) != cffex_evidence_hash:
+        raise RuntimeError("股指期货持仓研究证据在摘要版渲染期间被改写，停止生成")
+    if source_decision_freeze_hash:
+        if canonical_decision_product_freeze_hash(
+            data.get(DECISION_PRODUCT_FREEZE_KEY)
+        ) != source_decision_freeze_hash:
+            raise RuntimeError("源冻结决定在摘要版渲染期间发生变化，停止生成")
+        if canonical_decision_product_freeze_hash(
+            summary_data.get(DECISION_PRODUCT_FREEZE_KEY)
+        ) != source_decision_freeze_hash:
+            raise RuntimeError("摘要版冻结决定与完整版不一致，停止生成")
     full_report = _sanitize_final_report_text(full_report, postgres_only=postgres_only)
     summary_report = _sanitize_final_report_text(summary_report, postgres_only=postgres_only)
     position_timeline = extract_position_timeline_markdown(position_report_text)
     if position_timeline:
         full_report = prepend_position_timeline_markdown(full_report, position_timeline)
 
-    return {
+    outputs = {
         REPORT_VARIANT_FULL: _inject_report_variant_banner(full_report, REPORT_VARIANT_FULL),
         REPORT_VARIANT_SUMMARY: _inject_report_variant_banner(summary_report, REPORT_VARIANT_SUMMARY),
         REPORT_VARIANT_LIGHTWEIGHT: build_lightweight_report_text(full_report, summary_report),
         REPORT_VARIANT_EVIDENCE_APPENDIX: build_evidence_appendix_text(full_report, target_date),
         REPORT_VARIANT_RUN_LOG: build_run_log_text(preflight, target_date),
     }
+    record_timing("派生变体生成")
+    return outputs
 
 
 def _sanitize_final_report_text(report_text: str, *, postgres_only: bool = False) -> str:
@@ -2079,16 +2478,39 @@ def persist_report_runtime_artifacts(
         "decision_ledger_root_dir": getattr(report_runtime, "decision_ledger_root_dir", missing),
         "candidate_trace_root_dir": getattr(report_runtime, "candidate_trace_root_dir", missing),
         "decision_ledger_postgres_only": getattr(report_runtime, "decision_ledger_postgres_only", missing),
+        "decision_ledger_read_only": getattr(report_runtime, "decision_ledger_read_only", missing),
+        "write_decision_ledger_artifacts": getattr(report_runtime, "write_decision_ledger_artifacts", missing),
+        "write_candidate_trace_artifact": getattr(report_runtime, "write_candidate_trace_artifact", missing),
     }
 
     root_dir = str(_module_dir().parent)
-    postgres_only = bool(data.get("postgres_only"))
+    postgres_only = bool(data.get("postgres_only")) and run_mode != LEDGER_MODE_REPLAY
     try:
         report_runtime.persist_decision_ledger = True
         report_runtime.persist_candidate_traces = True
         report_runtime.decision_ledger_root_dir = root_dir
         report_runtime.candidate_trace_root_dir = root_dir
         report_runtime.decision_ledger_postgres_only = postgres_only
+        report_runtime.decision_ledger_read_only = run_mode == LEDGER_MODE_REPLAY
+        if run_mode == LEDGER_MODE_REPLAY:
+            from report.candidate_trace_artifacts import write_candidate_trace_artifact
+            from report.decision_ledger import write_decision_ledger_artifacts
+
+            def write_replay_decision_ledger(snapshot, **kwargs):
+                return write_decision_ledger_artifacts(
+                    snapshot,
+                    **kwargs,
+                    allow_postgres=False,
+                )
+
+            def write_replay_candidate_trace(**kwargs):
+                return write_candidate_trace_artifact(
+                    **kwargs,
+                    allow_postgres=False,
+                )
+
+            report_runtime.write_decision_ledger_artifacts = write_replay_decision_ledger
+            report_runtime.write_candidate_trace_artifact = write_replay_candidate_trace
         decision_ledger_result = report_runtime._maybe_persist_decision_ledger(
             data=data,
             target_date=target_date,
@@ -2099,7 +2521,9 @@ def persist_report_runtime_artifacts(
             decision_ledger_result = report_runtime._prune_decision_ledger_result_for_current_extreme_list(
                 decision_ledger_result,
                 target_date=target_date,
+                data=data,
                 execution_stage_context=execution_stage_context,
+                market_research_snapshot=market_research_snapshot,
             )
             data["decision_ledger_artifacts"] = decision_ledger_result
         candidate_trace_result = report_runtime._maybe_persist_candidate_traces(

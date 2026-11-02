@@ -1,0 +1,76 @@
+{
+  "schema_version": "sector_stage_mainline_calibration_fixture.v1",
+  "target_date": "2026-08-14",
+  "natural_day_count": 15,
+  "trading_day_count": 11,
+  "record": {
+    "direction": "CXO/创新药",
+    "source_date": "2026-08-14",
+    "stage_start_date": "2026-07-31",
+    "recognition_date": "",
+    "last_confirmed_date": "",
+    "trading_calendar": [
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14"
+    ],
+    "active_trade_dates": [
+      "2026-07-31",
+      "2026-08-04",
+      "2026-08-07",
+      "2026-08-11",
+      "2026-08-14"
+    ],
+    "sector_index_path": [
+      {"trade_date": "2026-07-31", "index_value": 100.0, "relative_strength_rank": 1, "source_date": "2026-07-31"},
+      {"trade_date": "2026-08-03", "index_value": 101.0, "relative_strength_rank": 1, "source_date": "2026-08-03"},
+      {"trade_date": "2026-08-04", "index_value": 103.0, "relative_strength_rank": 1, "source_date": "2026-08-04"},
+      {"trade_date": "2026-08-05", "index_value": 102.0, "relative_strength_rank": 1, "source_date": "2026-08-05"},
+      {"trade_date": "2026-08-06", "index_value": 104.0, "relative_strength_rank": 1, "source_date": "2026-08-06"},
+      {"trade_date": "2026-08-07", "index_value": 106.0, "relative_strength_rank": 1, "source_date": "2026-08-07"},
+      {"trade_date": "2026-08-10", "index_value": 107.0, "relative_strength_rank": 1, "source_date": "2026-08-10"},
+      {"trade_date": "2026-08-11", "index_value": 108.0, "relative_strength_rank": 1, "source_date": "2026-08-11"},
+      {"trade_date": "2026-08-12", "index_value": 110.0, "relative_strength_rank": 1, "source_date": "2026-08-12"},
+      {"trade_date": "2026-08-13", "index_value": 111.0, "relative_strength_rank": 1, "source_date": "2026-08-13"},
+      {"trade_date": "2026-08-14", "index_value": 113.0, "relative_strength_rank": 1, "source_date": "2026-08-14"}
+    ],
+    "relative_strength_metric": "window_return_pct",
+    "relative_strength_window": {
+      "start_date": "2026-07-31",
+      "end_date": "2026-08-14",
+      "trade_dates": [
+        "2026-07-31",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14"
+      ]
+    },
+    "comparison_universe_scope": {
+      "directions": ["CXO/创新药", "半导体", "机器人"],
+      "source_date": "2026-08-14"
+    },
+    "comparison_universe": [
+      {"direction": "CXO/创新药", "metric_value": 13.0, "source_date": "2026-08-14"},
+      {"direction": "半导体", "metric_value": 7.0, "source_date": "2026-08-14"},
+      {"direction": "机器人", "metric_value": 5.0, "source_date": "2026-08-14"}
+    ],
+    "trend_stock_count": 8,
+    "comparable_stock_count": 20,
+    "trend_definition_version": "stage-trend-density.v1"
+  }
+}

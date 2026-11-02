@@ -24,13 +24,18 @@ from typing import Any, Tuple
 
 LEDGER_MODE_FROZEN = "frozen"
 LEDGER_MODE_REPLAY = "replay"
-MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+# A runaway-growth guard, not a budget: an indented reading snapshot already holds
+# about 38 MB of Top50 raw pages and 12 MB of sector history; the full-market daily
+# prices for the market-relation reading add about 5 MB (2026-10-29).
+MAX_SNAPSHOT_BYTES = 80 * 1024 * 1024
 _CIRCULAR_REFERENCE = "<circular_reference>"
+_DECISION_PRODUCT_FREEZE_KEY = "decision_product_freeze"
 
 __all__ = [
     "LEDGER_MODE_FROZEN",
     "LEDGER_MODE_REPLAY",
     "SnapshotWriteError",
+    "SnapshotEnvelopeDateMismatchError",
     "_make_serializable",
     "_get_snapshot_path",
     "_save_data_snapshot",
@@ -61,6 +66,10 @@ class SnapshotWriteError(RuntimeError):
 
 class _SnapshotTargetExistsError(SnapshotWriteError):
     """Raised when a no-replace snapshot publish loses a concurrent race."""
+
+
+class SnapshotEnvelopeDateMismatchError(ValueError):
+    """Raised when a snapshot path date disagrees with its envelope date."""
 
 
 def _module_dir() -> Path:
@@ -265,13 +274,23 @@ def _write_snapshot_payload(
 
 
 def _snapshot_payload(data: Any, target_date: str, mode: str, existing_perspective: str = "") -> dict:
-    return {
+    payload = {
         "date": target_date,
         "saved_at": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "mode": mode,
         "data": _make_serializable(data),
         "supplementary_perspective": existing_perspective or "",
     }
+    decision_freeze = (
+        data.get(_DECISION_PRODUCT_FREEZE_KEY)
+        if isinstance(data, dict)
+        else None
+    )
+    if isinstance(decision_freeze, dict) and decision_freeze:
+        payload[_DECISION_PRODUCT_FREEZE_KEY] = _make_serializable(
+            decision_freeze
+        )
+    return payload
 
 
 def _decode_json_string_field_from_text(text: str, field_name: str) -> str:
@@ -308,18 +327,25 @@ def _load_existing_supplementary_perspective(snapshot_path: Path) -> str:
     return _decode_json_string_field_from_text(tail_text, "supplementary_perspective")
 
 
-def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FROZEN) -> str:
+def _save_data_snapshot(
+    data: Any,
+    target_date: str,
+    mode: str = LEDGER_MODE_FROZEN,
+    *,
+    overwrite_existing: bool = False,
+) -> str:
     """Persist a snapshot.
 
     Behavior:
     - First frozen save writes snapshots/<date>.json.
     - Subsequent frozen saves keep the official snapshot intact and write a
       replay copy to snapshots/replay/<date>_replay.json.
+    - An explicit frozen overwrite atomically replaces snapshots/<date>.json.
     - Replay mode writes directly to the replay path.
     """
     requested_path = Path(_get_snapshot_path(target_date, mode=mode))
     official_exists = mode == LEDGER_MODE_FROZEN and requested_path.exists()
-    actual_mode = LEDGER_MODE_REPLAY if official_exists else mode
+    actual_mode = LEDGER_MODE_REPLAY if official_exists and not overwrite_existing else mode
     actual_path = (
         Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
         if actual_mode == LEDGER_MODE_REPLAY
@@ -339,7 +365,7 @@ def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FRO
             existing_perspective=existing_perspective,
         )
     except Exception as error:
-        if mode == LEDGER_MODE_FROZEN and requested_path.exists():
+        if mode == LEDGER_MODE_FROZEN and requested_path.exists() and not overwrite_existing:
             actual_mode = LEDGER_MODE_REPLAY
             actual_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
         raise SnapshotWriteError(
@@ -364,7 +390,7 @@ def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FRO
             actual_path,
             payload,
             mode=actual_mode,
-            replace_existing=mode != LEDGER_MODE_FROZEN,
+            replace_existing=mode != LEDGER_MODE_FROZEN or overwrite_existing,
         )
     except _SnapshotTargetExistsError:
         replay_snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_REPLAY))
@@ -387,7 +413,7 @@ def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FRO
 save_data_snapshot = _save_data_snapshot
 
 
-def load_data_snapshot(target_date: str) -> Tuple[Any, str]:
+def load_data_snapshot(target_date: str, *, mode: str = LEDGER_MODE_FROZEN) -> Tuple[Any, str]:
     """Load a snapshot JSON.
 
     Returns (data, supplementary_perspective). If the file does not exist,
@@ -399,15 +425,33 @@ def load_data_snapshot(target_date: str) -> Tuple[Any, str]:
             "PostgreSQL-only runtime attempted to read JSON snapshot "
             f"for {target_date}.\n{stack}"
         )
-    snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN))
+    if mode not in (LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY):
+        raise ValueError("快照来源不符")
+    # The caller chooses the version explicitly; never blend repaired and
+    # official histories or silently substitute one when the other is absent.
+    snapshot_path = Path(_get_snapshot_path(target_date, mode=mode))
     if not snapshot_path.exists():
         return None, None
 
     with snapshot_path.open("r", encoding="utf-8") as f:
         snapshot = json.load(f)
 
+    if isinstance(snapshot, dict):
+        envelope_date = str(snapshot.get("date") or "").strip()
+        if envelope_date and envelope_date != str(target_date or "").strip():
+            raise SnapshotEnvelopeDateMismatchError(
+                f"数据快照日期与请求日期不一致：请求{target_date}，快照{envelope_date}"
+            )
+        declared_mode = str(snapshot.get("mode") or "").strip()
+        if declared_mode and declared_mode != mode:
+            raise ValueError("数据快照声明的来源与选定来源不一致，停止读取")
+
     if isinstance(snapshot, dict) and "data" in snapshot:
-        return snapshot.get("data"), snapshot.get("supplementary_perspective", "") or ""
+        data = snapshot.get("data")
+        envelope_freeze = snapshot.get(_DECISION_PRODUCT_FREEZE_KEY)
+        if isinstance(data, dict) and isinstance(envelope_freeze, dict):
+            data[_DECISION_PRODUCT_FREEZE_KEY] = envelope_freeze
+        return data, snapshot.get("supplementary_perspective", "") or ""
 
     # Backward-compatible fallback for older flat snapshot formats.
     if isinstance(snapshot, dict):

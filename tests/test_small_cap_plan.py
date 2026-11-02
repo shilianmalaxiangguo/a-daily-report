@@ -2,7 +2,6 @@
 from copy import deepcopy
 from datetime import date, timedelta
 from pathlib import Path
-import random
 import sys
 import unittest
 
@@ -10,70 +9,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from bs4 import BeautifulSoup
-from report.small_cap_artifacts import evidence_hash
-from report.small_cap_rotation import (ACCOUNT_FEE, ANCHOR, BACKUPS, NAMES, SELL_FEE, account_orders, average_turnover,
-                                       bought, build_plan, day_label, growth_records, held_path, render_plan, rotation_curve,
-                                       validate_plan)
+from report.sector_reading_history import evidence_hash
+from report.small_cap_rotation import (ACCOUNT_FEE, ANCHOR, BACKUPS, NAMES, SELL_FEE, account_orders, build_plan, day_label,
+                                       growth_records, held_path, render_plan, rotation_curve, validate_plan)
 from report.strategy_backtest import history_from_artifact
-RETRIEVED = '2026-09-30T09:00:00+08:00'
-BETA, ALPHA, RESILIENT, DOWN, NOISE = '600001.SH', '600002.SH', '600003.SH', '600004.SH', '600005.SH'
-GAP, ST, NEW = '600006.SH', '600007.SH', '600008.SH'
-
-
-def sessions(end='2026-09-29', count=61):
-    first = date.fromisoformat(end) - timedelta(days=count - 1)
-    return [(first + timedelta(days=i)).isoformat() for i in range(count)]
-
-
-def scenario(days):
-    rng = random.Random(11)
-    market = [rng.gauss(0.1, 1.0) if i < len(days) - 20 else rng.gauss(-1.0, 0.8) for i in range(len(days))]
-    series = {
-        BETA: [1.5 * m + rng.gauss(0, 0.3) for m in market],
-        ALPHA: [0.3 * m + rng.gauss(1.2, 0.8) for m in market],
-        RESILIENT: [m + 0.5 + rng.gauss(0, 0.2) for m in market],
-        DOWN: [0.2 * m - 1.2 + rng.gauss(0, 0.8) for m in market],
-        NOISE: [rng.gauss(0, 2.0) for _ in market],
-        GAP: [1.2 * m + rng.gauss(0, 0.5) for m in market],
-        ST: [m + rng.gauss(0, 0.5) for m in market],
-        NEW: [m + rng.gauss(0, 0.5) for m in market],
-    }
-    series[GAP][-5] = None
-    for i in range(40):
-        beta = 0.6 + i * 0.025
-        series[f'{601000 + i}.SH'] = [beta * m + rng.gauss(0, 0.8) for m in market]
-    return market, series
-
-
-def facts(days, market, series, *, st=(ST,), listing=None, amount=None):
-    amount = amount or {}
-    benchmark, level = [], 1000.0
-    pages, prices = {}, {code: 10.0 for code in series}
-    codes = sorted(series)
-    positions = {code: index for index, code in enumerate(codes)}
-    for day, change in zip(days, market):
-        previous, level = level, level * (1 + change / 100)
-        benchmark.append({'date': day, 'close': level, 'pre_close': previous, 'open': previous * (1 + change / 300)})
-        rows = []
-        for code, values in series.items():
-            column = len(pages)
-            if values[column] is None:
-                continue
-            previous = prices[code]
-            prices[code] = close = previous * (1 + values[column] / 100)
-            rows.append((positions[code], close, previous, previous * (1 + values[column] / 300), amount.get(code, 200000.0)))
-        pages[day] = ';'.join(f'{i},{c!r},{p!r},{o!r},{a!r}' for i, c, p, o, a in sorted(rows))
-    listing = {NEW: days[30], **(listing or {})}
-    value = {
-        'schema': 'market_returns.v2', 'trade_dates': days, 'codes': codes,
-        'prices': pages, 'benchmark': {'rows': benchmark},
-        'profile': {'names': [f'名称{code[:6]}' for code in codes],
-                    'industries': ['行业甲' if int(code[:6]) % 2 else '行业乙' for code in codes],
-                    'list_dates': [listing.get(code, '2020-01-01') for code in codes]},
-        'st_codes': list(st),
-    }
-    value['artifact_hash'] = evidence_hash(value)
-    return value
+from tests.test_market_alpha_beta import NEW, ST, facts, scenario, sessions
 
 COLD = [f'{601000 + i}.SH' for i in range(10)]
 GROWING = COLD[3:10]                         # the cold names whose latest quarter grew, coldest first
@@ -116,23 +56,6 @@ def fina(decision):
 
 
 class PlanTest(unittest.TestCase):
-    def test_buy_fallback_stops_at_published_list_and_backups(self):
-        h = {
-            'open': np.array([[11.0, 11.0]] * 5 + [[10.0, 10.0]] * 5),
-            'pre': np.array([[10.0, 10.0]] * 10),
-            'close': np.array([[10.0, 10.0]] * 10),
-            'limit': np.array([10.0] * 10),
-        }
-        ranked = [(i, None) for i in range(10)]
-        self.assertEqual(bought(h, ranked, 0), [5, 6, 7])
-
-    def test_all_missing_turnover_stays_missing(self):
-        amount = np.full((1, 21), np.nan)
-        amount[0, 0] = 100.0
-        values = average_turnover(amount)
-        self.assertAlmostEqual(values[0, 19], 100.0)
-        self.assertTrue(np.isnan(values[0, 20]))
-
     def test_cold_growing_names_in_order_with_what_was_known_then(self):
         end = end_with(5)
         days, value = world(end)
@@ -201,7 +124,7 @@ class PlanTest(unittest.TestCase):
         plan, _ = build_plan(value, end, sessions=calendar_through(end), records=growth_records(fina(days[-6])), chinext={})
         section = render_plan(BeautifulSoup('', 'html.parser'), plan)
         text = section.get_text(' ', strip=True)
-        for phrase in ('执行计划：小盘轮换', '持有的第5个交易日', '再过15个交易日定新名单', '名单', '备选', '本期实际买入', '净值跌破0.7',
+        for phrase in ('执行计划：小盘轮换', '持有的第5个交易日', '再过15个交易日定新名单', '名单', '备选', '本期等权模拟买入', '净值跌破0.7',
                        '一手约（元）', f'名单每天显示的都是这一期定下的那{NAMES}只', '怎么买', '一手（100股）的钱超过这一份就跳过'):
             self.assertIn(phrase, text)
         self.assertEqual(len(section.select('tr.dash-row-plan')), NAMES)
@@ -332,6 +255,24 @@ class PlanTest(unittest.TestCase):
         self.assertEqual((style['pool_beat_csi2000'], style['warning']), (0, True))
         section = render_plan(BeautifulSoup('', 'html.parser'), plan, {'plan_periods': periods, 'style_check': style})
         self.assertIn('风格在切换', section.get_text())
+
+    def test_full_page_leads_with_the_plan(self):
+        from report.sector_daily_report import render_sector_daily
+        from tests.test_sector_daily_report import DATE, SOURCE, snapshot
+        days, value = world(DATE)
+        plan, reason = build_plan(value, DATE, sessions=calendar_through(DATE), records=growth_records(fina(DATE)), chinext={})
+        self.assertIsNone(reason)
+        data = snapshot()
+        data['data']['reading_market_returns'] = value
+        data['data']['reading_small_cap_plan'] = plan
+        soup = BeautifulSoup(render_sector_daily(SOURCE, DATE, snapshot=data), 'html.parser')
+        self.assertIn('执行计划：小盘轮换', soup.select_one('#daily-plan h2').get_text())
+        rule = soup.select_one('#daily-plan').get_text()
+        self.assertIn('收盘比买价高10%', rule)
+        self.assertNotIn('高开5%以上', rule)
+        self.assertIsNone(soup.select_one('#daily-decision'))
+        self.assertIsNotNone(soup.select_one('#daily-plan'))
+        self.assertIn('#daily-plan', [a['href'] for a in soup.select('.daily-nav-links a')])
 
     def test_take_profit_sells_at_the_next_open_and_waits_past_a_limit_down(self):
         def history(opens, closes):

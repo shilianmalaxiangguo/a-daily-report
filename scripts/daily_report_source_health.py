@@ -14,12 +14,12 @@ import threading
 import time
 from pathlib import Path
 
-from daily_report_snapshot_io import LEDGER_MODE_FROZEN, _get_snapshot_path
-from input.runtime import _fetch_quicktiny_exchange_monitor_payload
+from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY, _get_snapshot_path
 from market_data.tushare_client import (
     TUSHARE_HTTP_URL_ENV,
     TUSHARE_TOKEN_ENV,
     check_tushare_runtime_ready,
+    create_tushare_pro_api,
     load_local_env_file,
     resolve_tushare_runtime_config,
 )
@@ -55,6 +55,12 @@ DEFAULT_SOURCE_TIMEOUT_SECONDS = 15
 TUSHARE_SOURCE_TIMEOUT_SECONDS = 10
 TUSHARE_PROBE_TIMEOUT_SECONDS = 8
 TUSHARE_PROBE_ATTEMPTS = 2
+
+
+def _fetch_quicktiny_exchange_monitor_payload(*args, **kwargs):
+    from input.runtime import _fetch_quicktiny_exchange_monitor_payload as fetcher
+
+    return fetcher(*args, **kwargs)
 
 
 class SourceHealthCriticalError(RuntimeError):
@@ -162,7 +168,7 @@ def _run_with_timeout(fn, *, timeout_seconds):
     }
 
 
-def _postgres_default_probe(target_date):
+def _postgres_default_probe(target_date, *, require_target_date_fact=False):
     def _as_int(value):
         try:
             return int(value or 0)
@@ -173,6 +179,12 @@ def _postgres_default_probe(target_date):
     if getattr(service, "repository", None) is None:
         return {
             "connected": False,
+            "covered": False,
+            "row_count": 0,
+        }
+    if not require_target_date_fact:
+        return {
+            "connected": True,
             "covered": False,
             "row_count": 0,
         }
@@ -236,7 +248,72 @@ def _first_check_row_count(result):
     return 0
 
 
-def _tushare_check(env, *, checker, timeout_seconds, probe_timeout_seconds=TUSHARE_PROBE_TIMEOUT_SECONDS):
+def check_tushare_target_date_ready(
+    *,
+    target_date,
+    token=None,
+    http_url=None,
+    timeout_seconds=8,
+):
+    compact_date = str(target_date or "").replace("-", "")
+    provider = "tushare.pro.daily.target_date"
+    try:
+        pro = create_tushare_pro_api(
+            token=token,
+            http_url=http_url,
+            timeout_seconds=timeout_seconds,
+        )
+        frame = pro.daily(
+            trade_date=compact_date,
+            fields="ts_code,trade_date,close,amount",
+        )
+        if hasattr(frame, "to_dict"):
+            rows = list(frame.to_dict("records") or [])
+        elif isinstance(frame, (list, tuple)):
+            rows = list(frame)
+        else:
+            rows = []
+        source_dates = {
+            str((row or {}).get("trade_date") or "").replace("-", "")
+            for row in rows
+            if isinstance(row, dict)
+        }
+        exact_rows = [
+            row
+            for row in rows
+            if str((row or {}).get("trade_date") or "").replace("-", "") == compact_date
+        ]
+        if not exact_rows or source_dates != {compact_date}:
+            return {
+                "ok": False,
+                "provider": provider,
+                "checks": [{"name": "daily.target_date", "row_count": len(exact_rows)}],
+                "error_type": "TargetDateMissing",
+                "error_message": f"daily 未返回 {target_date} 的精确目标日数据",
+            }
+        return {
+            "ok": True,
+            "provider": provider,
+            "checks": [{"name": "daily.target_date", "row_count": len(exact_rows)}],
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "provider": provider,
+            "checks": [{"name": "daily.target_date", "row_count": 0}],
+            "error_type": exc.__class__.__name__,
+            "error_message": redact_sensitive_text(str(exc)),
+        }
+
+
+def _tushare_check(
+    env,
+    *,
+    checker,
+    timeout_seconds,
+    probe_timeout_seconds=TUSHARE_PROBE_TIMEOUT_SECONDS,
+    target_date="",
+):
     credential_keys = [TUSHARE_TOKEN_ENV, TUSHARE_HTTP_URL_ENV]
     config = resolve_tushare_runtime_config(env=env)
     has_token = bool(str(config.get("token") or "").strip())
@@ -267,12 +344,15 @@ def _tushare_check(env, *, checker, timeout_seconds, probe_timeout_seconds=TUSHA
     result = {}
     ok = False
     for _attempt in range(TUSHARE_PROBE_ATTEMPTS):
+        checker_kwargs = {
+            "token": config["token"],
+            "http_url": config["http_url"],
+            "timeout_seconds": probe_timeout_seconds,
+        }
+        if target_date:
+            checker_kwargs["target_date"] = target_date
         probe = _run_with_timeout(
-            lambda: checker(
-                token=config["token"],
-                http_url=config["http_url"],
-                timeout_seconds=probe_timeout_seconds,
-            ),
+            lambda checker_kwargs=checker_kwargs: checker(**checker_kwargs),
             timeout_seconds=timeout_seconds,
         )
         probes.append(probe)
@@ -292,7 +372,7 @@ def _tushare_check(env, *, checker, timeout_seconds, probe_timeout_seconds=TUSHA
             credential_keys=credential_keys,
             credential_status=credential_status,
             connectivity_status=STATUS_TIMEOUT,
-            target_date_status=STATUS_NOT_APPLICABLE,
+            target_date_status=STATUS_MISSING if target_date else STATUS_NOT_APPLICABLE,
             duration_ms=duration_ms,
             required_for_generation=True,
             result=RESULT_FAIL,
@@ -308,7 +388,7 @@ def _tushare_check(env, *, checker, timeout_seconds, probe_timeout_seconds=TUSHA
         credential_keys=credential_keys,
         credential_status=credential_status,
         connectivity_status=STATUS_OK if ok else STATUS_FAILED,
-        target_date_status=STATUS_NOT_APPLICABLE,
+        target_date_status=(STATUS_COVERED if ok else STATUS_MISSING) if target_date else STATUS_NOT_APPLICABLE,
         row_count=_first_check_row_count(result),
         duration_ms=duration_ms,
         required_for_generation=True,
@@ -331,7 +411,10 @@ def _postgres_check(
     requires_target_date_fact = bool(postgres_only)
     if postgres_checker is None:
         def postgres_checker():
-            return _postgres_default_probe(target_date)
+            return _postgres_default_probe(
+                target_date,
+                require_target_date_fact=requires_target_date_fact,
+            )
     probe = _run_with_timeout(postgres_checker, timeout_seconds=timeout_seconds)
     raw_value = probe.get("value")
     if isinstance(raw_value, dict):
@@ -738,14 +821,16 @@ def _credential_only_check(*, env, check_id, group, task, provider, purpose, cre
     )
 
 
-def _replay_snapshot_check(target_date):
-    snapshot_path = Path(_get_snapshot_path(str(target_date), mode=LEDGER_MODE_FROZEN))
+def _replay_snapshot_check(target_date, *, snapshot_mode=LEDGER_MODE_FROZEN):
+    if snapshot_mode not in (LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY):
+        raise ValueError("快照来源不符")
+    snapshot_path = Path(_get_snapshot_path(str(target_date), mode=snapshot_mode))
     exists = snapshot_path.exists()
     return _check_row(
         check_id="replay.snapshot",
         group="复盘事实",
-        task="replay 官方快照",
-        provider="snapshots.official",
+        task="replay 选定快照",
+        provider="snapshots.replay" if snapshot_mode == LEDGER_MODE_REPLAY else "snapshots.official",
         purpose="基础事实",
         credential_keys=[],
         credential_status=STATUS_NOT_REQUIRED,
@@ -754,8 +839,76 @@ def _replay_snapshot_check(target_date):
         row_count=1 if exists else 0,
         required_for_generation=True,
         result=RESULT_PASS if exists else RESULT_FAIL,
-        advice="replay 快照存在" if exists else f"{target_date} 缺少官方快照，不能进入 replay",
+        advice="选定来源的快照存在" if exists else f"{target_date} 缺少选定来源的快照，不能进入 replay",
     )
+
+
+def _cffex_target_date_check(target_date, *, checker=None):
+    started_at = time.perf_counter()
+    try:
+        if checker is not None:
+            payload = checker(target_date) or {}
+            connected = bool(payload.get("connected", True))
+        else:
+            from report.cffex_index_futures_position_evidence import (
+                build_cffex_index_futures_position_evidence,
+            )
+
+            service = DatabaseService.postgres_from_environment_or_local_default()
+            connected = service.is_postgres_backed()
+            day = (
+                service.query_cffex_index_futures_day(target_date)
+                if connected
+                else {}
+            )
+            payload = build_cffex_index_futures_position_evidence(
+                target_date,
+                day,
+                query_date=_dt.date.today().isoformat(),
+            )
+        availability = str(payload.get("availability") or "unavailable")
+        raw_target = payload.get("raw_target_day") or {}
+        row_count = len(raw_target.get("contract_rows") or []) + len(
+            raw_target.get("member_rank_rows") or []
+        )
+        complete = availability == "complete"
+        return _check_row(
+            check_id="cffex.index_futures.position",
+            group="研究证据",
+            task="中金所股指期货持仓",
+            provider="postgresql.cffex_index_futures",
+            purpose="目标日持仓结构研究证据",
+            credential_keys=[],
+            credential_status=STATUS_NOT_REQUIRED,
+            connectivity_status=STATUS_OK if connected else STATUS_FAILED,
+            target_date_status=STATUS_COVERED if complete else STATUS_MISSING,
+            row_count=row_count,
+            duration_ms=_duration_ms(started_at),
+            required_for_generation=False,
+            result=RESULT_PASS if complete else RESULT_WARNING,
+            advice=(
+                "目标日四类股指期货持仓事实完整"
+                if complete
+                else "目标日股指期货持仓事实缺失或部分覆盖，日报保留事实不足"
+            ),
+        )
+    except Exception as error:
+        return _check_row(
+            check_id="cffex.index_futures.position",
+            group="研究证据",
+            task="中金所股指期货持仓",
+            provider="postgresql.cffex_index_futures",
+            purpose="目标日持仓结构研究证据",
+            credential_keys=[],
+            credential_status=STATUS_NOT_REQUIRED,
+            connectivity_status=STATUS_FAILED,
+            target_date_status=STATUS_MISSING,
+            duration_ms=_duration_ms(started_at),
+            required_for_generation=False,
+            result=RESULT_WARNING,
+            advice="目标日股指期货持仓事实未能读取，日报保留事实不足",
+            safe_error=redact_sensitive_text(error),
+        )
 
 
 def _remote_llm_enabled(env) -> bool:
@@ -847,18 +1000,25 @@ def run_source_health_check(
     target_date,
     *,
     root_dir=None,
+    artifact_dir=None,
     env=None,
     replay=False,
     postgres_only=False,
+    historical_rebuild=False,
     write_artifacts=True,
     now=None,
     tushare_checker=check_tushare_runtime_ready,
+    historical_tushare_checker=check_tushare_target_date_ready,
     xueqiu_hot_fetcher=try_fetch_xueqiu_a_share_hot_24h,
     xueqiu_argument_fetcher=try_fetch_xueqiu_hot_stock_arguments,
     quicktiny_fetcher=_fetch_quicktiny_exchange_monitor_payload,
     investor_qa_fetcher=None,
     postgres_checker=None,
+    include_cffex=False,
+    cffex_checker=None,
     source_timeout_seconds=DEFAULT_SOURCE_TIMEOUT_SECONDS,
+    reading_mode=False,
+    snapshot_mode=LEDGER_MODE_FROZEN,
 ):
     started_at = time.perf_counter()
     env = _load_env_if_needed(env)
@@ -876,7 +1036,58 @@ def run_source_health_check(
             )
         )
     elif replay:
-        checks.append(_replay_snapshot_check(target_date))
+        checks.append(_replay_snapshot_check(target_date, snapshot_mode=snapshot_mode))
+    elif reading_mode:
+        if historical_rebuild:
+            source_check = _tushare_check(
+                env,
+                checker=historical_tushare_checker,
+                timeout_seconds=TUSHARE_SOURCE_TIMEOUT_SECONDS,
+                target_date=target_date,
+            )
+        else:
+            source_check = _tushare_check(
+                env,
+                checker=tushare_checker,
+                timeout_seconds=TUSHARE_SOURCE_TIMEOUT_SECONDS,
+            )
+        source_check["required_for_generation"] = False
+        if source_check.get("result") == RESULT_FAIL:
+            source_check["result"] = RESULT_WARNING
+            source_check["advice"] = "Tushare 来源未就绪；页面仍会呈现可取得的事实与缺口"
+        checks.append(source_check)
+        checks.append(
+            _check_row(
+                check_id="sector.reading_inputs",
+                group="市场与板块阅读",
+                task="目标日阅读资料",
+                provider="report.sector_fact_loader",
+                purpose="目标日市场与板块事实",
+                connectivity_status=STATUS_NOT_CHECKED,
+                target_date_status=STATUS_NOT_CHECKED,
+                required_for_generation=False,
+                result=RESULT_WARNING,
+                advice="不运行完整日报的热度与账户资料检查；缺失或错日事实会在阅读页标为待确认",
+            )
+        )
+    elif historical_rebuild:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            tushare_future = executor.submit(
+                _tushare_check,
+                env,
+                checker=historical_tushare_checker,
+                timeout_seconds=TUSHARE_SOURCE_TIMEOUT_SECONDS,
+                target_date=target_date,
+            )
+            postgres_future = executor.submit(
+                _postgres_check,
+                env,
+                target_date=target_date,
+                postgres_only=False,
+                postgres_checker=postgres_checker,
+                timeout_seconds=source_timeout_seconds,
+            )
+            checks.extend([tushare_future.result(), postgres_future.result()])
     else:
         checks.extend(
             _run_live_source_checks(
@@ -937,6 +1148,14 @@ def run_source_health_check(
             )
         )
 
+    if include_cffex and not reading_mode:
+        checks.append(
+            _cffex_target_date_check(
+                target_date,
+                checker=cffex_checker,
+            )
+        )
+
     stop_reasons, warnings = _summarize(checks)
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -951,12 +1170,21 @@ def run_source_health_check(
         "artifacts": {},
     }
     if write_artifacts:
-        payload["artifacts"] = write_source_health_artifacts(payload, root_dir=root_dir)
+        selected_artifact_dir = artifact_dir
+        if selected_artifact_dir is None and reading_mode:
+            selected_artifact_dir = _logs_root(root_dir) / "sector" / ("replay" if replay else "live")
+        elif selected_artifact_dir is None and replay:
+            selected_artifact_dir = _logs_root(root_dir) / "replay"
+        payload["artifacts"] = write_source_health_artifacts(
+            payload,
+            root_dir=root_dir,
+            artifact_dir=selected_artifact_dir,
+        )
     return payload
 
 
-def write_source_health_artifacts(payload, *, root_dir=None):
-    root = _logs_root(root_dir)
+def write_source_health_artifacts(payload, *, root_dir=None, artifact_dir=None):
+    root = Path(artifact_dir) if artifact_dir is not None else _logs_root(root_dir)
     root.mkdir(parents=True, exist_ok=True)
     target_date = str((payload or {}).get("target_date") or "unknown")
     json_path = root / f"{target_date}_source_health.json"
@@ -1047,6 +1275,7 @@ def render_source_health_html(payload) -> str:
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>日报生成前数据源检查 - {target_date}</title>
   <style>
     :root {{
@@ -1230,6 +1459,22 @@ def render_source_health_html(payload) -> str:
     .mark-neutral {{
       color: var(--reader-muted-soft);
       background: rgba(255, 250, 243, 0.86);
+    }}
+    @media (max-width: 760px) {{
+      .bear-source-health {{
+        width: min(100vw - 20px, 1120px);
+        padding: 22px 0 30px;
+      }}
+      h1 {{
+        font-size: 23px;
+      }}
+      .summary {{
+        gap: 7px;
+      }}
+      th,
+      td {{
+        padding: 9px 10px;
+      }}
     }}
   </style>
 </head>
